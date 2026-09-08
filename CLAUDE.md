@@ -79,10 +79,12 @@ file libappindicator-gtk3-devel librsvg2-devel libxdo-devel SDL2-devel`, plus th
 - **Visual Studio Build Tools 2022**, workload *Desktop development with C++*
   (MSVC + Windows SDK) — provides the linker plus `hid`/`setupapi` that `hidapi`
   links against.
-- **CMake** on `PATH` (`winget install Kitware.CMake`) — SDL2 is built from source
-  and static-linked on Windows (see the `sdl2` dep in `src-tauri/Cargo.toml`), so
-  no `SDL2.dll` is shipped and no system SDL2 is needed. Without CMake the SDL2
-  build script aborts.
+- **CMake** on `PATH` — SDL2 is built from source and static-linked on Windows
+  (see the `sdl2` dep in `src-tauri/Cargo.toml`), so no `SDL2.dll` is shipped and
+  no system SDL2 is needed. Without CMake the SDL2 build script aborts. Either
+  `winget install Kitware.CMake`, or reuse the copy the C++ workload already
+  installs — that one is *not* on the `PATH`, so append
+  `<VS>\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin` yourself.
 - **`pnpm`** and the WebView2 runtime (preinstalled on Win10/11) for the Tauri app.
 
 ## Gotchas (learned the hard way)
@@ -104,3 +106,9 @@ file libappindicator-gtk3-devel librsvg2-devel libxdo-devel SDL2-devel`, plus th
 - **+1 button offset**: SC `js_button1` == SDL button 0 (verified under Wine).
 - **Wayland**: `run()` sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` on Linux (fixes
   WebKitGTK "Error 71"), unless the user overrode it.
+- **CMake 4 vs. vendored SDL2**: `sdl2-sys` ships an SDL2 whose `CMakeLists.txt`
+  still says `cmake_minimum_required(VERSION 3.0)`, which CMake 4.x refuses
+  ("Compatibility with CMake < 3.5 has been removed"). VS 2026 ships CMake 4.3,
+  so the build dies in the `sdl2-sys` build script. `src-tauri/.cargo/config.toml`
+  sets `CMAKE_POLICY_VERSION_MINIMUM=3.5` to work around it; drop that once
+  `sdl2-sys` vendors an SDL2 requiring >= 3.5.

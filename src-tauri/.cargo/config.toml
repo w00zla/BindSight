@@ -1,0 +1,7 @@
+# SDL2 is built from source on Windows (see the `sdl2` dep in Cargo.toml). The
+# vendored SDL2 still declares `cmake_minimum_required(VERSION 3.0)`, which
+# CMake 4.x rejects outright ("Compatibility with CMake < 3.5 has been
+# removed"). Visual Studio 2026 ships CMake 4.3, so the build fails without
+# this. Drop the variable once sdl2-sys vendors an SDL2 that requires >= 3.5.
+[env]
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
