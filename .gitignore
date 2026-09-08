@@ -1,3 +1,6 @@
+# local temporary files for analysing etc
+temp
+
 # don't include 3rd party stuff due to updates and license
 data/starbreaker
 data/extracted

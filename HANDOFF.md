@@ -1,7 +1,7 @@
 # Handoff — BindSight
 
 Snapshot of where the project stands, for the next session. Pair with `CLAUDE.md`
-(project guide) and `CONCEPT.md` (design rationale).
+(project guide).
 
 ## What works today
 
@@ -34,8 +34,7 @@ tile, bindings list, actions list (with category tag), live event log, toasts.
 - **Index/slot clash (the "manageable" part the user wants)**: the current match
   is presence-only (is the recorded device connected?). Detecting that a device
   is present but SC would assign it the *wrong* `jsN` (enum-order clash) needs
-  SC's live enumeration order and is the **instance-remap feature** from
-  `CONCEPT.md`. Not started.
+  SC's live enumeration order and is the **instance-remap feature**. Not started.
 - **Axis highlight**: `resolve_input` handles buttons + hats only. Axes need a
   token mapping from HID usages (X->js_x, Rz->js_rotz, Slider->js_slider1) — the
   planned `hidapi` usage work.

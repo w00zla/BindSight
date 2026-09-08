@@ -2,8 +2,7 @@
 
 Star Citizen joystick binding visualizer. Answers "what does each button do, and
 where does each action live?" by joining SC's config with live joystick input.
-See `CONCEPT.md` for the full design rationale and `HANDOFF.md` for the current
-working state.
+See `HANDOFF.md` for the current working state.
 
 ## Conventions
 
@@ -72,6 +71,19 @@ cd data && ./extract_sc_datafiles.sh <path/to/Data.p4k>
 `rustup`, `pnpm`, and system deps: `webkit2gtk4.1-devel openssl-devel curl wget
 file libappindicator-gtk3-devel librsvg2-devel libxdo-devel SDL2-devel`, plus the
 `c-development` group.
+
+## Prerequisites (Windows)
+
+- **`rustup` with the MSVC toolchain** (`stable-x86_64-pc-windows-msvc`) — not GNU;
+  the VC libs won't link against a `-gnu` target.
+- **Visual Studio Build Tools 2022**, workload *Desktop development with C++*
+  (MSVC + Windows SDK) — provides the linker plus `hid`/`setupapi` that `hidapi`
+  links against.
+- **CMake** on `PATH` (`winget install Kitware.CMake`) — SDL2 is built from source
+  and static-linked on Windows (see the `sdl2` dep in `src-tauri/Cargo.toml`), so
+  no `SDL2.dll` is shipped and no system SDL2 is needed. Without CMake the SDL2
+  build script aborts.
+- **`pnpm`** and the WebView2 runtime (preinstalled on Win10/11) for the Tauri app.
 
 ## Gotchas (learned the hard way)
 

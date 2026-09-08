@@ -22,9 +22,18 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sdl2 = "0.37"
 hidapi = "2"
 quick-xml = "0.37"
+
+# SDL2 is linked differently per platform. On Windows we build it from source
+# and static-link it, so the app needs no SDL2.dll and no system SDL2 install
+# (requires CMake + a C toolchain at build time). Everywhere else we link the
+# system SDL2 (see the SDL2-devel prerequisite), which stays the lean default.
+[target.'cfg(windows)'.dependencies]
+sdl2 = { version = "0.37", features = ["bundled", "static-link"] }
+
+[target.'cfg(not(windows))'.dependencies]
+sdl2 = "0.37"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
