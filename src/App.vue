@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
@@ -56,6 +56,29 @@ interface BoundAction {
   label: string | null;
 }
 
+// One connected joystick's SC instance status: the jsN SC assigns it now
+// (enum-order rank) vs the jsN its bindings were saved under.
+interface SlotStatus {
+  effective_instance: number;
+  stored_instance: number | null;
+  sc_product_guid: string | null;
+  name: string | null;
+  clash: boolean;
+}
+
+// A saved slot whose device is not connected — it dangles and shifts the rest.
+interface MissingSlot {
+  stored_instance: number;
+  name: string;
+  sc_product_guid: string | null;
+}
+
+interface ClashReport {
+  connected: SlotStatus[];
+  missing: MissingSlot[];
+  has_clash: boolean;
+}
+
 const MAX_EVENTS = 50;
 
 const devices = ref<DeviceInfo[]>([]);
@@ -65,6 +88,7 @@ const basePath = ref("");
 const bindings = ref<ResolvedBinding[]>([]);
 const tokens = ref<Record<string, string>>({});
 const currentInput = ref<{ device: string; token: string | null; actions: BoundAction[] } | null>(null);
+const clash = ref<ClashReport | null>(null);
 const error = ref<string | null>(null);
 const loading = ref(false);
 
@@ -90,17 +114,50 @@ function instanceOf(token: string): string {
   return token.match(/^js(\d+)_/)?.[1] ?? "?";
 }
 
-// The SC instance (jsN) a connected device maps to, inferred from its bindings.
-function instanceForDevice(guid: string | null): string | null {
-  if (!guid) return null;
-  const b = bindings.value.find((x) => x.device_guid === guid);
-  return b ? instanceOf(b.token) : null;
-}
-
 // Number of bindings assigned to a device.
 function bindingCountFor(guid: string | null): number {
   if (!guid) return 0;
   return bindings.value.filter((b) => b.device_guid === guid).length;
+}
+
+// Connected-slot status by GUID, from the clash report.
+const slotByGuid = computed<Map<string, SlotStatus>>(() => {
+  const m = new Map<string, SlotStatus>();
+  for (const s of clash.value?.connected ?? []) {
+    if (s.sc_product_guid) m.set(s.sc_product_guid, s);
+  }
+  return m;
+});
+
+function slotFor(guid: string | null): SlotStatus | null {
+  return guid ? slotByGuid.value.get(guid) ?? null : null;
+}
+
+// Instances whose bindings still land on the right device (the device SC now
+// assigns that jsN is the one saved under it). Any other instance is misdirected.
+const healthyInstances = computed<Set<number>>(() => {
+  const s = new Set<number>();
+  for (const slot of clash.value?.connected ?? []) {
+    if (slot.stored_instance !== null && slot.stored_instance === slot.effective_instance) {
+      s.add(slot.effective_instance);
+    }
+  }
+  return s;
+});
+
+// Is this binding's slot misdirected by the current device-order clash?
+function bindingClash(token: string): boolean {
+  if (!clash.value?.has_clash) return false;
+  const n = Number(instanceOf(token));
+  return Number.isFinite(n) && !healthyInstances.value.has(n);
+}
+
+async function loadClash() {
+  try {
+    clash.value = await invoke<ClashReport>("get_clash_report");
+  } catch {
+    clash.value = null;
+  }
 }
 
 // Resolve a live button/hat input to its token and bound action(s) and show it.
@@ -145,6 +202,7 @@ async function saveBasePath() {
   try {
     const s = await invoke<LoadStatus>("set_base_path", { path: basePath.value });
     bindings.value = s.bindings;
+    await loadClash();
     if (s.loaded) {
       notify(`Loaded ${s.bindings.length} joystick binding(s)`, "ok");
     } else {
@@ -171,6 +229,7 @@ async function refresh() {
   } finally {
     loading.value = false;
   }
+  await loadClash();
 }
 
 function nameFor(guid: string): string {
@@ -250,8 +309,15 @@ onUnmounted(() => {
       <li v-for="d in devices" :key="d.index" class="device">
         <div class="device-name">
           {{ d.sc_name ?? "(unknown device)" }}
-          <span v-if="instanceForDevice(d.sc_product_guid)" class="js-mapped">
-            ✓ js{{ instanceForDevice(d.sc_product_guid) }}
+          <span v-if="slotFor(d.sc_product_guid)?.clash" class="js-clash">
+            ⚠ SC → js{{ slotFor(d.sc_product_guid)?.effective_instance }}
+            (binds js{{ slotFor(d.sc_product_guid)?.stored_instance }})
+          </span>
+          <span v-else-if="slotFor(d.sc_product_guid)?.stored_instance" class="js-mapped">
+            ✓ js{{ slotFor(d.sc_product_guid)?.effective_instance }}
+          </span>
+          <span v-else-if="slotFor(d.sc_product_guid)" class="js-new">
+            js{{ slotFor(d.sc_product_guid)?.effective_instance }} · not in profile
           </span>
         </div>
         <div class="counts">
@@ -264,6 +330,21 @@ onUnmounted(() => {
         </div>
       </li>
     </ul>
+
+    <section v-if="clash?.has_clash" class="clash-banner">
+      <div class="clash-title">⚠ Device order clash</div>
+      <p class="clash-body">
+        SC assigns <code>jsN</code> by connection order, not device identity. The
+        current order no longer matches your saved profile, so bindings land on
+        the wrong device.
+      </p>
+      <ul v-if="clash.missing.length" class="clash-missing">
+        <li v-for="m in clash.missing" :key="m.stored_instance">
+          <strong>js{{ m.stored_instance }}</strong> — {{ m.name }} not connected
+          (slots after it shift down)
+        </li>
+      </ul>
+    </section>
 
     <section class="current" v-if="currentInput">
       <div class="cur-head">
@@ -283,11 +364,15 @@ onUnmounted(() => {
     <section class="bindings" v-if="bindings.length">
       <h2>Joystick bindings ({{ bindings.length }})</h2>
       <ul class="binding-list">
-        <li v-for="(b, i) in bindings" :key="i">
+        <li v-for="(b, i) in bindings" :key="i" :class="{ 'binding-clash': bindingClash(b.token) }">
           <span class="tok">{{ tokenLabel(b.token) }}</span>
           <span class="blabel">{{ b.label ?? b.action }}</span>
-          <span class="bctrl" :class="isConnected(b) ? 'ctrl-ok' : 'ctrl-warn'">
-            <template v-if="isConnected(b)">✓ {{ b.device }}</template>
+          <span
+            class="bctrl"
+            :class="bindingClash(b.token) ? 'ctrl-clash' : isConnected(b) ? 'ctrl-ok' : 'ctrl-warn'"
+          >
+            <template v-if="bindingClash(b.token)">⚠ js{{ instanceOf(b.token) }} misassigned</template>
+            <template v-else-if="isConnected(b)">✓ {{ b.device }}</template>
             <template v-else>⚠ {{ b.device ?? "unknown" }} — not connected</template>
           </span>
         </li>
@@ -410,6 +495,68 @@ h2 {
   padding: 0.05rem 0.35rem;
   margin-left: 0.4rem;
   white-space: nowrap;
+}
+
+.js-clash {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #c0392b;
+  background: rgba(192, 57, 43, 0.14);
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+  margin-left: 0.4rem;
+  white-space: nowrap;
+}
+
+.js-new {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #999;
+  background: rgba(128, 128, 128, 0.14);
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+  margin-left: 0.4rem;
+  white-space: nowrap;
+}
+
+.clash-banner {
+  border: 1px solid #c0392b;
+  border-radius: 10px;
+  padding: 0.8rem 1rem;
+  margin: 0.75rem 0;
+  background: rgba(192, 57, 43, 0.08);
+}
+
+.clash-title {
+  font-weight: 700;
+  color: #c0392b;
+  margin-bottom: 0.3rem;
+}
+
+.clash-body {
+  margin: 0;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+.clash-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.clash-missing {
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+}
+
+.binding-clash {
+  background: rgba(192, 57, 43, 0.08);
+  border-radius: 4px;
+}
+
+.ctrl-clash {
+  color: #c0392b;
+  font-weight: 600;
 }
 
 .idx {

@@ -10,6 +10,7 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
+use crate::input::DeviceInfo;
 use crate::scdata::{parse_js_binding, ActionMap, UserProfile};
 
 /// An action a token is bound to, with the context (actionmap) it applies in.
@@ -131,6 +132,92 @@ pub fn resolve_bindings(maps: &[ActionMap], profile: &UserProfile) -> Vec<Resolv
     out
 }
 
+/// One connected joystick's SC instance status: the `jsN` SC would assign it
+/// right now (its 1-based rank in enumeration order) versus the `jsN` recorded
+/// for its GUID in the saved `<options>` block.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SlotStatus {
+    /// `jsN` SC assigns now: 1-based rank among connected joysticks (enum order).
+    pub effective_instance: u32,
+    /// `jsN` recorded for this device's GUID in `<options>`, or `None` if the
+    /// device is not in the saved profile at all.
+    pub stored_instance: Option<u32>,
+    pub sc_product_guid: Option<String>,
+    pub name: Option<String>,
+    /// The device is in the saved profile but under a different `jsN` than it now
+    /// gets — every binding on its slot lands on the wrong stick.
+    pub clash: bool,
+}
+
+/// A saved `<options>` joystick slot whose device is not connected right now.
+/// Its bindings dangle, and every device enumerated after it shifts down a slot.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MissingSlot {
+    pub stored_instance: u32,
+    pub name: String,
+    pub sc_product_guid: Option<String>,
+}
+
+/// Result of comparing SC's saved instance→device map against the devices
+/// connected now, to surface the SC "device order" binding-switch bug.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ClashReport {
+    /// Connected joysticks in SC enum order, each with effective vs stored `jsN`.
+    pub connected: Vec<SlotStatus>,
+    /// Saved occupied slots whose device is not connected (they cause the shift).
+    pub missing: Vec<MissingSlot>,
+    pub has_clash: bool,
+}
+
+/// Compare the saved `<options>` order against the live device order. SC assigns
+/// `jsN` purely by start-time enumeration order and ignores name/GUID (a known
+/// SC bug, validated). So a connected device whose live rank differs from its
+/// saved `jsN` — or a saved device that is now missing — means its bindings land
+/// on the wrong stick. `devices` must be in SC/SDL enumeration order.
+pub fn analyze_clash(profile: &UserProfile, devices: &[DeviceInfo]) -> ClashReport {
+    let mut connected = Vec::with_capacity(devices.len());
+    let mut has_clash = false;
+
+    for (rank, dev) in devices.iter().enumerate() {
+        let effective_instance = rank as u32 + 1;
+        let stored_instance = dev
+            .sc_product_guid
+            .as_deref()
+            .and_then(|g| instance_for_guid(profile, g));
+        let clash = matches!(stored_instance, Some(i) if i != effective_instance);
+        has_clash |= clash;
+        connected.push(SlotStatus {
+            effective_instance,
+            stored_instance,
+            sc_product_guid: dev.sc_product_guid.clone(),
+            name: dev.sc_name.clone(),
+            clash,
+        });
+    }
+
+    let mut missing = Vec::new();
+    for js in &profile.joysticks {
+        let Some(guid) = js.product_guid.as_deref() else {
+            continue; // empty slot
+        };
+        let connected_now = devices.iter().any(|d| {
+            d.sc_product_guid
+                .as_deref()
+                .is_some_and(|g| g.eq_ignore_ascii_case(guid))
+        });
+        if !connected_now {
+            missing.push(MissingSlot {
+                stored_instance: js.instance,
+                name: js.product_name.clone(),
+                sc_product_guid: js.product_guid.clone(),
+            });
+        }
+    }
+    has_clash |= !missing.is_empty();
+
+    ClashReport { connected, missing, has_clash }
+}
+
 /// Find the SC `jsN` instance for a device by its SC Product GUID.
 pub fn instance_for_guid(profile: &UserProfile, sc_product_guid: &str) -> Option<u32> {
     profile
@@ -148,6 +235,83 @@ pub fn instance_for_guid(profile: &UserProfile, sc_product_guid: &str) -> Option
 mod tests {
     use super::*;
     use crate::scdata::{parse_default_profile, parse_user_profile};
+
+    /// A minimal connected device for clash tests; only GUID/name/order matter.
+    fn dev(guid: &str, name: &str) -> DeviceInfo {
+        DeviceInfo {
+            index: 0,
+            sc_name: Some(name.to_string()),
+            sdl_name: name.to_string(),
+            sdl_guid: String::new(),
+            sc_product_guid: Some(guid.to_string()),
+            num_buttons: 0,
+            num_axes: 0,
+            num_hats: 0,
+        }
+    }
+
+    #[test]
+    fn detects_device_order_clash() {
+        // Saved order: js1 = Keychron, js2 = VKB L, js3 = VKB R.
+        let xml = r#"<ActionMaps>
+          <options type="joystick" instance="1" Product="Keychron K2 HE  {0E213434-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="2" Product=" VKB L {0201231D-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="3" Product=" VKB R {0200231D-0000-0000-0000-504944564944}"/>
+        </ActionMaps>"#;
+        let profile = parse_user_profile(xml).unwrap();
+
+        let keychron = "{0E213434-0000-0000-0000-504944564944}";
+        let vkb_l = "{0201231D-0000-0000-0000-504944564944}";
+        let vkb_r = "{0200231D-0000-0000-0000-504944564944}";
+
+        // All three connected in the saved order -> no clash.
+        let all = [dev(keychron, "Keychron"), dev(vkb_l, "VKB L"), dev(vkb_r, "VKB R")];
+        let report = analyze_clash(&profile, &all);
+        assert!(!report.has_clash);
+        assert!(report.missing.is_empty());
+        assert!(report.connected.iter().all(|s| !s.clash));
+
+        // Keychron unplugged: the sticks behind it shift down a slot.
+        let shifted = [dev(vkb_l, "VKB L"), dev(vkb_r, "VKB R")];
+        let report = analyze_clash(&profile, &shifted);
+        assert!(report.has_clash);
+
+        let l = &report.connected[0];
+        assert_eq!(l.effective_instance, 1); // SC now calls VKB L js1
+        assert_eq!(l.stored_instance, Some(2)); // its bindings live on js2
+        assert!(l.clash);
+
+        let r = &report.connected[1];
+        assert_eq!(r.effective_instance, 2);
+        assert_eq!(r.stored_instance, Some(3));
+        assert!(r.clash);
+
+        // The missing Keychron slot is reported.
+        assert_eq!(report.missing.len(), 1);
+        assert_eq!(report.missing[0].stored_instance, 1);
+        assert_eq!(report.missing[0].name, "Keychron K2 HE");
+    }
+
+    #[test]
+    fn unknown_device_is_not_a_clash() {
+        // A connected device absent from the saved profile carries no stored jsN,
+        // so it is flagged "not saved" rather than a hard clash. The saved stick
+        // stays connected at its slot, so nothing shifts.
+        let xml = r#"<ActionMaps>
+          <options type="joystick" instance="1" Product=" VKB L {0201231D-0000-0000-0000-504944564944}"/>
+        </ActionMaps>"#;
+        let profile = parse_user_profile(xml).unwrap();
+        let report = analyze_clash(
+            &profile,
+            &[
+                dev("{0201231D-0000-0000-0000-504944564944}", "VKB L"),
+                dev("{DEAD0000-0000-0000-0000-504944564944}", "New Stick"),
+            ],
+        );
+        assert!(!report.has_clash);
+        assert_eq!(report.connected[1].stored_instance, None);
+        assert!(!report.connected[1].clash);
+    }
 
     #[test]
     fn builds_tokens() {

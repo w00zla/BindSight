@@ -68,6 +68,22 @@ fn get_bindings(
     }
 }
 
+/// Compare SC's saved device order against the connected devices to detect the
+/// `jsN` switch clash (SC assigns `jsN` by start-time device order, ignoring
+/// name/GUID). Empty when no profile is loaded.
+#[tauri::command]
+fn get_clash_report(
+    devices: State<input::DeviceList>,
+    data: State<Mutex<AppData>>,
+) -> bindings::ClashReport {
+    let data = data.lock().unwrap();
+    let Some(profile) = &data.profile else {
+        return bindings::ClashReport::default();
+    };
+    let devices = devices.lock().map(|d| d.clone()).unwrap_or_default();
+    bindings::analyze_clash(profile, &devices)
+}
+
 /// Set the SC base path: persist it, reload actionmaps.xml, and report the
 /// resulting bindings.
 #[tauri::command]
@@ -232,6 +248,7 @@ pub fn run() {
             get_tokens,
             get_config,
             get_bindings,
+            get_clash_report,
             set_base_path,
             resolve_input
         ])
