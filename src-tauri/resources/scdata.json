@@ -1,0 +1,4780 @@
+[
+  {
+    "name": "seat_general",
+    "label": "Vehicles - Seats and Operator Modes",
+    "category": null,
+    "actions": [
+      {
+        "name": "v_emergency_exit",
+        "label": "Emergency Exit Seat",
+        "description": "Press LShift + H to engage emergency exit",
+        "joystick_default": null
+      },
+      {
+        "name": "v_eject",
+        "label": "Eject",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_look_behind",
+        "label": "Look behind",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_mining_mode",
+        "label": "Toggle Mining Operator Mode",
+        "description": "Mining Mode Toggle",
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_salvage_mode",
+        "label": "Toggle Salvage Operator Mode",
+        "description": "Activate salvage mode when seated.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_refuel_mode",
+        "label": "Toggle Refuel Operator Mode",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_scan_mode",
+        "label": "Toggle Scanning Operator Mode",
+        "description": "Scanning Mode Toggle",
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_quantum_mode",
+        "label": "Toggle Quantum Operator Mode",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_missile_mode",
+        "label": "Toggle Missile Operator Mode",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_guns_mode",
+        "label": "Toggle Guns Operator Mode",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_flight_mode",
+        "label": "Toggle Flight Operator Mode",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_set_mining_mode",
+        "label": "Set Mining Operator Mode",
+        "description": "Set Mining Operator Mode",
+        "joystick_default": null
+      },
+      {
+        "name": "v_set_salvage_mode",
+        "label": "Set Salvage Operator Mode",
+        "description": "Set Salvage Operator Mode",
+        "joystick_default": null
+      },
+      {
+        "name": "v_set_refuel_mode",
+        "label": "Set Refuel Operator Mode",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_set_scan_mode",
+        "label": "Set Scanning Operator Mode",
+        "description": "Set Scanning Operator Mode",
+        "joystick_default": null
+      },
+      {
+        "name": "v_set_quantum_mode",
+        "label": "Set Quantum Operator Mode",
+        "description": "Set Quantum Operator Mode",
+        "joystick_default": null
+      },
+      {
+        "name": "v_set_missile_mode",
+        "label": "Set Missile Operator Mode",
+        "description": "Set Missile Operator Mode",
+        "joystick_default": null
+      },
+      {
+        "name": "v_set_guns_mode",
+        "label": "Set Guns Operator Mode",
+        "description": "Set Guns Operator Mode",
+        "joystick_default": null
+      },
+      {
+        "name": "v_set_flight_mode",
+        "label": "Set Flight Operator Mode",
+        "description": "Set Flight Operator Mode",
+        "joystick_default": null
+      },
+      {
+        "name": "v_enter_remote_turret_1",
+        "label": "Enter Remote Turret 1",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_enter_remote_turret_2",
+        "label": "Enter Remote Turret 2",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_enter_remote_turret_3",
+        "label": "Enter Remote Turret 3",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_operator_mode_cycle_forward",
+        "label": "Next Operator Mode",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_operator_mode_cycle_back",
+        "label": "Previous Operator Mode",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_light_amplification_toggle",
+        "label": "Light Amplification Toggle",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_light_amplification_on",
+        "label": "Light Amplification On",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_light_amplification_off",
+        "label": "Light Amplification Off",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "spaceship_general",
+    "label": "Vehicles - Cockpit",
+    "category": "FLIGHT",
+    "actions": [
+      {
+        "name": "v_self_destruct",
+        "label": "Self Destruct",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_cooler_throttle_up",
+        "label": "Increase Cooler Rate",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_cooler_throttle_down",
+        "label": "Decrease Cooler Rate",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_flightready",
+        "label": "Flight / Systems Ready",
+        "description": "Flight / Systems Ready",
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_all_doors",
+        "label": "Open/Close Doors (Toggle)",
+        "description": "Toggle Open/Close Doors",
+        "joystick_default": null
+      },
+      {
+        "name": "v_open_all_doors",
+        "label": "Open All Doors",
+        "description": " Open All Doors",
+        "joystick_default": null
+      },
+      {
+        "name": "v_close_all_doors",
+        "label": "Close All Doors",
+        "description": " Close All Doors",
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_all_doorlocks",
+        "label": "Lock/Unlock Doors (Toggle)",
+        "description": "Toggle Lock/Unlock Doors",
+        "joystick_default": null
+      },
+      {
+        "name": "v_lock_all_doors",
+        "label": "Lock All Doors",
+        "description": " Lock All Doors",
+        "joystick_default": null
+      },
+      {
+        "name": "v_unlock_all_doors",
+        "label": "Unlock All Doors",
+        "description": " Unlock All Doors",
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_all_portlocks",
+        "label": "Port Lock Toggle All",
+        "description": "Toggle Open/Close Ports",
+        "joystick_default": null
+      },
+      {
+        "name": "v_lock_all_ports",
+        "label": "Port Lock All",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_unlock_all_ports",
+        "label": "Port Unlock All",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "vehicle_mfd",
+    "label": "Vehicles - Multi Function Displays (MFDs)",
+    "category": null,
+    "actions": [
+      {
+        "name": "v_mfd_interact_cycle_forwards_short",
+        "label": "MFD - Cycle Page - Forwards (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_interact_cycle_forwards_long",
+        "label": "MFD - Cycle Page - Forwards (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_interact_cycle_backwards_short",
+        "label": "MFD - Cycle Page - Backwards (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_interact_cycle_backwards_long",
+        "label": "MFD - Cycle Page - Backwards (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_movement_up_short",
+        "label": "MFD - Movement - Up (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_movement_up_long",
+        "label": "MFD - Movement - Up (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_movement_down_short",
+        "label": "MFD - Movement - Down (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_movement_down_long",
+        "label": "MFD - Movement - Down (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_movement_left_short",
+        "label": "MFD - Movement - Left (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_movement_left_long",
+        "label": "MFD - Movement - Left (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_movement_right_short",
+        "label": "MFD - Movement - Right (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_movement_right_long",
+        "label": "MFD - Movement - Right (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_primary_short",
+        "label": "MFD - Select - Primary (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_primary_long",
+        "label": "MFD - Select - Primary (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_cast_left_short",
+        "label": "MFD - Select - Left Cast (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_cast_left_long",
+        "label": "MFD - Select - Left Cast (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_cast_right_short",
+        "label": "MFD - Select - Right Cast (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_cast_right_long",
+        "label": "MFD - Select - Right Cast (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_1_short",
+        "label": "MFD - Select - MFD 1 (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_1_long",
+        "label": "MFD - Select - MFD 1 (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_2_short",
+        "label": "MFD - Select - MFD 2 (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_2_long",
+        "label": "MFD - Select - MFD 2 (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_3_short",
+        "label": "MFD - Select - MFD 3 (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_3_long",
+        "label": "MFD - Select - MFD 3 (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_4_short",
+        "label": "MFD - Select - MFD 4 (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_4_long",
+        "label": "MFD - Select - MFD 4 (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_5_short",
+        "label": "MFD - Select - MFD 5 (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_5_long",
+        "label": "MFD - Select - MFD 5 (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_6_short",
+        "label": "MFD - Select - MFD 6 (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_6_long",
+        "label": "MFD - Select - MFD 6 (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_7_short",
+        "label": "MFD - Select - MFD 7 (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_7_long",
+        "label": "MFD - Select - MFD 7 (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_8_short",
+        "label": "MFD - Select - MFD 8 (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_8_long",
+        "label": "MFD - Select - MFD 8 (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_9_short",
+        "label": "MFD - Select - MFD 9 (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_9_long",
+        "label": "MFD - Select - MFD 9 (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_10_short",
+        "label": "MFD - Select - MFD 10 (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_soft_select_mfd_10_long",
+        "label": "MFD - Select - MDF 10 (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_quick_action_repair_all",
+        "label": "MFD - Quick Action - Self Repair All",
+        "description": "MFD - Activate self repair for all destroyed items where available",
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_select_view_self_status_short",
+        "label": "MFD - Set Page - Self Status (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_select_view_self_status_long",
+        "label": "MFD - Set Page - Self Status (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_select_view_target_status_short",
+        "label": "MFD - Set Page - Target Status (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_select_view_target_status_long",
+        "label": "MFD - Set Page - Target Status (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_select_view_scanning_short",
+        "label": "MFD - Set Page - Scanning (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_select_view_scanning_long",
+        "label": "MFD - Set Page - Scanning (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_select_view_configuration_short",
+        "label": "MFD - Set Page - Vehicle Configuration (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_select_view_configuration_long",
+        "label": "MFD - Set Page - Vehicle Configuration (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_select_view_comms_short",
+        "label": "MFD - Set Page - Communications (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_select_view_comms_long",
+        "label": "MFD - Set Page - Communications (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_select_view_ifcs_short",
+        "label": "MFD - Set Page - IFCS (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_select_view_ifcs_long",
+        "label": "MFD - Set Page - IFCS (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_select_view_diagnostics_short",
+        "label": "MFD - Set Page - Diagnostics (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_select_view_diagnostics_long",
+        "label": "MFD - Set Page - Diagnostics (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_select_view_resource_network_short",
+        "label": "MFD - Set Page - Resource Network (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_mfd_select_view_resource_network_long",
+        "label": "MFD - Set Page - Resource Network (Long Press)",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "spaceship_view",
+    "label": "Vehicles - View",
+    "category": "FLIGHT",
+    "actions": [
+      {
+        "name": "v_view_yaw_left",
+        "label": "Look left",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_yaw_right",
+        "label": "Look right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_yaw",
+        "label": "Look left / right",
+        "description": null,
+        "joystick_default": "x"
+      },
+      {
+        "name": "v_view_yaw_mouse",
+        "label": "Look left / right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_pitch_up",
+        "label": "Look up",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_pitch_down",
+        "label": "Look down",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_pitch",
+        "label": "Look up / down",
+        "description": null,
+        "joystick_default": "y"
+      },
+      {
+        "name": "v_view_pitch_mouse",
+        "label": "Look up / down",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_cycle_fwd",
+        "label": "Cycle camera view",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_mode",
+        "label": "Cycle camera orbit mode",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_zoom_in",
+        "label": "Zoom in (3rd person view)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_zoom_out",
+        "label": "Zoom out (3rd person view)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_freelook_mode",
+        "label": "Freelook (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_dynamic_zoom_rel",
+        "label": "Dynamic Zoom In and Out (rel.)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_dynamic_zoom_rel_in",
+        "label": "Dynamic Zoom In (rel.)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_dynamic_zoom_rel_out",
+        "label": "Dynamic Zoom Out (rel.)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_dynamic_zoom_abs",
+        "label": "Dynamic Zoom In and Out (abs.)",
+        "description": "Axis assignment for dynamic zoom",
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_dynamic_zoom_abs_toggle",
+        "label": "Dynamic Zoom Toggle (abs.)",
+        "description": "Holds the dynamic zoom as long as the button is held",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ads_hold",
+        "label": "Precision Targeting - Hold",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_ads_toggle",
+        "label": "Precision Targeting - Toggle On / Off",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_ads_stable_max_zoom_hold",
+        "label": "Precision Targeting - Maximum Zoom (hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_ads_cycle_tracking",
+        "label": "Precision Targeting - Toggle Camera Tracking",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "spaceship_movement",
+    "label": "Flight - Movement",
+    "category": "FLIGHT",
+    "actions": [
+      {
+        "name": "v_pitch_up",
+        "label": "Pitch up",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_pitch_down",
+        "label": "Pitch down",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_pitch",
+        "label": "Pitch",
+        "description": null,
+        "joystick_default": "y"
+      },
+      {
+        "name": "v_pitch_mouse",
+        "label": "Pitch",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_yaw_left",
+        "label": "Yaw left",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_yaw_right",
+        "label": "Yaw right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_yaw",
+        "label": "Yaw",
+        "description": null,
+        "joystick_default": "x"
+      },
+      {
+        "name": "v_yaw_mouse",
+        "label": "Yaw",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_roll_left",
+        "label": "Roll left",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_roll_right",
+        "label": "Roll right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_roll",
+        "label": "Roll",
+        "description": null,
+        "joystick_default": "rotz"
+      },
+      {
+        "name": "v_roll_mouse",
+        "label": "Roll",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_relative_mouse_mode",
+        "label": "Cycle mouse mode (VJoy / Relative)",
+        "description": "Switches the mouse behavior for ship rotations between a relative (FPS style) and a Vjoy mode.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_yaw_roll_swap",
+        "label": "Swap Yaw / Roll (Toggle)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_strafe_up",
+        "label": "Strafe up (abs.)",
+        "description": null,
+        "joystick_default": "button9"
+      },
+      {
+        "name": "v_strafe_down",
+        "label": "Strafe down (abs.)",
+        "description": null,
+        "joystick_default": "button10"
+      },
+      {
+        "name": "v_strafe_vertical",
+        "label": "Strafe up / down (abs.)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_strafe_left",
+        "label": "Strafe left (abs.)",
+        "description": null,
+        "joystick_default": "hat1_left"
+      },
+      {
+        "name": "v_strafe_right",
+        "label": "Strafe right (abs.)",
+        "description": null,
+        "joystick_default": "hat1_right"
+      },
+      {
+        "name": "v_strafe_lateral",
+        "label": "Strafe left / right (abs.)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_strafe_forward",
+        "label": "Throttle - Increase",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_strafe_back",
+        "label": "Throttle - Decrease",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_strafe_longitudinal",
+        "label": "Throttle - Forward / Back",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_strafe_longitudinal_invert",
+        "label": "Throttle - Forward / Back Invert",
+        "description": "Inverts Strafe Longitudinal Absolute Axis Half (Neutral - Backward)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_throttle_swap_mode",
+        "label": "Throttle - Cruise Mode - Toggle",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_throttle_set_sticky",
+        "label": "Throttle - Cruise Mode - Enable",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_throttle_set_normal",
+        "label": "Throttle - Cruise Mode - Disable",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_strafe_trim_set_long",
+        "label": "Throttle - Trim - Set (Long Press)",
+        "description": "Throttle - Trim - Set (Long Press)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_strafe_trim_set_short",
+        "label": "Throttle - Trim - Set (Short Press)",
+        "description": "Throttle - Trim - Set (Short Press)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_strafe_trim_set_100_long",
+        "label": "Throttle - Trim - Set To 100% (Long Press)",
+        "description": "Throttle - Trim - Set To 100% (Long Press)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_strafe_trim_set_100_short",
+        "label": "Throttle - Trim - Set To 100% (Short Press)",
+        "description": "Throttle - Trim - Set To 100% (Short Press)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_strafe_trim_set_50_long",
+        "label": "Throttle - Trim - Set To 50% (Long Press)",
+        "description": "Throttle - Trim - Set To 50% (Long Press)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_strafe_trim_set_50_short",
+        "label": "Throttle - Trim - Set To 50% (Short Press)",
+        "description": "Throttle - Trim - Set To 50% (Short Press)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_strafe_trim_reset_long",
+        "label": "Throttle - Trim - Release (Long Press)",
+        "description": "Throttle - Trim - Release (Long Press)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_strafe_trim_reset_short",
+        "label": "Throttle - Trim - Release (Short Press)",
+        "description": "Throttle - Trim - Release (Short Press)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_vector_decoupling_toggle",
+        "label": "Enable / Disable decoupled mode",
+        "description": "Switch between coupled or decoupled mode",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_vector_decoupling_on",
+        "label": "Enable decoupled mode",
+        "description": "Enable decoupled mode",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_vector_decoupling_off",
+        "label": "Disable decoupled mode",
+        "description": "Disable decoupled mode",
+        "joystick_default": null
+      },
+      {
+        "name": "v_afterburner",
+        "label": "Boost",
+        "description": null,
+        "joystick_default": "button8"
+      },
+      {
+        "name": "v_ifcs_speed_limiter_up",
+        "label": "Speed Limiter - Increase (hold)",
+        "description": "Speed Limiter - Increase (hold)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_speed_limiter_down",
+        "label": "Speed Limiter - Decrease (hold)",
+        "description": "Speed Limiter - Decrease (hold)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_speed_limiter_increment",
+        "label": "Speed Limiter - Step Up (tap)",
+        "description": "Speed Limiter - Step Up (tap)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_speed_limiter_decrement",
+        "label": "Speed Limiter - Step Down (tap)",
+        "description": "Speed Limiter - Step Down (tap)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_speed_limiter_rel",
+        "label": "Speed Limiter (rel)",
+        "description": "Speed Limiter (rel)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_speed_limiter_abs",
+        "label": "Speed Limiter (abs)",
+        "description": "Speed Limiter (abs)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_speed_limiter_toggle",
+        "label": "Speed Limiter - Enable / Disable",
+        "description": "Speed Limiter - Enable / Disable",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_speed_limiter_on",
+        "label": "Speed Limiter - Enable",
+        "description": "Speed Limiter - Enable",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_speed_limiter_off",
+        "label": "Speed Limiter - Disable",
+        "description": "Speed Limiter - Disable",
+        "joystick_default": null
+      },
+      {
+        "name": "v_accel_range_up",
+        "label": "Acceleration Limiter - Increase (hold)",
+        "description": "Acceleration Limiter - Increase (hold)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_accel_range_down",
+        "label": "Acceleration Limiter - Decrease (hold)",
+        "description": "Acceleration Limiter - Decrease (hold)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_accel_range_increment",
+        "label": "Acceleration Limiter - Step Up (tap)",
+        "description": "Acceleration Limiter - Step Up (tap)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_accel_range_decrement",
+        "label": "Acceleration Limiter - Step Down (tap)",
+        "description": "Acceleration Limiter - Step Down (tap)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_accel_range_rel",
+        "label": "Acceleration Limiter (rel)",
+        "description": "Acceleration Limiter (rel)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_accel_range_abs",
+        "label": "Acceleration Limiter (abs)",
+        "description": "Acceleration Limiter (abs)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_space_brake",
+        "label": "Spacebrake",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_lock_rotation",
+        "label": "Lock Pitch / Yaw Movement (Toggle / Hold)",
+        "description": "While active no rotational inputs are allowed to your ship. This is useful for arresting movement when you lost control using a mouse.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_gsafe_on",
+        "label": "G-Force safety on",
+        "description": "G-Force safety on",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_gsafe_off",
+        "label": "G-Force safety off",
+        "description": "G-Force safety off",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_toggle_gforce_safety",
+        "label": "G-Force Safety On/Off (Toggle / Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_toggle_esp",
+        "label": "E.S.P. - Toggle On / Off (Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_esp_hold",
+        "label": "E.S.P. - Enable Temporarily (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_landing_system",
+        "label": "Landing System (Toggle)",
+        "description": null,
+        "joystick_default": "button12"
+      },
+      {
+        "name": "v_deploy_landing_system",
+        "label": "Landing System (Deploy)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_retract_landing_system",
+        "label": "Landing System (Retract)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_vtol_toggle",
+        "label": "Toggle VTOL",
+        "description": "Enable / Disable Vertical Take-Off and Landing",
+        "joystick_default": null
+      },
+      {
+        "name": "v_vtol_on",
+        "label": "Enable VTOL",
+        "description": "Enable Vertical Take-Off and Landing",
+        "joystick_default": null
+      },
+      {
+        "name": "v_vtol_off",
+        "label": "Disable VTOL",
+        "description": "Disable Vertical Take-Off and Landing",
+        "joystick_default": null
+      },
+      {
+        "name": "v_transform_deploy",
+        "label": "Expand Configuration",
+        "description": "Expands the vehicle's configuration.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_transform_retract",
+        "label": "Retract Configuration",
+        "description": "Retracts the vehicle's configuration.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_transform_cycle",
+        "label": "Cycle Configuration",
+        "description": "Cycle between the vehicle's expanded and retracted configurations.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_autoland",
+        "label": "Autoland",
+        "description": "Activate Autoland",
+        "joystick_default": "button12"
+      },
+      {
+        "name": "v_atc_request",
+        "label": "Request Landing",
+        "description": "Contacts ATC and other landing services.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_atc_loading_area_request",
+        "label": "Request Cargo Loading",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_master_mode_cycle",
+        "label": "Cycle Master Mode (Short Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_master_mode_cycle_long",
+        "label": "Cycle Master Mode (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_master_mode_set_nav",
+        "label": "Set Master Mode to Nav",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_master_mode_set_scm",
+        "label": "Set Master Mode to SCM",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_jump_request",
+        "label": "Jump Drive - Request Jump",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_gravity_compensation_toggle",
+        "label": "IFCS - Gravity Compensation - Toggle",
+        "description": "IFCS - Gravity Compensation - Toggle",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_gravity_compensation_on",
+        "label": "IFCS - Gravity Compensation - Enable",
+        "description": "IFCS - Gravity Compensation - Enable",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_gravity_compensation_off",
+        "label": "IFCS - Gravity Compensation - Disable",
+        "description": "IFCS - Gravity Compensation - Disable",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_wind_compensation_toggle",
+        "label": "IFCS - Wind Compensation - Toggle",
+        "description": "IFCS - Wind Compensation - Toggle",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_wind_compensation_on",
+        "label": "IFCS - Wind Compensation - Enable",
+        "description": "IFCS - Wind Compensation - Enable",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_wind_compensation_off",
+        "label": "IFCS - Wind Compensation - Disable",
+        "description": "IFCS - Wind Compensation - Disable",
+        "joystick_default": null
+      },
+      {
+        "name": "v_auto_precision_mode_toggle",
+        "label": "Automatic Precision Mode - Toggle",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_auto_precision_mode_on",
+        "label": "Automatic Precision Mode - Enable",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_auto_precision_mode_off",
+        "label": "Automatic Precision Mode - Disable",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_proximity_assist_toggle",
+        "label": "IFCS - Proximity Assist - Toggle",
+        "description": "IFCS - Proximity Assist - Toggle",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_proximity_assist_on",
+        "label": "IFCS - Proximity Assist - Enable",
+        "description": "IFCS - Proximity Assist - Enable",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_proximity_assist_off",
+        "label": "IFCS - Proximity Assist - Disable",
+        "description": "IFCS - Proximity Assist - Disable",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_stability_toggle",
+        "label": "IFCS - Stability - Toggle",
+        "description": "IFCS - Stability - Toggle",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_stability_on",
+        "label": "IFCS - Stability - Enable",
+        "description": "IFCS - Stability - Enable",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_stability_off",
+        "label": "IFCS - Stability - Disable",
+        "description": "IFCS - Stability - Disable",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_command_toggle",
+        "label": "IFCS Command Behaviour Toggle",
+        "description": "IFCS Command Behaviour Toggle",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_command_on",
+        "label": "IFCS Command Behaviour On",
+        "description": "IFCS Command Behaviour On",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_command_off",
+        "label": "IFCS Command Behaviour Off",
+        "description": "IFCS Command Behaviour Off",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_core_toggle",
+        "label": "IFCS - Core - Toggle On / Off",
+        "description": "IFCS - Core - Toggle On / Off",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_core_on",
+        "label": "IFCS - Core - Enable",
+        "description": "IFCS - Core - Enable",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_core_off",
+        "label": "IFCS - Core - Disable",
+        "description": "IFCS - Core - Disable",
+        "joystick_default": null
+      },
+      {
+        "name": "v_ifcs_reset_gmeter_max",
+        "label": "Reset Flight Accelerometer",
+        "description": "Resets the max endured Gs for the accelerometer.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_flight_advanced_hud_toggle",
+        "label": "Advanced HUD - Toggle",
+        "description": "Advanced HUD - Toggle",
+        "joystick_default": null
+      },
+      {
+        "name": "v_flight_advanced_hud_on",
+        "label": "Advanced HUD - Enable",
+        "description": "Advanced HUD - Enable",
+        "joystick_default": null
+      },
+      {
+        "name": "v_flight_advanced_hud_off",
+        "label": "Advanced HUD - Disable",
+        "description": "Advanced HUD - Disable",
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "spaceship_quantum",
+    "label": "Flight - Quantum Travel",
+    "category": null,
+    "actions": [
+      {
+        "name": "v_toggle_qdrive_engagement",
+        "label": "Engage Quantum Drive (Hold)",
+        "description": "Engages the quantum drive.",
+        "joystick_default": "button1"
+      }
+    ]
+  },
+  {
+    "name": "spaceship_docking",
+    "label": "Flight - Docking",
+    "category": null,
+    "actions": [
+      {
+        "name": "v_toggle_docking_request",
+        "label": "Docking\\n(Initiate)",
+        "description": "Activate Docking Mode",
+        "joystick_default": null
+      },
+      {
+        "name": "v_dock_toggle_view",
+        "label": "Toggle Docking Camera",
+        "description": "Toggles the docking camera.",
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "spaceship_targeting",
+    "label": "Vehicles - Targeting",
+    "category": "FLIGHT",
+    "actions": [
+      {
+        "name": "v_auto_targeting_toggle_long",
+        "label": "Auto Targeting - Toggle On/Off (Long Press)",
+        "description": "Auto Targeting - Toggle On/Off (Long Press)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_auto_targeting_toggle_short",
+        "label": "Auto Targeting - Toggle On/Off (Short Press)",
+        "description": "Auto Targeting - Toggle On/Off (Short Press)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_auto_targeting_enable_short",
+        "label": "Auto Targeting - Toggle On (Short Press)",
+        "description": "Auto Targeting - Toggle On (Short Press)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_auto_targeting_enable_long",
+        "label": "Auto Targeting - Toggle On (Long Press)",
+        "description": "Auto Targeting - Toggle On (Long Press)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_auto_targeting_disable_short",
+        "label": "Auto Targeting - Toggle Off (Short Press)",
+        "description": "Auto Targeting - Toggle Off (Short Press)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_auto_targeting_disable_long",
+        "label": "Auto Targeting - Toggle Off (Long Press)",
+        "description": "Auto Targeting - Toggle Off (Long Press)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_toggle_lock_index_1",
+        "label": "Pin Index 1 - Lock / Unlock Pinned Target",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_toggle_lock_index_2",
+        "label": "Pin Index 2 - Lock / Unlock Pinned Target",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_toggle_lock_index_3",
+        "label": "Pin Index 3 - Lock / Unlock Pinned Target",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_toggle_pin_index_1",
+        "label": "Pin Index 1 - Pin / Unpin Selected Target",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_toggle_pin_index_2",
+        "label": "Pin Index 2 - Pin / Unpin Selected Target",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_toggle_pin_index_3",
+        "label": "Pin Index 3 - Pin / Unpin Selected Target",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_toggle_pin_index_1_hold",
+        "label": "Pin Index 1 - Pin / Unpin Selected Target (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_toggle_pin_index_2_hold",
+        "label": "Pin Index 2 - Pin / Unpin Selected Target (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_toggle_pin_index_3_hold",
+        "label": "Pin Index 3 - Pin / Unpin Selected Target (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_pin_selected",
+        "label": "Pin Selected Target",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_unpin_selected",
+        "label": "Unpin Selected Target",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_pin_selected_hold",
+        "label": "Pin Selected Target (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_unpin_selected_hold",
+        "label": "Unpin Selected Target (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_remove_all_pins",
+        "label": "Remove All Pinned Targets",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_lock_selected",
+        "label": "Lock Selected Target",
+        "description": "Lock Selected Target",
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_unlock",
+        "label": "Unlock Current Target",
+        "description": "Unlock Current Target",
+        "joystick_default": null
+      },
+      {
+        "name": "v_look_ahead_enable",
+        "label": "Enable / Disable Look Ahead",
+        "description": "Enables and disables Look Ahead Mode",
+        "joystick_default": null
+      },
+      {
+        "name": "v_look_ahead_start_target_tracking",
+        "label": "Enable / Disable Target Padlock (Toggle, Hold)",
+        "description": "Allows you to track a locked target with your head",
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_tracking_auto_zoom",
+        "label": "Auto Zoom On Selected Target On / Off (Toggle, Hold)",
+        "description": "Allows you to enable and disable auto zoom on selected targets.",
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "spaceship_targeting_advanced",
+    "label": "Vehicles - Target Cycling",
+    "category": "FLIGHT",
+    "actions": [
+      {
+        "name": "v_target_under_reticle",
+        "label": "Lock Target Under Reticle",
+        "description": "Lock Target Under Reticle",
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_in_view_back",
+        "label": "Cycle Lock - In View - Back",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_in_view_fwd",
+        "label": "Cycle Lock - In View - Forward",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_in_view_reset",
+        "label": "Cycle Lock - In View - Under Reticle",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_pinned_back",
+        "label": "Cycle Lock - Pinned - Back",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_pinned_fwd",
+        "label": "Cycle Lock - Pinned - Forward",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_pinned_reset",
+        "label": "Cycle Lock - Pinned - Reset to First",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_attacker_back",
+        "label": "Cycle Lock - Attackers - Back",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_attacker_fwd",
+        "label": "Cycle Lock - Attackers - Forward",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_attacker_reset",
+        "label": "Cycle Lock - Attackers - Reset to Closest",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_hostile_back",
+        "label": "Cycle Lock - Hostiles - Back",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_hostile_fwd",
+        "label": "Cycle Lock - Hostiles - Forward",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_hostile_reset",
+        "label": "Cycle Lock - Hostiles - Reset to Closest",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_friendly_back",
+        "label": "Cycle Lock - Friendlies - Back",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_friendly_fwd",
+        "label": "Cycle Lock - Friendlies - Forward",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_friendly_reset",
+        "label": "Cycle Lock - Friendlies - Reset to Closest",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_all_back",
+        "label": "Cycle Lock - All - Back",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_all_fwd",
+        "label": "Cycle Lock - All - Forward",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_all_reset",
+        "label": "Cycle Lock - All - Reset to Closest",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_subitem_back",
+        "label": "Cycle Lock - Sub-Target - Back",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_subitem_fwd",
+        "label": "Cycle Lock - Sub-Target - Forward",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_target_cycle_subitem_reset",
+        "label": "Cycle Lock - Sub-Target - Reset to Main Target",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "spaceship_target_hailing",
+    "label": "Flight - Target Hailing",
+    "category": "FLIGHT",
+    "actions": [
+      {
+        "name": "v_target_hail",
+        "label": "Hail Target",
+        "description": "HailTarget",
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "spaceship_radar",
+    "label": "Flight - Radar",
+    "category": "FLIGHT",
+    "actions": [
+      {
+        "name": "v_invoke_ping",
+        "label": "Activate Ping (Hold & Release)",
+        "description": "Activates the Ping Wave",
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "spaceship_scanning",
+    "label": "Vehicles - Scanning",
+    "category": "FLIGHT",
+    "actions": [
+      {
+        "name": "v_scanning_trigger_scan",
+        "label": "Activate Scanning",
+        "description": "Activates the Scanning",
+        "joystick_default": null
+      },
+      {
+        "name": "v_inc_scan_focus_level",
+        "label": "Increase Scanning Angle ",
+        "description": "Increase the angle of the Scanning Cone",
+        "joystick_default": "button3"
+      },
+      {
+        "name": "v_dec_scan_focus_level",
+        "label": "Decrease Scanning Angle",
+        "description": "Decrease the angle of the Scanning Cone",
+        "joystick_default": "button4"
+      }
+    ]
+  },
+  {
+    "name": "spaceship_mining",
+    "label": "Vehicles - Mining",
+    "category": "FLIGHT",
+    "actions": [
+      {
+        "name": "v_toggle_mining_laser_fire",
+        "label": "Fire Mining Laser (Toggle)",
+        "description": " Fire Mining Laser (Toggle)",
+        "joystick_default": "button1"
+      },
+      {
+        "name": "v_toggle_mining_laser_type",
+        "label": "Switch Mining Laser (Toggle)",
+        "description": " Switch Mining Laser (Toggle)",
+        "joystick_default": "button2"
+      },
+      {
+        "name": "v_increase_mining_throttle",
+        "label": "Increase Mining Laser Power",
+        "description": "Increase Mining Laser Power",
+        "joystick_default": "button3"
+      },
+      {
+        "name": "v_decrease_mining_throttle",
+        "label": "Decrease Mining Laser Power",
+        "description": " Decrease Mining Laser Power",
+        "joystick_default": "button4"
+      },
+      {
+        "name": "v_mining_throttle",
+        "label": "Increase / Decrease Mining Laser Power",
+        "description": " Increase / Decrease Mining Laser Power",
+        "joystick_default": null
+      },
+      {
+        "name": "v_mining_use_consumable1",
+        "label": "Activate Mining Module (Slot 1)",
+        "description": "Activate a Mining Module",
+        "joystick_default": null
+      },
+      {
+        "name": "v_mining_use_consumable2",
+        "label": "Activate Mining Module (Slot 2)",
+        "description": "Activate a Mining Module",
+        "joystick_default": null
+      },
+      {
+        "name": "v_mining_use_consumable3",
+        "label": "Activate Mining Module (Slot 3)",
+        "description": "Activate a Mining Module",
+        "joystick_default": null
+      },
+      {
+        "name": "v_mining_use_permanent_modifier",
+        "label": "Toggle Laser Beam (High / low)",
+        "description": "Activate a Mining Module",
+        "joystick_default": null
+      },
+      {
+        "name": "v_jettison_volatile_cargo",
+        "label": "Jettison Cargo",
+        "description": "Jettison Cargo",
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "spaceship_salvage",
+    "label": "Vehicles - Salvage",
+    "category": "FLIGHT",
+    "actions": [
+      {
+        "name": "tractor_beam_vehicle_increase_distance",
+        "label": "Tractor Beam Vehicle- Increase Distance",
+        "description": "Increases the target distance for an object controlled with the Vehicle Tractor Beam.",
+        "joystick_default": null
+      },
+      {
+        "name": "tractor_beam_vehicle_decrease_distance",
+        "label": "Tractor Beam Vehicle - Decrease Distance",
+        "description": "Decreases the target distance for an object controlled with the Vehicle Tractor Beam.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_toggle_fire_focused",
+        "label": "Toggle Fire Focused",
+        "description": "Toggle firing the Focused salvage tools",
+        "joystick_default": "button1"
+      },
+      {
+        "name": "v_salvage_toggle_fire_left",
+        "label": "Toggle Fire Left",
+        "description": "Toggle firing the Left salvage tool",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_toggle_fire_right",
+        "label": "Toggle Fire Right",
+        "description": "Toggle firing the Right salvage tool",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_toggle_fire_fracture",
+        "label": "Toggle Fire Fracture",
+        "description": "Toggle firing the Fracturing tool",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_toggle_fire_disintegrate",
+        "label": "Toggle Fire Disintegrate",
+        "description": "Toggle firing the Disintegration tool",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_toggle_gimbal_mode",
+        "label": "Salvage Mode Gimbal (Toggle)",
+        "description": "Toggle between gimbled and fixed salvage targeting modes.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_reset_gimbal",
+        "label": "Salvage Mode Gimbal Reset",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_increase_beam_spacing",
+        "label": "Increase Beam Spacing",
+        "description": "Increase the spacing between the Vulture's two salvage heads. ",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_decrease_beam_spacing",
+        "label": "Decrease Beam Spacing",
+        "description": "Decrease the spacing between the Vulture's two salvage heads.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_beam_spacing_rel",
+        "label": "Relative Beam Spacing",
+        "description": "Adjust the relative spacing between the Vulture's two salvage heads.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_beam_spacing_abs",
+        "label": "Absolute Beam Spacing",
+        "description": "Adjust the absolute spacing between the Vulture's two salvage heads.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_toggle_beam_spacing_axis",
+        "label": "Salvage Beam Axis (Toggle)",
+        "description": "Set the orientation axis of the salvage beam to vertical or horizontal.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_cycle_modifiers_focused",
+        "label": "Cycle Focused Salvage Modifiers",
+        "description": "Cycle through available modifiers on the Focused salvage head(s)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_cycle_modifiers_left",
+        "label": "Cycle Left Salvage Modifiers",
+        "description": "Cycle through available modifiers on the left salvage head or salvage turret.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_cycle_modifiers_right",
+        "label": "Cycle Right Salvage Modifiers",
+        "description": "Cycle through available modifiers on the right salvage head or salvage turret.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_cycle_modifiers_structural",
+        "label": "Cycle Structural Salvage Modes",
+        "description": "Cycle through available modes on the Structural Salvage tool.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_focus_all_heads",
+        "label": "Focus all salvage heads",
+        "description": "Focus all salvage heads",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_focus_left",
+        "label": "Focus left salvage head",
+        "description": "Focus left salvage head",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_focus_right",
+        "label": "Focus right salvage head",
+        "description": "Focus right salvage head",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_focus_fracture",
+        "label": "Focus Fracture tool",
+        "description": "Focus Fracture tool",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_focus_disintegrate",
+        "label": "Focus Disintegration tool",
+        "description": "Focus Disintegration tool",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_nudge_up__left",
+        "label": "Nudge left salvage tool up",
+        "description": "Nudge left salvage tool up",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_nudge_down__left",
+        "label": "Nudge left salvage tool down",
+        "description": "Nudge left salvage tool down",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_nudge_left__left",
+        "label": "Nudge left salvage tool left",
+        "description": "Nudge left salvage tool left",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_nudge_right__left",
+        "label": "Nudge left salvage tool right",
+        "description": "Nudge left salvage tool right",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_nudge_up__right",
+        "label": "Nudge right salvage tool up",
+        "description": "Nudge right salvage tool up",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_nudge_down__right",
+        "label": "Nudge right salvage tool down",
+        "description": "Nudge right salvage tool down",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_nudge_left__right",
+        "label": "Nudge right salvage tool left",
+        "description": "Nudge right salvage tool left",
+        "joystick_default": null
+      },
+      {
+        "name": "v_salvage_nudge_right__right",
+        "label": "Nudge right salvage tool right",
+        "description": "Nudge right salvage tool right",
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "turret_movement",
+    "label": "Turret Movement",
+    "category": null,
+    "actions": [
+      {
+        "name": "turret_pitch_up",
+        "label": "Pitch up",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "turret_pitch_down",
+        "label": "Pitch down",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "turret_pitch",
+        "label": "Pitch",
+        "description": null,
+        "joystick_default": "y"
+      },
+      {
+        "name": "turret_pitch_mouse",
+        "label": "Pitch",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "turret_yaw_left",
+        "label": "Yaw left",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "turret_yaw_right",
+        "label": "Yaw right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "turret_yaw",
+        "label": "Yaw",
+        "description": null,
+        "joystick_default": "x"
+      },
+      {
+        "name": "turret_yaw_mouse",
+        "label": "Yaw",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "turret_toggle_mouse_mode",
+        "label": "Toggle Turret Mouse Movement (VJoy, FPS style)",
+        "description": "Enables / Disables relative mouse mode for turrets",
+        "joystick_default": null
+      },
+      {
+        "name": "turret_mouse_mode_cycle",
+        "label": "Turret Mouse Mode - Cycle Modes",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "turret_mouse_mode_set_vjoy",
+        "label": "Turret Mouse Mode - VJoy Dragging",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "turret_mouse_mode_set_1to1",
+        "label": "Turret Mouse Mode - Relative Dragging",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "turret_mouse_mode_set_pointer",
+        "label": "Turret Mouse Mode - Pointer",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "turret_remote_exit",
+        "label": "Exit Remote Turret",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "turret_gyromode",
+        "label": "Turret Gyro Stabilization (Toggle)",
+        "description": "Turret Gyro Stabilization (Toggle)",
+        "joystick_default": null
+      },
+      {
+        "name": "turret_remote_cycle_next",
+        "label": "Next Remote Turret",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "turret_remote_cycle_prev",
+        "label": "Previous Remote Turret",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "turret_advanced",
+    "label": "Turret Advanced",
+    "category": null,
+    "actions": [
+      {
+        "name": "turret_esp_toggle",
+        "label": "Turret E.S.P. Toggle On / Off",
+        "description": "Enables / Disables Turret E.S.P.",
+        "joystick_default": null
+      },
+      {
+        "name": "turret_esp_hold",
+        "label": "Turret E.S.P. - Enable Temporarily (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "turret_recenter",
+        "label": "Recenter Turret (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "turret_limiter_toggle",
+        "label": "Turret - Speed Limiter - On/Off (Hold/Toggle)",
+        "description": "Toggles the limiter for the rotational turret speed",
+        "joystick_default": null
+      },
+      {
+        "name": "turret_limiter_rel",
+        "label": "Turret - Speed Limiter (rel)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "turret_limiter_rel_increase",
+        "label": "Turret - Speed Limiter - Increase (rel)",
+        "description": "Increases the speed of the turret.",
+        "joystick_default": null
+      },
+      {
+        "name": "turret_limiter_rel_decrease",
+        "label": "Turret - Speed Limiter - Decrease (rel)",
+        "description": "Decreases the speed of the turret.",
+        "joystick_default": null
+      },
+      {
+        "name": "turret_limiter_abs",
+        "label": "Turret - Speed Limiter (abs)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "turret_change_position",
+        "label": "Change Turret Position",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "spaceship_weapons",
+    "label": "Vehicles - Weapons",
+    "category": "FLIGHT",
+    "actions": [
+      {
+        "name": "v_weapon_gimbals_state_toggle",
+        "label": "Gimbal State - Toggle Locked / Unlocked",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_gimbals_state_set_locked",
+        "label": "Gimbal State - Set Locked",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_gimbals_state_set_unlocked",
+        "label": "Gimbal State - Set Unlocked",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_gimbals_unlocked_cycle_source",
+        "label": "Gimbal State - Unlocked - Cycle Source (VJoy / View)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_aim_type_cycle",
+        "label": "Aim Mode - Cycle",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_aim_type_set_pip_aiming",
+        "label": "Aim Mode - Set to PIP Aiming",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_aim_type_set_painting",
+        "label": "Aim Mode - Set to Painting",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_aim_type_set_auto",
+        "label": "Aim Mode - Set to Automatic",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_staggered_fire_toggle",
+        "label": "Staggered Fire - Toggle On / Off",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_staggered_fire_on",
+        "label": "Staggered Fire - On",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_staggered_fire_off",
+        "label": "Staggered Fire - Off",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_suppress_aim_assists_hold",
+        "label": "Suppress Aim Assists (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_pip_toggle_lead_lag",
+        "label": "Toggle Lead / Lag PIPs",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_pip_set_lag",
+        "label": "Set Lag PIPs",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_pip_set_lead",
+        "label": "Set Lead PIPs",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_pip_combination_type_toggle",
+        "label": "PIP Combination Type: Toggle",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_pip_combination_type_set_single",
+        "label": "PIP Combination Type: Set One PIP Per Weapon",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_pip_combination_type_set_combined_weapon_group",
+        "label": "PIP Combination Type: Set One PIP Per Weapon Type",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_pip_prec_line_toggle",
+        "label": "PIP Precision Lines Toggle",
+        "description": "PIP Precision Lines Toggle",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_pip_prec_line_on",
+        "label": "PIP Precision Lines On",
+        "description": "PIP Precision Lines On",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_pip_prec_line_off",
+        "label": "PIP Precision Lines Off",
+        "description": "PIP Precision Lines Off",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_pip_fade_toggle",
+        "label": "PIP Fading Toggle",
+        "description": "PIP Fading Toggle",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_pip_fade_on",
+        "label": "PIP Fading On",
+        "description": "PIP Fading On",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_pip_fade_off",
+        "label": "PIP Fading Off",
+        "description": "PIP Fading Off",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_ui_scale_toggle",
+        "label": "Gunnery UI Magnification Toggle",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_ui_scale_on",
+        "label": "Gunnery UI Magnification On",
+        "description": "Gunnery UI Magnification On",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_ui_scale_off",
+        "label": "Gunnery UI Magnification Off",
+        "description": "Gunnery UI Magnification Off",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_convergence_distance_rel",
+        "label": "Manual Convergence Distance (rel.)",
+        "description": "Sets the manual convergence distance on a relative axis",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_convergence_distance_rel_increase",
+        "label": "Manual Convergence Distance - Increase",
+        "description": "Increases the Manual Convergence Distance",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_convergence_distance_rel_decrease",
+        "label": "Manual Convergence Distance - Decrease",
+        "description": "Decreases the Manual Convergence Distance",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_convergence_distance_abs",
+        "label": "Manual Convergence Distance (abs.)",
+        "description": "Manual Convergence Distance (abs.)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_convergence_distance_set_default",
+        "label": "Manual Convergence Distance - Reset",
+        "description": "Resets the Manual Convergence Distance to the default value",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_preset_attack",
+        "label": "Weapon Preset - Fire",
+        "description": null,
+        "joystick_default": "button1"
+      },
+      {
+        "name": "v_weapon_preset_fire_guns0",
+        "label": "Weapon Presets - Fire Guns Group 1",
+        "description": "Weapon Presets - Fire Guns Group 1",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_preset_fire_guns1",
+        "label": "Weapon Presets - Fire Guns Group 2",
+        "description": "Weapon Presets - Fire Guns Group 2",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_preset_fire_guns2",
+        "label": "Weapon Presets - Fire Guns Group 3",
+        "description": "Weapon Presets - Fire Guns Group 3",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_preset_fire_guns3",
+        "label": "Weapon Presets - Fire Guns Group 4",
+        "description": "Weapon Presets - Fire Guns Group 4",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_preset_next",
+        "label": "Weapon Presets - Next",
+        "description": null,
+        "joystick_default": "button1"
+      },
+      {
+        "name": "v_weapon_preset_prev",
+        "label": "Weapon Presets - Previous",
+        "description": null,
+        "joystick_default": "button1"
+      },
+      {
+        "name": "v_weapon_preset_next_overflow",
+        "label": "Weapon Presets - Next (Overflow)",
+        "description": "Weapon Presets - Next (Overflow)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_preset_prev_overflow",
+        "label": "Weapon Presets - Previous (Overflow)",
+        "description": "Weapon Presets - Previous (Overflow)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_preset_guns0",
+        "label": "Weapon Presets - Set Guns Group 1",
+        "description": "Weapon Presets - Set Guns Group 1",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_preset_guns1",
+        "label": "Weapon Presets - Set Guns Group 2",
+        "description": "Weapon Presets - Set Guns Group 2",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_preset_guns2",
+        "label": "Weapon Presets - Set Guns Group 3",
+        "description": "Weapon Presets - Set Guns Group 3",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_preset_guns3",
+        "label": "Weapon Presets - Set Guns Group 4",
+        "description": "Weapon Presets - Set Guns Group 4",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_preset_emp",
+        "label": "Weapon Presets - Set EMPs",
+        "description": "Weapon Presets - Set EMPs",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_preset_qid_jammer",
+        "label": "Weapon Presets - Set Quantum Jammers (short range)",
+        "description": "Weapon Presets - Set Quantum Jammers (short range)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_preset_qid_pulse",
+        "label": "Weapon Presets - Set Quantum Snares / Pulse (long range)",
+        "description": "Weapon Presets - Set Quantum Snares / Pulse (long range)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_preset_qid",
+        "label": "Weapon Presets - Set QIDs",
+        "description": "Weapon Presets - Set QIDs",
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "spaceship_missiles",
+    "label": "Vehicles - Missiles",
+    "category": "FLIGHT",
+    "actions": [
+      {
+        "name": "v_weapon_toggle_launch_missile",
+        "label": "Launch Missiles (Tap)",
+        "description": null,
+        "joystick_default": "button1"
+      },
+      {
+        "name": "v_weapon_launch_missile",
+        "label": "Launch Missiles (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_cycle_missile_fwd",
+        "label": "Cycle Next Missile Type",
+        "description": null,
+        "joystick_default": "button2"
+      },
+      {
+        "name": "v_weapon_cycle_missile_back",
+        "label": "Cycle Previous Missile Type",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_increase_max_missiles",
+        "label": "Increase Number of Armed Missiles",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_decrease_max_missiles",
+        "label": "Decrease Number of Armed Missiles",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_reset_max_missiles",
+        "label": "Reset Number of Armed Missiles",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_bombing_toggle_desired_impact_point",
+        "label": "Bombs - Toggle Desired Impact Point (Tap)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_bombing_toggle_desired_impact_point_hold",
+        "label": "Bombs - Toggle Desired Impact Point (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_bombing_hud_range_increase",
+        "label": "Bombs - Increase HUD Range",
+        "description": "Increases range by one step in the bomb alignment HUD",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_bombing_hud_range_decrease",
+        "label": "Bombs - Decrease HUD Range",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_bombing_hud_range_reset",
+        "label": "Bombs - Reset HUD Range",
+        "description": "Resets to the default range in the bomb alignment HUD",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_launch_missile_cinematic",
+        "label": "Enable Cinematic Camera (Toggle)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_launch_missile_cinematic_hold",
+        "label": "Enable Cinematic Camera (Hold)",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "spaceship_defensive",
+    "label": "Vehicles - Shields and Countermeasures",
+    "category": "FLIGHT",
+    "actions": [
+      {
+        "name": "v_weapon_countermeasure_decoy_launch",
+        "label": "Decoy - Launch Burst (tap), Set and Launch Burst (hold)",
+        "description": "Launches a decoy countermeasure.",
+        "joystick_default": "button3"
+      },
+      {
+        "name": "v_weapon_countermeasure_decoy_burst_increase",
+        "label": "Decoy - Increase Burst Size (tap)",
+        "description": "Increases the burst size by one.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_countermeasure_decoy_burst_decrease",
+        "label": "Decoy - Decrease Burst Size (tap)",
+        "description": "Decreases the burst size by one.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_countermeasure_decoy_launch_panic",
+        "label": "Decoy - Panic Launch (tap)",
+        "description": "Launches a large percentage of the countermeasure magazine.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_weapon_countermeasure_noise_launch",
+        "label": "Noise - Deploy (Tap)",
+        "description": "Deploys a noise countermeasure.",
+        "joystick_default": "button5"
+      },
+      {
+        "name": "v_shield_raise_level_forward",
+        "label": "Shield raise level front",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_shield_raise_level_back",
+        "label": "Shield raise level back",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_shield_raise_level_left",
+        "label": "Shield raise level left",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_shield_raise_level_right",
+        "label": "Shield raise level right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_shield_raise_level_up",
+        "label": "Shield raise level top",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_shield_raise_level_down",
+        "label": "Shield raise level bottom",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_shield_reset_level",
+        "label": "Shield reset levels",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "spaceship_power",
+    "label": "Flight - Power",
+    "category": "FLIGHT",
+    "actions": [
+      {
+        "name": "v_power_toggle",
+        "label": "Toggle Power - All",
+        "description": " Toggle Power - All",
+        "joystick_default": null
+      },
+      {
+        "name": "v_power_set_on",
+        "label": "Set Power On",
+        "description": "Set Power On",
+        "joystick_default": null
+      },
+      {
+        "name": "v_power_set_off",
+        "label": "Set Power Off",
+        "description": "Set Power Off",
+        "joystick_default": null
+      },
+      {
+        "name": "v_power_toggle_thrusters",
+        "label": "Toggle Power - Thrusters",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_power_set_thrusters_on",
+        "label": "Set Thrusters Power On",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_power_set_thrusters_off",
+        "label": "Set Thrusters Power Off",
+        "description": "Set Thrusters Power Off",
+        "joystick_default": null
+      },
+      {
+        "name": "v_power_toggle_shields",
+        "label": "Toggle Power - Shields",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_power_set_shields_on",
+        "label": "Set Shields Power On",
+        "description": "Set Shields Power On",
+        "joystick_default": null
+      },
+      {
+        "name": "v_power_set_shields_off",
+        "label": "Set Shields Power Off",
+        "description": "Set Shields Power Off",
+        "joystick_default": null
+      },
+      {
+        "name": "v_power_toggle_weapons",
+        "label": "Toggle Power - Weapons",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_power_set_weapons_on",
+        "label": "Set Weapons Power On",
+        "description": "Set Weapons Power On",
+        "joystick_default": null
+      },
+      {
+        "name": "v_power_set_weapons_off",
+        "label": "Set Weapons Power Off",
+        "description": "Set Weapons Power Off",
+        "joystick_default": null
+      },
+      {
+        "name": "v_power_throttle_down",
+        "label": "Decrease Throttle",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_power_throttle_min",
+        "label": "Decrease Throttle to Min",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_power_throttle_up",
+        "label": "Increase Throttle",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_power_throttle_max",
+        "label": "Increase Throttle to Max",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_engineering_assignment_engine_increase",
+        "label": "Engines - Increase (Tap)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_engineering_assignment_engine_decrease",
+        "label": "Engines - Decrease (Tap)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_engineering_assignment_engine_max",
+        "label": "Engines - Set to Max (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_engineering_assignment_engine_min",
+        "label": "Engines - Set to Min (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_engineering_assignment_shields_increase",
+        "label": "Shields - Increase (Tap)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_engineering_assignment_shields_decrease",
+        "label": "Shields - Decrease (Tap)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_engineering_assignment_shields_max",
+        "label": "Shields - Set to Max (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_engineering_assignment_shields_min",
+        "label": "Shields - Set to Min (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_engineering_assignment_weapons_increase",
+        "label": "Weapons - Increase (Tap)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_engineering_assignment_weapons_decrease",
+        "label": "Weapons - Decrease (Tap)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_engineering_assignment_weapons_max",
+        "label": "Weapons - Set to Max (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_engineering_assignment_weapons_min",
+        "label": "Weapons - Set to Min (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_engineering_assignment_reset",
+        "label": "Reset Assignments",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "spaceship_hud",
+    "label": "Flight - HUD",
+    "category": "FLIGHT",
+    "actions": [
+      {
+        "name": "v_cycle_pitch_ladder_mode",
+        "label": "Cycle Pitch Ladder Mode",
+        "description": "Cycles the pitch ladder mode between off, HUD, look direction and mixed.",
+        "joystick_default": null
+      },
+      {
+        "name": "mobiglas",
+        "label": "mobiGlas (Toggle)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_hud_open_scoreboard",
+        "label": "Scoreboard",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_starmap",
+        "label": "Map",
+        "description": " Map",
+        "joystick_default": null
+      },
+      {
+        "name": "visor_wipe",
+        "label": "Wipe Helmet Visor",
+        "description": "Quickly wipe your helmet visor to improve visibility",
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "lights_controller",
+    "label": "Lights",
+    "category": null,
+    "actions": [
+      {
+        "name": "v_lights",
+        "label": "Headlights (Toggle)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_lights_on",
+        "label": "Headlights\\n(Enable)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_lights_off",
+        "label": "Headlights\\n(Enable)",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "stopwatch",
+    "label": "Stop Watch",
+    "category": null,
+    "actions": [
+      {
+        "name": "stopwatch_reset",
+        "label": "Reset (Long Press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "stopwatch_trigger",
+        "label": "Start / Pause (Short Press)",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "player",
+    "label": "On Foot - All",
+    "category": "ON FOOT",
+    "actions": [
+      {
+        "name": "moveleft",
+        "label": "Move Left",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "moveright",
+        "label": "Move Right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "moveforward",
+        "label": "Move Forward",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "moveback",
+        "label": "Move Backwards",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "gp_movex",
+        "label": "Move Left / Right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "gp_movey",
+        "label": "Move Forward / Backward",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "gp_rotateyaw",
+        "label": "Look (Yaw)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "gp_rotatepitch",
+        "label": "Look (Pitch)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "jump",
+        "label": "Jump",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "jump_hold",
+        "label": "Jump Thrusters - Activate (hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "jump_release",
+        "label": "Jump Thrusters - Release",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "crouch",
+        "label": "Crouch",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "gp_jump",
+        "label": "Jump",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "gp_crouch",
+        "label": "Crouch",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "prone",
+        "label": "Prone",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "sprint",
+        "label": "Sprint",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "walk",
+        "label": "Walk",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "leanleft",
+        "label": "Lean Left",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "leanright",
+        "label": "Lean Right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "ledgegrab",
+        "label": "Climb Ledges",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "attack1",
+        "label": "Firearm - Attack",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "attackSecondary",
+        "label": "Tool - Secondary Fire",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "melee_AttackLightLeft",
+        "label": "Melee - Attack Light Left ",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "melee_AttackLightRight",
+        "label": "Melee - Attack Light Right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "melee_AttackHeavyLeft",
+        "label": "Melee - Attack Heavy Left (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "melee_AttackHeavyRight",
+        "label": "Melee - Attack Heavy Right (Hold) ",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "melee_block",
+        "label": "Melee - Block (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "melee_AttackSyringeStab",
+        "label": "Medical Pen - Inject Other",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "melee_dodgeLeft",
+        "label": "Dodge left ",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "melee_dodgeRight",
+        "label": "Dodge Right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "melee_dodgeBack",
+        "label": "Dodge Back ",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "weapon_melee",
+        "label": "Melee - Attack (Ranged Weapon + Takedowns)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "takedown_nonLethal",
+        "label": "Melee - Attack (Ranged Weapon + Takedowns)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "throw_overhand",
+        "label": "Throw - Overarm & Two-Handed",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "throw_underhand",
+        "label": "Throw - Underarm",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "zoom",
+        "label": "Aim Down Sight",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "interact_with_scope",
+        "label": "Interact With Scope (ADS)",
+        "description": "Interact With Scope (ADS)",
+        "joystick_default": null
+      },
+      {
+        "name": "toggle_lowered",
+        "label": "Weapon Stance (Toggle)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "select_primary_pit",
+        "label": "Select Primary Weapon",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "select_secondary_pit",
+        "label": "Select Secondary Weapon",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "select_sidearm_pit",
+        "label": "Select Sidearm",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "select_meleeweapon_pit",
+        "label": "Select Melee",
+        "description": "Select Melee",
+        "joystick_default": null
+      },
+      {
+        "name": "select_gadget_pit",
+        "label": "Select Gadget",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "selectUnarmedCombat",
+        "label": "Unarmed Combat",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "nextweapon",
+        "label": "Next Weapon",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "prevweapon",
+        "label": "Previous Weapon",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "reload",
+        "label": "Reload",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "reloadSecondary",
+        "label": "Reload Secondary Fire",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "ammoRepool",
+        "label": "Repool Ammunition",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "holster",
+        "label": "Holster Weapon",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "drop",
+        "label": "Drop Item",
+        "description": " Drop Item",
+        "joystick_default": null
+      },
+      {
+        "name": "inspect",
+        "label": "Inspect Item",
+        "description": "Inspect Item",
+        "joystick_default": null
+      },
+      {
+        "name": "customize",
+        "label": "Customize Weapon",
+        "description": "Customize Weapon",
+        "joystick_default": null
+      },
+      {
+        "name": "stabilize",
+        "label": "Hold Breath (ADS)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "weapon_auxiliary_action",
+        "label": "FPS Underbarrel Attachment Action",
+        "description": " FPS Underbarrel Attachment Action",
+        "joystick_default": null
+      },
+      {
+        "name": "weapon_change_firemode",
+        "label": "Change Fire Mode",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "weapon_zeroing_decrease",
+        "label": "Weapon Zeroing Decrease",
+        "description": "Adjust the weapon scope to accommodate a closer target distance into sighting.",
+        "joystick_default": null
+      },
+      {
+        "name": "weapon_zeroing_increase",
+        "label": "Weapon Zeroing Increase / Auto",
+        "description": "Adjust the weapon scope to accommodate a farther target distance into sighting.",
+        "joystick_default": null
+      },
+      {
+        "name": "fixed_speed_increment",
+        "label": "Default Movement Speed Increase",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "fixed_speed_decrement",
+        "label": "Default Movement Speed Decrease",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "downedRevivalRequest",
+        "label": "Request Rescue (while Incapacitated)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "toggle_flashlight",
+        "label": "Flashlight (Toggle)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "toggleEquipHelmet",
+        "label": "Toggle Equip Helmet",
+        "description": "Toggle Equip Helmet",
+        "joystick_default": null
+      },
+      {
+        "name": "toggleAttachHelmet",
+        "label": "Helmet\\n(Equip)",
+        "description": "Toggle Equip Helmet",
+        "joystick_default": null
+      },
+      {
+        "name": "toggleHelmetState",
+        "label": "Default Movement Speed Increase",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "visor_wipe",
+        "label": "Wipe Helmet Visor",
+        "description": "Quickly wipe your helmet visor to improve visibility",
+        "joystick_default": null
+      },
+      {
+        "name": "thirdperson",
+        "label": "Third Person View (Toggle)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "free_thirdperson_camera",
+        "label": "Free View Camera (Hold)",
+        "description": "Holding allows free view camera in third person",
+        "joystick_default": null
+      },
+      {
+        "name": "zoom_out",
+        "label": "Zoom Out",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "zoom_in",
+        "label": "Zoom In",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "mobiglas",
+        "label": "mobiGlas (Toggle)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "ship_recall",
+        "label": "Recall Last Vehicle",
+        "description": "Activate ship recall on the last flying vehicle used",
+        "joystick_default": null
+      },
+      {
+        "name": "pl_hud_open_scoreboard",
+        "label": "Scoreboard",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "dismiss_corpse_marker",
+        "label": "Dismiss Corpse Marker",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "consume",
+        "label": "Firearm - Attack",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "port_modification_select",
+        "label": "Port Modification Interact",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_starmap",
+        "label": "Map",
+        "description": " Map",
+        "joystick_default": null
+      },
+      {
+        "name": "force_respawn",
+        "label": "Force Re-spawn (E.V.A. / On Foot)",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "prone",
+    "label": "On Foot - All",
+    "category": "ON FOOT",
+    "actions": [
+      {
+        "name": "prone_rollleft",
+        "label": "Roll Left (while Prone)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "prone_rollright",
+        "label": "Roll Right (while Prone)",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "tractor_beam",
+    "label": "On Foot - All",
+    "category": "ON FOOT",
+    "actions": [
+      {
+        "name": "tractor_beam_increase_distance",
+        "label": "Tractor Beam - Increase Distance",
+        "description": "Increases the target distance for an object controlled with the Tractor Beam.",
+        "joystick_default": "button3"
+      },
+      {
+        "name": "tractor_beam_decrease_distance",
+        "label": "Tractor Beam - Decrease Distance",
+        "description": "Decreases the target distance for an object controlled with the Tractor Beam.",
+        "joystick_default": "button4"
+      }
+    ]
+  },
+  {
+    "name": "incapacitated",
+    "label": "On Foot - All",
+    "category": "ON FOOT",
+    "actions": [
+      {
+        "name": "incapacitatedRespawn",
+        "label": "Regen (while Incapacitated)",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "zero_gravity_eva",
+    "label": "E.V.A - All",
+    "category": "E.V.A.",
+    "actions": [
+      {
+        "name": "eva_view_yaw_left",
+        "label": "View Left",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_view_yaw_right",
+        "label": "View Right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_view_yaw",
+        "label": "View Left/Right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_view_yaw_mouse",
+        "label": "View Left/Right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_view_pitch_up",
+        "label": "View Up",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_view_pitch_down",
+        "label": "View Down",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_view_pitch",
+        "label": "View Up/Down",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_view_pitch_mouse",
+        "label": "View Up/Down",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_roll_left",
+        "label": "Roll Left",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_roll_right",
+        "label": "Roll Right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_roll",
+        "label": "Roll Left/Right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_strafe_up",
+        "label": "Strafe Up",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_strafe_down",
+        "label": "Strafe Down",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_strafe_vertical",
+        "label": "Strafe Up/Down",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_strafe_left",
+        "label": "Strafe Left",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_strafe_right",
+        "label": "Strafe Right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_strafe_lateral",
+        "label": "Strafe Left/Right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_strafe_forward",
+        "label": "Strafe Forward",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_strafe_back",
+        "label": "Strafe Backward",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_strafe_longitudinal",
+        "label": "Strafe Forward/Backward",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_brake",
+        "label": "Brake",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_boost",
+        "label": "Boost",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "eva_toggle_headlook_mode",
+        "label": "Freelook (Hold)",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "zero_gravity_traversal",
+    "label": "E.V.A. - Zero-G Traversal",
+    "category": null,
+    "actions": [
+      {
+        "name": "zgt_launch",
+        "label": "Launch from Surface",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "zgt_detach",
+        "label": "Detach from Surface",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "zgt_roll_left",
+        "label": "Roll Left",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "zgt_roll_right",
+        "label": "Roll Right",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "vehicle_general",
+    "label": "Ground Vehicle - General",
+    "category": "Vehicle",
+    "actions": [
+      {
+        "name": "v_horn",
+        "label": "Horn",
+        "description": null,
+        "joystick_default": "button8"
+      },
+      {
+        "name": "v_view_cycle_fwd",
+        "label": "Cycle camera view",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_zoom_in",
+        "label": "Zoom in (3rd person view)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_zoom_out",
+        "label": "Zoom out (3rd person view)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_yaw_mouse",
+        "label": "Look left / right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_pitch_mouse",
+        "label": "Look up / down",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_yaw",
+        "label": "Look left / right",
+        "description": null,
+        "joystick_default": "x"
+      },
+      {
+        "name": "v_view_pitch",
+        "label": "Look up / down",
+        "description": null,
+        "joystick_default": "y"
+      },
+      {
+        "name": "v_view_freelook_mode",
+        "label": "Freelook (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "mobiglas",
+        "label": "mobiGlas (Toggle)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_flightready",
+        "label": "Flight / Systems Ready",
+        "description": "Flight / Systems Ready",
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_all_doors",
+        "label": "Open/Close Doors (Toggle)",
+        "description": "Toggle Open/Close Doors",
+        "joystick_default": null
+      },
+      {
+        "name": "v_open_all_doors",
+        "label": "Open All Doors",
+        "description": " Open All Doors",
+        "joystick_default": null
+      },
+      {
+        "name": "v_close_all_doors",
+        "label": "Close All Doors",
+        "description": " Close All Doors",
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_all_doorlocks",
+        "label": "Lock/Unlock Doors (Toggle)",
+        "description": "Toggle Lock/Unlock Doors",
+        "joystick_default": null
+      },
+      {
+        "name": "v_lock_all_doors",
+        "label": "Lock All Doors",
+        "description": " Lock All Doors",
+        "joystick_default": null
+      },
+      {
+        "name": "v_unlock_all_doors",
+        "label": "Unlock All Doors",
+        "description": " Unlock All Doors",
+        "joystick_default": null
+      },
+      {
+        "name": "v_toggle_all_portlocks",
+        "label": "Port Lock Toggle All",
+        "description": "Toggle Open/Close Ports",
+        "joystick_default": null
+      },
+      {
+        "name": "v_lock_all_ports",
+        "label": "Port Lock All",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_unlock_all_ports",
+        "label": "Port Unlock All",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_starmap",
+        "label": "Map",
+        "description": " Map",
+        "joystick_default": null
+      },
+      {
+        "name": "visor_wipe",
+        "label": "Wipe Helmet Visor",
+        "description": "Quickly wipe your helmet visor to improve visibility",
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "vehicle_driver",
+    "label": "Ground Vehicle - Movement",
+    "category": "Vehicle",
+    "actions": [
+      {
+        "name": "v_move_forward",
+        "label": "Drive Forward",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_move_back",
+        "label": "Drive Backward",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_move",
+        "label": "Drive Forward / Backward",
+        "description": null,
+        "joystick_default": "slider1"
+      },
+      {
+        "name": "v_yaw_left",
+        "label": "Turn Left",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_yaw_right",
+        "label": "Turn Right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_yaw",
+        "label": "Yaw Left / Right (Axis / HOTAS)",
+        "description": "Yaw Left / Right (HOTAS)",
+        "joystick_default": "x"
+      },
+      {
+        "name": "v_yaw_mouse",
+        "label": "Yaw Left / Right (Mouse)",
+        "description": "Yaw Left / Right (Mouse)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_pitch_up",
+        "label": "Ground Vehicles - Pitch Up",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_pitch_down",
+        "label": "Ground Vehicles - Pitch Down",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_pitch",
+        "label": "Pitch Up / Down (Axis / HOTAS)",
+        "description": "Pitch Up / Down (HOTAS)",
+        "joystick_default": "y"
+      },
+      {
+        "name": "v_pitch_mouse",
+        "label": "Pitch Up / Down (Mouse)",
+        "description": "Pitch Up / Down (Mouse)",
+        "joystick_default": null
+      },
+      {
+        "name": "v_brake",
+        "label": "Brake",
+        "description": null,
+        "joystick_default": "button7"
+      },
+      {
+        "name": "v_view_dynamic_zoom_rel",
+        "label": "Dynamic Zoom In and Out (rel.)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_dynamic_zoom_rel_in",
+        "label": "Dynamic Zoom In (rel.)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_dynamic_zoom_rel_out",
+        "label": "Dynamic Zoom Out (rel.)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_dynamic_zoom_abs",
+        "label": "Dynamic Zoom In and Out (abs.)",
+        "description": "Axis assignment for dynamic zoom",
+        "joystick_default": null
+      },
+      {
+        "name": "v_view_dynamic_zoom_abs_toggle",
+        "label": "Dynamic Zoom Toggle (abs.)",
+        "description": "Holds the dynamic zoom as long as the button is held",
+        "joystick_default": null
+      },
+      {
+        "name": "v_boost",
+        "label": "Boost",
+        "description": null,
+        "joystick_default": "button8"
+      },
+      {
+        "name": "v_lock_rotation",
+        "label": "Lock Pitch / Yaw Movement (Toggle / Hold)",
+        "description": "While active no rotational inputs are allowed to your ship. This is useful for arresting movement when you lost control using a mouse.",
+        "joystick_default": null
+      },
+      {
+        "name": "v_mgv_switch_brake_on_idle",
+        "label": "Toggle Auto Braking On Idle",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "spectator",
+    "label": "Electronic Access - Spectator",
+    "category": "Electronic Access - Spectator",
+    "actions": [
+      {
+        "name": "spectate_next_target",
+        "label": "Spectator Camera Target (Next)",
+        "description": null,
+        "joystick_default": "button1"
+      },
+      {
+        "name": "spectate_prev_target",
+        "label": "Spectator Camera Target (Previous)",
+        "description": null,
+        "joystick_default": "button2"
+      },
+      {
+        "name": "spectate_toggle_lock_target",
+        "label": "Spectator Camera Lock Target",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "spectate_zoom",
+        "label": "Spectator Camera Zoom",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "spectate_zoom_in",
+        "label": "Spectator Camera Zoom In",
+        "description": null,
+        "joystick_default": "hat1_up"
+      },
+      {
+        "name": "spectate_zoom_out",
+        "label": "Spectator Camera Zoom Out",
+        "description": null,
+        "joystick_default": "hat1_down"
+      },
+      {
+        "name": "spectate_rotateyaw_mouse",
+        "label": "Spectator Camera Rotate Yaw",
+        "description": null,
+        "joystick_default": "x"
+      },
+      {
+        "name": "spectate_rotatepitch_mouse",
+        "label": "Spectator Camera Rotate Pitch",
+        "description": null,
+        "joystick_default": "y"
+      },
+      {
+        "name": "spectate_rotateyaw",
+        "label": "Spectator Camera Rotate Yaw",
+        "description": null,
+        "joystick_default": "x"
+      },
+      {
+        "name": "spectate_rotatepitch",
+        "label": "Spectator Camera Rotate Pitch",
+        "description": null,
+        "joystick_default": "y"
+      },
+      {
+        "name": "spectate_toggle_hud",
+        "label": "Spectator Camera HUD (Toggle)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "spectate_gen_nextmode",
+        "label": "Spectator Camera Mode (Next)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "spectate_gen_prevmode",
+        "label": "Spectator Camera Mode (Previous)",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "default",
+    "label": "Social - General",
+    "category": "Social - General",
+    "actions": [
+      {
+        "name": "respawn",
+        "label": "Re-spawn",
+        "description": null,
+        "joystick_default": "button1"
+      },
+      {
+        "name": "pl_exit",
+        "label": "Exit seat",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "notification_accept",
+        "label": "Notifications - Accept Prompt",
+        "description": "Notifications - Accept Prompt",
+        "joystick_default": null
+      },
+      {
+        "name": "notification_decline",
+        "label": "Notifications - Decline Prompt",
+        "description": "Notifications - Decline Prompt",
+        "joystick_default": null
+      },
+      {
+        "name": "toggle_contact",
+        "label": "CommLink App (Toggle)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "toggle_chat",
+        "label": "Chat Window (Toggle)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "cycle_chat_lobby",
+        "label": "Cycle Chat Lobby",
+        "description": "Press to cycle through subscribed lobbies in chat",
+        "joystick_default": null
+      },
+      {
+        "name": "focus_on_chat_textinput",
+        "label": "Chat Window Focus",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "ui_notification",
+    "label": "Social - Invites",
+    "category": "Social - General",
+    "actions": [
+      {
+        "name": "ui_notification_accept",
+        "label": "Accept Invite",
+        "description": "",
+        "joystick_default": null
+      },
+      {
+        "name": "ui_notification_decline",
+        "label": "Reject Invite",
+        "description": "",
+        "joystick_default": null
+      },
+      {
+        "name": "ui_notification_ignore",
+        "label": "Ignore Invite (hold)",
+        "description": " Ignore Invite",
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "player_emotes",
+    "label": "Social - Emotes",
+    "category": "ON FOOT",
+    "actions": [
+      {
+        "name": "emote_cs_forward",
+        "label": "Forward",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_cs_left",
+        "label": "Left",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_cs_right",
+        "label": "Right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_cs_stop",
+        "label": "Stop",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_cs_yes",
+        "label": "Yes",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_cs_no",
+        "label": "No",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_agree",
+        "label": "Agree",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_angry",
+        "label": "Angry",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_atease",
+        "label": "At Ease",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_attention",
+        "label": "Attention",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_blah",
+        "label": "Blah",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_bored",
+        "label": "Bored",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_bow",
+        "label": "Bow",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_burp",
+        "label": "Burp",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_cheer",
+        "label": "Cheer",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_chicken",
+        "label": "Chicken",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_clap",
+        "label": "Clap",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_come",
+        "label": "Come",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_cry",
+        "label": "Cry",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_dance",
+        "label": "Dance",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_disagree",
+        "label": "Disagree",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_failure",
+        "label": "Failure",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_flex",
+        "label": "Flex",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_flirt",
+        "label": "Flirt",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_gasp",
+        "label": "Gasp",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_gloat",
+        "label": "Gloat",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_greet",
+        "label": "Greet",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_laugh",
+        "label": "Laugh",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_launch",
+        "label": "Confirm Launch",
+        "description": "Confirms the launch of the vehicle",
+        "joystick_default": null
+      },
+      {
+        "name": "emote_point",
+        "label": "Point",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_rude",
+        "label": "Rude",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_salute",
+        "label": "Salute",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_sit",
+        "label": "Sit",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_sleep",
+        "label": "Sleep",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_smell",
+        "label": "Smell",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_taunt",
+        "label": "Taunt",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_threaten",
+        "label": "Threaten",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_wait",
+        "label": "Wait",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_wave",
+        "label": "Wave",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "emote_whistle",
+        "label": "Whistle",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "player_input_optical_tracking",
+    "label": "VOIP, FOIP and Head Tracking",
+    "category": "VOIP, FOIP and Head Tracking",
+    "actions": [
+      {
+        "name": "hmd_toggle",
+        "label": "[Experimental] VR - Toggle On / Off",
+        "description": "Enables/disables VR gameplay",
+        "joystick_default": null
+      },
+      {
+        "name": "hmd_recenter",
+        "label": "[Experimental] VR - Recenter Device",
+        "description": "Recenters the VR headset",
+        "joystick_default": null
+      },
+      {
+        "name": "hmd_theater_mode_toggle",
+        "label": "[Experimental] VR - Toggle Theater Mode",
+        "description": "Enables / Disables Theater Mode",
+        "joystick_default": null
+      },
+      {
+        "name": "hmd_lens_display_toggle",
+        "label": "[Experimental] VR - Visor Toggle On / Off",
+        "description": "Enables / Disables the Visor",
+        "joystick_default": null
+      },
+      {
+        "name": "headtrack_enabled",
+        "label": "Enable Head Tracking (Toggle)",
+        "description": "Switches head tracking on / off (Toggle)",
+        "joystick_default": null
+      },
+      {
+        "name": "headtrack_hold",
+        "label": "Head Tracking (Hold)",
+        "description": "Enables head tracking as long as the button is held down",
+        "joystick_default": null
+      },
+      {
+        "name": "headtrack_recenter_device",
+        "label": "Recenter Head Tracking Device (except TrackIR)",
+        "description": "Recenters head tracking device inputs.",
+        "joystick_default": null
+      },
+      {
+        "name": "headtrack_camera_enabled",
+        "label": "Enable / Disable Head Tracking for 3rd Person Camera (Toggle)",
+        "description": "Enables or disables head tracking in external cameras.",
+        "joystick_default": null
+      },
+      {
+        "name": "foip_pushtotalk",
+        "label": "VOIP Push To Talk",
+        "description": "VOIP Push To Talk",
+        "joystick_default": null
+      },
+      {
+        "name": "foip_pushtotalk_proximity",
+        "label": "VOIP Push To Talk (Proximity only)",
+        "description": "VOIP Push To Talk (Proximity only)",
+        "joystick_default": null
+      },
+      {
+        "name": "foip_viewownplayer",
+        "label": "FOIP Selfie Cam",
+        "description": "FOIP Selfie Cam",
+        "joystick_default": null
+      },
+      {
+        "name": "foip_recalibrate",
+        "label": "FOIP Recalibrate ",
+        "description": " FOIP Recalibrate",
+        "joystick_default": null
+      },
+      {
+        "name": "foip_cyclechannel",
+        "label": "Cycle through audio channels",
+        "description": "Cycle through audio channels",
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "player_choice",
+    "label": "Quick Keys, Interactions, and Inner Thought",
+    "category": "Quick Keys, Interactions, and Inner Thought",
+    "actions": [
+      {
+        "name": "pc_interaction_mode",
+        "label": "Interaction Mode",
+        "description": " Interaction Mode",
+        "joystick_default": "button6"
+      },
+      {
+        "name": "pc_interaction_select",
+        "label": "Activate Inner Thought",
+        "description": " Activate Interaction",
+        "joystick_default": null
+      },
+      {
+        "name": "pc_select",
+        "label": "Activate Inner Thought",
+        "description": " Activate Interaction",
+        "joystick_default": "button1"
+      },
+      {
+        "name": "pc_focus",
+        "label": "Focus",
+        "description": " Focus",
+        "joystick_default": "button7"
+      },
+      {
+        "name": "pc_zoom_in",
+        "label": "Interaction Mode Zoom In",
+        "description": "Interaction Mode Zoom In",
+        "joystick_default": null
+      },
+      {
+        "name": "pc_zoom_out",
+        "label": "Interaction Mode Zoom Out",
+        "description": " Interaction Mode Zoom Out",
+        "joystick_default": null
+      },
+      {
+        "name": "pc_screen_focus_left",
+        "label": "MFD Left",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_screen_focus_right",
+        "label": "MFD Right",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_screen_focus_up",
+        "label": "MFD Up",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_screen_focus_down",
+        "label": "MFD Down",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_personal_thought",
+        "label": "Personal Inner Thought (PIT)",
+        "description": " Personal Inner Thought",
+        "joystick_default": null
+      },
+      {
+        "name": "pc_camera_orbit",
+        "label": "Inventory Orbit Camera Mode",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_personal_back",
+        "label": "Exit",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_pit_inventory",
+        "label": "Toggle Inventory (short press)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_pit_looting",
+        "label": "Toogle Loot Screen (hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_pit_looting_toggle_view",
+        "label": "Toggle Looting View",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_pit_looting_toggle_weapon_attachments",
+        "label": "Looting - Toggle Weapon Attachments",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_pit_item_drop",
+        "label": "Drop Item",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_pit_empty_backpack",
+        "label": "Store All Commodities",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_pit_player_actions",
+        "label": "Player Actions - PIT Category",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_pit_emotes",
+        "label": "Emotes - PIT Category",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_pit_ship_systems",
+        "label": "Ship Systems - PIT Category",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_pit_flight_systems",
+        "label": "Flight Systems - PIT Category",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_pit_vehicle_actions",
+        "label": "Vehicle Actions - PIT Category",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_pit_weapons_systems",
+        "label": "Weapon Systems - PIT Category",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_pit_remote_turrets",
+        "label": "Remote Turret - PIT Category",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_pit_item_actions",
+        "label": "Item Actions - PIT Category",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_pit_weapon_selection",
+        "label": "Weapon Selection - PIT Category",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_pit_mobiglas_actions",
+        "label": "Mobiglas Actions - PIT Category",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_pit_miningmode_actions",
+        "label": "Mining Mode Actions - PIT Category",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_qs_weapons_pit_primary",
+        "label": "Weapon Select Radial Menu",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_qs_weapons_pit_secondary",
+        "label": "Weapon Select Radial Menu",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_qs_weapons_pit_sidearm",
+        "label": "Weapon Select Radial Menu",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_qs_grenades",
+        "label": "Throwable Select Radial Menu",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "pc_qs_consumables",
+        "label": "Consumable Select Radial Menu ",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  },
+  {
+    "name": "view_director_mode",
+    "label": "Camera - Advanced Camera Controls",
+    "category": "CAMERA",
+    "actions": [
+      {
+        "name": "view_enable_camview_mode",
+        "label": "Advanced Camera Controls Modifier (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_switch_to_alternative",
+        "label": "Advanced Camera Controls Modifier (Hold)",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_save_view_1",
+        "label": "Save View 1",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_save_view_2",
+        "label": "Save View 2",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_save_view_3",
+        "label": "Save View 3",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_save_view_4",
+        "label": "Save View 4",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_save_view_5",
+        "label": "Save View 5",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_save_view_6",
+        "label": "Save View 6",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_save_view_7",
+        "label": "Save View 7",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_save_view_8",
+        "label": "Save View 8",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_save_view_9",
+        "label": "Save View 9",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_load_view_1",
+        "label": "Load View 1",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_load_view_2",
+        "label": "Load View 2",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_load_view_3",
+        "label": "Load View 3",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_load_view_4",
+        "label": "Load View 4",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_load_view_5",
+        "label": "Load View 5",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_load_view_6",
+        "label": "Load View 6",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_load_view_7",
+        "label": "Load View 7",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_load_view_8",
+        "label": "Load View 8",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_load_view_9",
+        "label": "Load View 9",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_reset_saved",
+        "label": "Clear Saved View",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_move_target_X_pos",
+        "label": "X Offset Positive",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_move_target_X_neg",
+        "label": "X Offset Negative",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_move_target_Y_pos",
+        "label": "Y Offset Positive / Spectator Freecam Focal Point Forward",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_move_target_Y_neg",
+        "label": "Y Offset Negative / Spectator Freecam Focal Point Backward",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_move_target_Z_pos",
+        "label": "Z Offset Positive",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_move_target_Z_neg",
+        "label": "Z Offset Negative",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_fov_in",
+        "label": "Increase FoV",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_fov_out",
+        "label": "Decrease FoV",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_fstop_in",
+        "label": "Increase DoF",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_fstop_out",
+        "label": "Decrease DoF",
+        "description": null,
+        "joystick_default": null
+      },
+      {
+        "name": "view_restore_defaults",
+        "label": "Reset Current View",
+        "description": null,
+        "joystick_default": null
+      }
+    ]
+  }
+]
