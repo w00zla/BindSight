@@ -36,6 +36,7 @@ interface ActionMap {
 interface ResolvedBinding {
   token: string;
   device: string | null;
+  device_guid: string | null;
   actionmap: string;
   action: string;
   label: string | null;
@@ -49,6 +50,12 @@ interface LoadStatus {
   bindings: ResolvedBinding[];
 }
 
+interface BoundAction {
+  actionmap: string;
+  action: string;
+  label: string | null;
+}
+
 const MAX_EVENTS = 50;
 
 const devices = ref<DeviceInfo[]>([]);
@@ -56,8 +63,65 @@ const events = ref<JoyInput[]>([]);
 const actionMaps = ref<ActionMap[]>([]);
 const basePath = ref("");
 const bindings = ref<ResolvedBinding[]>([]);
+const tokens = ref<Record<string, string>>({});
+const currentInput = ref<{ device: string; token: string | null; actions: BoundAction[] } | null>(null);
 const error = ref<string | null>(null);
 const loading = ref(false);
+
+// SC's own display label for a full token, e.g. "js2_button1" -> "Button 1
+// (Input 2)". Falls back to the raw token if SC has no label for it.
+function tokenLabel(token: string | null): string {
+  if (!token) return "—";
+  return tokens.value[token] ?? token;
+}
+
+// Localized actionmap (category) label, e.g. "spaceship_movement" -> its label.
+function actionmapLabel(name: string): string {
+  return actionMaps.value.find((m) => m.name === name)?.label ?? name;
+}
+
+// Is the device recorded for this binding currently connected (matched by GUID)?
+function isConnected(b: ResolvedBinding): boolean {
+  return !!b.device_guid && devices.value.some((d) => d.sc_product_guid === b.device_guid);
+}
+
+// SC instance number from a token, e.g. "js2_button9" -> "2".
+function instanceOf(token: string): string {
+  return token.match(/^js(\d+)_/)?.[1] ?? "?";
+}
+
+// The SC instance (jsN) a connected device maps to, inferred from its bindings.
+function instanceForDevice(guid: string | null): string | null {
+  if (!guid) return null;
+  const b = bindings.value.find((x) => x.device_guid === guid);
+  return b ? instanceOf(b.token) : null;
+}
+
+// Number of bindings assigned to a device.
+function bindingCountFor(guid: string | null): number {
+  if (!guid) return 0;
+  return bindings.value.filter((b) => b.device_guid === guid).length;
+}
+
+// Resolve a live button/hat input to its token and bound action(s) and show it.
+async function showBinding(
+  guid: string,
+  kind: "button" | "hat",
+  index: number,
+  direction: string | null,
+) {
+  try {
+    const res = await invoke<{ token: string | null; actions: BoundAction[] }>("resolve_input", {
+      guid,
+      kind,
+      index,
+      direction,
+    });
+    currentInput.value = { device: nameFor(guid), token: res.token, actions: res.actions };
+  } catch {
+    /* ignore transient resolve errors */
+  }
+}
 
 interface Toast {
   id: number;
@@ -130,8 +194,15 @@ let unlisten: UnlistenFn[] = [];
 onMounted(async () => {
   unlisten.push(
     await listen<JoyInput>("joy-input", (e) => {
-      events.value.unshift(e.payload);
+      const p = e.payload;
+      events.value.unshift(p);
       if (events.value.length > MAX_EVENTS) events.value.pop();
+
+      if (p.kind === "button" && p.pressed) {
+        showBinding(p.guid, "button", p.index, null);
+      } else if (p.kind === "hat" && p.direction !== "centered") {
+        showBinding(p.guid, "hat", p.index, p.direction);
+      }
     }),
   );
   unlisten.push(await listen("devices-changed", () => refresh()));
@@ -139,6 +210,7 @@ onMounted(async () => {
 
   try {
     actionMaps.value = await invoke<ActionMap[]>("get_actions");
+    tokens.value = await invoke<Record<string, string>>("get_tokens");
     basePath.value = (await invoke<{ base_path: string }>("get_config")).base_path;
     bindings.value = await invoke<ResolvedBinding[]>("get_bindings");
   } catch (e) {
@@ -169,12 +241,6 @@ onUnmounted(() => {
       </label>
     </section>
 
-    <p class="hint">
-      Devices as seen by SDL. The index is SDL's enumeration order, which is
-      <em>not</em> the same as SC's <code>jsN</code> instance number — the SC
-      Product GUID is the stable link between them.
-    </p>
-
     <p v-if="error" class="error">{{ error }}</p>
     <p v-else-if="!loading && devices.length === 0" class="empty">
       No joysticks detected. Plug in a device and hit Refresh.
@@ -183,34 +249,47 @@ onUnmounted(() => {
     <ul class="devices">
       <li v-for="d in devices" :key="d.index" class="device">
         <div class="device-name">
-          <span class="idx">#{{ d.index }}</span>
           {{ d.sc_name ?? "(unknown device)" }}
+          <span v-if="instanceForDevice(d.sc_product_guid)" class="js-mapped">
+            ✓ js{{ instanceForDevice(d.sc_product_guid) }}
+          </span>
         </div>
-        <dl class="meta">
-          <div class="pair">
-            <dt>SDL GUID</dt>
-            <dd class="mono">{{ d.sdl_guid }}</dd>
-          </div>
-          <div class="pair">
-            <dt>SC Product</dt>
-            <dd class="mono">{{ d.sc_product_guid ?? "—" }}</dd>
-          </div>
-          <div class="counts">
-            <span>{{ d.num_buttons }} buttons</span>
-            <span>{{ d.num_axes }} axes</span>
-            <span>{{ d.num_hats }} hats</span>
-          </div>
-        </dl>
+        <div class="counts">
+          <span>{{ d.num_buttons }} buttons</span>
+          <span>{{ d.num_axes }} axes</span>
+          <span>{{ d.num_hats }} hats</span>
+          <span v-if="bindingCountFor(d.sc_product_guid)" class="bound-count">
+            {{ bindingCountFor(d.sc_product_guid) }} bindings
+          </span>
+        </div>
       </li>
     </ul>
+
+    <section class="current" v-if="currentInput">
+      <div class="cur-head">
+        <span class="cur-dev">{{ currentInput.device }}</span>
+        <span v-if="currentInput.token" class="js-badge">js{{ instanceOf(currentInput.token) }}</span>
+        <span class="cur-detail">{{ tokenLabel(currentInput.token) }}</span>
+      </div>
+      <div v-if="currentInput.actions.length" class="cur-actions">
+        <div v-for="(a, i) in currentInput.actions" :key="i">
+          {{ a.label ?? a.action }}
+          <span class="cur-ctx">({{ actionmapLabel(a.actionmap) }})</span>
+        </div>
+      </div>
+      <div v-else class="cur-none">— not bound —</div>
+    </section>
 
     <section class="bindings" v-if="bindings.length">
       <h2>Joystick bindings ({{ bindings.length }})</h2>
       <ul class="binding-list">
         <li v-for="(b, i) in bindings" :key="i">
-          <span class="tok mono">{{ b.token }}</span>
+          <span class="tok">{{ tokenLabel(b.token) }}</span>
           <span class="blabel">{{ b.label ?? b.action }}</span>
-          <span class="bdev">{{ b.device ?? "?" }}</span>
+          <span class="bctrl" :class="isConnected(b) ? 'ctrl-ok' : 'ctrl-warn'">
+            <template v-if="isConnected(b)">✓ {{ b.device }}</template>
+            <template v-else>⚠ {{ b.device ?? "unknown" }} — not connected</template>
+          </span>
         </li>
       </ul>
     </section>
@@ -232,7 +311,10 @@ onUnmounted(() => {
       <h2>Actions</h2>
       <div class="action-scroll">
         <div v-for="map in actionMaps" :key="map.name" class="action-group">
-          <div class="group-head">{{ map.label ?? map.name }}</div>
+          <div class="group-head">
+            {{ map.label ?? map.name }}
+            <span v-if="map.category" class="cat">{{ map.category }}</span>
+          </div>
           <ul>
             <li v-for="a in map.actions" :key="a.name">{{ actionText(a) }}</li>
           </ul>
@@ -307,6 +389,27 @@ h2 {
 .device-name {
   font-weight: 600;
   margin-bottom: 0.5rem;
+}
+
+.js-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #396cd8;
+  background: rgba(57, 108, 216, 0.12);
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+  margin-left: 0.4rem;
+}
+
+.js-mapped {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #2e7d32;
+  background: rgba(46, 125, 50, 0.14);
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+  margin-left: 0.4rem;
+  white-space: nowrap;
 }
 
 .idx {
@@ -392,6 +495,15 @@ h2 {
   margin-bottom: 0.2rem;
 }
 
+.cat {
+  font-weight: 500;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.55;
+  margin-left: 0.4rem;
+}
+
 .action-group ul {
   list-style: none;
   margin: 0;
@@ -456,6 +568,44 @@ h2 {
   background: #c0392b;
 }
 
+.current {
+  border: 1px solid #396cd8;
+  border-radius: 10px;
+  padding: 0.8rem 1rem;
+  margin: 0.5rem 0 1rem;
+  background: rgba(57, 108, 216, 0.08);
+}
+
+.cur-head {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  margin-bottom: 0.3rem;
+}
+
+.cur-dev {
+  font-weight: 600;
+}
+
+.cur-detail {
+  opacity: 0.7;
+  font-size: 0.85rem;
+}
+
+.cur-actions {
+  font-size: 1.05rem;
+}
+
+.cur-ctx {
+  opacity: 0.5;
+  font-size: 0.8rem;
+}
+
+.cur-none {
+  opacity: 0.5;
+  font-style: italic;
+}
+
 .binding-list {
   list-style: none;
   margin: 0;
@@ -483,9 +633,22 @@ h2 {
   flex: 1;
 }
 
-.bdev {
-  opacity: 0.5;
+.bctrl {
   font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.ctrl-ok {
+  color: #2e7d32;
+}
+
+.ctrl-warn {
+  color: #e67e22;
+}
+
+.bound-count {
+  color: #2e7d32;
+  font-weight: 600;
 }
 
 button {
