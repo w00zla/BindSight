@@ -266,7 +266,8 @@ fn joystick_device_from(attrs: &HashMap<String, String>) -> Option<JoystickDevic
 
 /// Split an SC `Product` string into its name and `{GUID}` parts, e.g.
 /// `" VKBsim Gladiator EVO  L    {0201231D-...}"` -> `("VKBsim Gladiator EVO  L", Some("{0201231D-...}"))`.
-fn split_product(product: &str) -> (String, Option<String>) {
+/// The same format appears in `Game.log`'s device lines (see `gamelog`).
+pub(crate) fn split_product(product: &str) -> (String, Option<String>) {
     if let Some(open) = product.rfind('{') {
         if product.trim_end().ends_with('}') {
             return (product[..open].trim().to_string(), Some(product[open..].trim().to_string()));

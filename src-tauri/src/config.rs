@@ -14,11 +14,18 @@ const DEFAULT_BASE_PATH: &str = r"C:\Program Files\Roberts Space Industries\Star
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub base_path: String,
+    /// SC Product GUIDs of connected devices the user declared invisible to SC
+    /// ("SC doesn't see this device"), e.g. a keyboard that Wine hides from the
+    /// game. Lives in the per-OS config dir, so the list is naturally
+    /// platform-specific — the same device can be visible on Windows and
+    /// hidden under Wine. Older config files without the field still load.
+    #[serde(default)]
+    pub ignored_devices: Vec<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { base_path: DEFAULT_BASE_PATH.to_string() }
+        Self { base_path: DEFAULT_BASE_PATH.to_string(), ignored_devices: Vec::new() }
     }
 }
 
@@ -55,4 +62,23 @@ pub fn actionmaps_path(base_path: &str) -> PathBuf {
         .join("Profiles")
         .join("default")
         .join("actionmaps.xml")
+}
+
+/// Path to SC's `Game.log`, written next to `Data.p4k` at each game start. SC
+/// rotates the previous one into `logbackups/`.
+pub fn game_log_path(base_path: &str) -> PathBuf {
+    PathBuf::from(base_path).join("Game.log")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_without_ignored_devices_still_loads() {
+        // Config files written before the field existed.
+        let c: Config = serde_json::from_str(r#"{"base_path":"/sc/LIVE"}"#).unwrap();
+        assert_eq!(c.base_path, "/sc/LIVE");
+        assert!(c.ignored_devices.is_empty());
+    }
 }

@@ -10,6 +10,7 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
+use crate::gamelog::{GameLogError, LogEnumeration};
 use crate::input::DeviceInfo;
 use crate::scdata::{parse_js_binding, ActionMap, UserProfile};
 
@@ -133,11 +134,13 @@ pub fn resolve_bindings(maps: &[ActionMap], profile: &UserProfile) -> Vec<Resolv
 }
 
 /// One connected joystick's SC instance status: the `jsN` SC would assign it
-/// right now (its 1-based rank in enumeration order) versus the `jsN` recorded
-/// for its GUID in the saved `<options>` block.
+/// right now (its 1-based rank in SC's enumeration order, derived per platform —
+/// see [`ClashReport::order_verified`]) versus the `jsN` recorded for its GUID
+/// in the saved `<options>` block.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SlotStatus {
-    /// `jsN` SC assigns now: 1-based rank among connected joysticks (enum order).
+    /// `jsN` SC assigns now: 1-based rank in the derived SC order. Only a best
+    /// guess when the report's `order_verified` is false.
     pub effective_instance: u32,
     /// `jsN` recorded for this device's GUID in `<options>`, or `None` if the
     /// device is not in the saved profile at all.
@@ -147,9 +150,14 @@ pub struct SlotStatus {
     /// The device is in the saved profile but under a different `jsN` than it now
     /// gets — every binding on its slot lands on the wrong stick.
     pub clash: bool,
+    /// Whether SDL sees the device right now. With a `Game.log` source a slot
+    /// can be in SC's last-start list yet unplugged since — SC will renumber on
+    /// its next start.
+    pub connected_now: bool,
 }
 
-/// A saved `<options>` joystick slot whose device is not connected right now.
+/// A saved `<options>` joystick slot whose device is not in SC's device list
+/// (not seen at the last game start, or not connected when deriving from SDL).
 /// Its bindings dangle, and every device enumerated after it shifts down a slot.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MissingSlot {
@@ -158,40 +166,175 @@ pub struct MissingSlot {
     pub sc_product_guid: Option<String>,
 }
 
-/// Result of comparing SC's saved instance→device map against the devices
-/// connected now, to surface the SC "device order" binding-switch bug.
+/// Where SC's device order came from.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OrderSource {
+    /// SC's own enumeration from `Game.log` (last game start); `timestamp` is
+    /// the raw log time of that enumeration.
+    GameLog { timestamp: Option<String> },
+    /// Derived from SDL's order by a per-platform rule — the fallback when no
+    /// usable `Game.log` exists; `log_error` says why (`None` only when no
+    /// profile is loaded and the log was never consulted).
+    SdlDerived { log_error: Option<GameLogError> },
+}
+
+impl Default for OrderSource {
+    fn default() -> Self {
+        Self::SdlDerived { log_error: None }
+    }
+}
+
+/// A device SDL sees that SC did not list at its last start: either hidden from
+/// SC by Wine, or plugged in after SC started. The log alone can't tell which.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct UnseenDevice {
+    pub name: Option<String>,
+    pub sc_product_guid: Option<String>,
+}
+
+/// Result of comparing SC's saved instance→device map against SC's actual
+/// device order, to surface the SC "device order" binding-switch bug.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct ClashReport {
-    /// Connected joysticks in SC enum order, each with effective vs stored `jsN`.
+    /// Joysticks in SC order (from `source`), each with effective vs stored `jsN`.
     pub connected: Vec<SlotStatus>,
-    /// Saved occupied slots whose device is not connected (they cause the shift).
+    /// Saved occupied slots not in SC's device list (they cause the shift).
     pub missing: Vec<MissingSlot>,
+    /// SDL-visible devices absent from SC's list. Only filled for a `Game.log`
+    /// source; informational, never a clash by itself.
+    pub unseen: Vec<UnseenDevice>,
+    pub source: OrderSource,
+    /// Whether the SC order is trustworthy: always for `Game.log`; for the SDL
+    /// fallback only where the per-platform rule is verified. When false,
+    /// `effective_instance` is a guess and no rank clash is asserted — only
+    /// `missing` contributes to `has_clash`.
+    pub order_verified: bool,
     pub has_clash: bool,
 }
 
-/// Compare the saved `<options>` order against the live device order. SC assigns
-/// `jsN` purely by start-time enumeration order and ignores name/GUID (a known
-/// SC bug, validated). So a connected device whose live rank differs from its
-/// saved `jsN` — or a saved device that is now missing — means its bindings land
-/// on the wrong stick. `devices` must be in SC/SDL enumeration order.
-pub fn analyze_clash(profile: &UserProfile, devices: &[DeviceInfo]) -> ClashReport {
-    let mut connected = Vec::with_capacity(devices.len());
+/// SC's device order derived from SDL's, plus whether that derivation is
+/// verified on this platform. SDL's enumeration order is NOT SC's — measured on
+/// the real setup (`temp/joyenumtest`, one sample each):
+///
+/// - **Windows**: SC enumerates in exactly the reverse of SDL's order (four
+///   devices, exact mirror).
+/// - **Linux/Wine**: SDL's order matched SC's for the visible sticks, but Wine
+///   also hides devices SC never sees (e.g. the Keychron K2 HE), so a plain
+///   identity mapping counts phantom slots. Until that is understood the Linux
+///   order is only a best guess, flagged unverified.
+fn sc_order_from_sdl(devices: &[DeviceInfo]) -> (Vec<&DeviceInfo>, bool) {
+    if cfg!(target_os = "windows") {
+        (devices.iter().rev().collect(), true)
+    } else {
+        (devices.iter().collect(), false)
+    }
+}
+
+/// Case-insensitive SC Product GUID equality; `None` never matches.
+fn guid_eq(a: Option<&str>, b: Option<&str>) -> bool {
+    matches!((a, b), (Some(a), Some(b)) if a.eq_ignore_ascii_case(b))
+}
+
+/// Drop devices the user declared invisible to SC ("SC doesn't see this
+/// device", e.g. a keyboard Wine hides from the game). They then count as
+/// unplugged for the analysis. Matched by SC Product GUID, case-insensitively.
+pub fn without_ignored(devices: &[DeviceInfo], ignored: &[String]) -> Vec<DeviceInfo> {
+    devices
+        .iter()
+        .filter(|d| !ignored.iter().any(|g| guid_eq(Some(g), d.sc_product_guid.as_deref())))
+        .cloned()
+        .collect()
+}
+
+/// A joystick slot in SC's order, from whichever source.
+struct OrderedSlot {
+    instance: u32,
+    name: Option<String>,
+    guid: Option<String>,
+    connected_now: bool,
+}
+
+/// Compare the saved `<options>` order against SC's actual device order. SC
+/// assigns `jsN` purely by enumeration position and ignores name/GUID
+/// (validated by the user: `pp_resortdevices` is only ever needed because of
+/// this). So a device whose SC rank differs from its saved `jsN` — or a saved
+/// device SC does not list — means its bindings land on the wrong stick.
+///
+/// `log` (SC's own enumeration from `Game.log`) is the primary order source;
+/// without it the order is derived from `devices` (SDL order) per platform.
+pub fn analyze_clash(
+    profile: &UserProfile,
+    devices: &[DeviceInfo],
+    log: Result<&LogEnumeration, GameLogError>,
+) -> ClashReport {
+    let log = match log {
+        Ok(log) => log,
+        Err(err) => {
+            let (sc_order, order_verified) = sc_order_from_sdl(devices);
+            let mut report = analyze_clash_with(profile, &sc_order, order_verified);
+            report.source = OrderSource::SdlDerived { log_error: Some(err) };
+            return report;
+        }
+    };
+
+    let slots: Vec<OrderedSlot> = log
+        .joysticks
+        .iter()
+        .map(|j| OrderedSlot {
+            instance: j.instance,
+            name: Some(j.product_name.clone()),
+            guid: j.product_guid.clone(),
+            connected_now: devices
+                .iter()
+                .any(|d| guid_eq(d.sc_product_guid.as_deref(), j.product_guid.as_deref())),
+        })
+        .collect();
+    let mut report = build_report(profile, &slots, true);
+    report.unseen = devices
+        .iter()
+        .filter(|d| !slots.iter().any(|s| guid_eq(s.guid.as_deref(), d.sc_product_guid.as_deref())))
+        .map(|d| UnseenDevice { name: d.sc_name.clone(), sc_product_guid: d.sc_product_guid.clone() })
+        .collect();
+    report.source = OrderSource::GameLog { timestamp: log.timestamp.clone() };
+    report
+}
+
+/// SDL-derived path: `sc_order` is already in SC's enumeration order, so rank
+/// is the instance and every device is connected by definition.
+fn analyze_clash_with(profile: &UserProfile, sc_order: &[&DeviceInfo], order_verified: bool) -> ClashReport {
+    let slots: Vec<OrderedSlot> = sc_order
+        .iter()
+        .enumerate()
+        .map(|(rank, d)| OrderedSlot {
+            instance: rank as u32 + 1,
+            name: d.sc_name.clone(),
+            guid: d.sc_product_guid.clone(),
+            connected_now: true,
+        })
+        .collect();
+    build_report(profile, &slots, order_verified)
+}
+
+/// The source-independent core: rank clashes are only asserted when
+/// `order_verified`; missing-slot detection is by GUID presence and holds
+/// regardless.
+fn build_report(profile: &UserProfile, slots: &[OrderedSlot], order_verified: bool) -> ClashReport {
+    let mut connected = Vec::with_capacity(slots.len());
     let mut has_clash = false;
 
-    for (rank, dev) in devices.iter().enumerate() {
-        let effective_instance = rank as u32 + 1;
-        let stored_instance = dev
-            .sc_product_guid
-            .as_deref()
-            .and_then(|g| instance_for_guid(profile, g));
-        let clash = matches!(stored_instance, Some(i) if i != effective_instance);
+    for slot in slots {
+        let stored_instance = slot.guid.as_deref().and_then(|g| instance_for_guid(profile, g));
+        // A rank mismatch only means something if the order is real.
+        let clash = order_verified && matches!(stored_instance, Some(i) if i != slot.instance);
         has_clash |= clash;
         connected.push(SlotStatus {
-            effective_instance,
+            effective_instance: slot.instance,
             stored_instance,
-            sc_product_guid: dev.sc_product_guid.clone(),
-            name: dev.sc_name.clone(),
+            sc_product_guid: slot.guid.clone(),
+            name: slot.name.clone(),
             clash,
+            connected_now: slot.connected_now,
         });
     }
 
@@ -200,12 +343,8 @@ pub fn analyze_clash(profile: &UserProfile, devices: &[DeviceInfo]) -> ClashRepo
         let Some(guid) = js.product_guid.as_deref() else {
             continue; // empty slot
         };
-        let connected_now = devices.iter().any(|d| {
-            d.sc_product_guid
-                .as_deref()
-                .is_some_and(|g| g.eq_ignore_ascii_case(guid))
-        });
-        if !connected_now {
+        let listed = slots.iter().any(|s| guid_eq(s.guid.as_deref(), Some(guid)));
+        if !listed {
             missing.push(MissingSlot {
                 stored_instance: js.instance,
                 name: js.product_name.clone(),
@@ -215,7 +354,7 @@ pub fn analyze_clash(profile: &UserProfile, devices: &[DeviceInfo]) -> ClashRepo
     }
     has_clash |= !missing.is_empty();
 
-    ClashReport { connected, missing, has_clash }
+    ClashReport { connected, missing, order_verified, has_clash, ..Default::default() }
 }
 
 /// Find the SC `jsN` instance for a device by its SC Product GUID.
@@ -250,8 +389,14 @@ mod tests {
         }
     }
 
+    // Real product GUIDs from the measured setup (temp/joyenumtest).
+    const KEYCHRON_K2HE: &str = "{0E213434-0000-0000-0000-504944564944}";
+    const KEYCHRON_LINK: &str = "{D0303434-0000-0000-0000-504944564944}";
+    const VKB_L: &str = "{0201231D-0000-0000-0000-504944564944}";
+    const VKB_R: &str = "{0200231D-0000-0000-0000-504944564944}";
+
     #[test]
-    fn detects_device_order_clash() {
+    fn detects_device_order_clash_when_order_is_verified() {
         // Saved order: js1 = Keychron, js2 = VKB L, js3 = VKB R.
         let xml = r#"<ActionMaps>
           <options type="joystick" instance="1" Product="Keychron K2 HE  {0E213434-0000-0000-0000-504944564944}"/>
@@ -260,20 +405,17 @@ mod tests {
         </ActionMaps>"#;
         let profile = parse_user_profile(xml).unwrap();
 
-        let keychron = "{0E213434-0000-0000-0000-504944564944}";
-        let vkb_l = "{0201231D-0000-0000-0000-504944564944}";
-        let vkb_r = "{0200231D-0000-0000-0000-504944564944}";
-
-        // All three connected in the saved order -> no clash.
-        let all = [dev(keychron, "Keychron"), dev(vkb_l, "VKB L"), dev(vkb_r, "VKB R")];
-        let report = analyze_clash(&profile, &all);
+        // All three connected in the saved SC order -> no clash.
+        let all = [dev(KEYCHRON_K2HE, "Keychron"), dev(VKB_L, "VKB L"), dev(VKB_R, "VKB R")];
+        let report = analyze_clash_with(&profile, &all.iter().collect::<Vec<_>>(), true);
+        assert!(report.order_verified);
         assert!(!report.has_clash);
         assert!(report.missing.is_empty());
         assert!(report.connected.iter().all(|s| !s.clash));
 
         // Keychron unplugged: the sticks behind it shift down a slot.
-        let shifted = [dev(vkb_l, "VKB L"), dev(vkb_r, "VKB R")];
-        let report = analyze_clash(&profile, &shifted);
+        let shifted = [dev(VKB_L, "VKB L"), dev(VKB_R, "VKB R")];
+        let report = analyze_clash_with(&profile, &shifted.iter().collect::<Vec<_>>(), true);
         assert!(report.has_clash);
 
         let l = &report.connected[0];
@@ -293,6 +435,178 @@ mod tests {
     }
 
     #[test]
+    fn windows_sc_order_is_reverse_of_sdl() {
+        // Measured on Windows: SDL enumerates [R, Link, K2 HE, L] while SC's
+        // fresh actionmaps.xml writes js1=L js2=K2HE js3=Link js4=R — the exact
+        // reverse. Reversing SDL's order must therefore yield zero clashes.
+        let xml = r#"<ActionMaps>
+          <options type="joystick" instance="1" Product=" VKBsim Gladiator EVO  L    {0201231D-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="2" Product="Keychron K2 HE  {0E213434-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="3" Product="Keychron Link   {D0303434-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="4" Product=" VKBsim Gladiator EVO  R    {0200231D-0000-0000-0000-504944564944}"/>
+        </ActionMaps>"#;
+        let profile = parse_user_profile(xml).unwrap();
+
+        let sdl = [dev(VKB_R, "VKB R"), dev(KEYCHRON_LINK, "Link"), dev(KEYCHRON_K2HE, "K2 HE"), dev(VKB_L, "VKB L")];
+        let sc_order: Vec<&DeviceInfo> = sdl.iter().rev().collect();
+        let report = analyze_clash_with(&profile, &sc_order, true);
+        assert!(!report.has_clash);
+        assert!(report.missing.is_empty());
+        let ranks: Vec<(u32, Option<u32>)> =
+            report.connected.iter().map(|s| (s.effective_instance, s.stored_instance)).collect();
+        assert_eq!(ranks, vec![(1, Some(1)), (2, Some(2)), (3, Some(3)), (4, Some(4))]);
+
+        // Sanity: the un-reversed SDL order would have flagged every stick.
+        let wrong = analyze_clash_with(&profile, &sdl.iter().collect::<Vec<_>>(), true);
+        assert!(wrong.connected.iter().all(|s| s.clash));
+    }
+
+    #[test]
+    fn unverified_order_asserts_no_rank_clash_but_still_reports_missing() {
+        // Linux/Wine: the derived order is a guess, so a rank mismatch must not
+        // be reported as a clash — but a saved device that is absent is a fact.
+        let xml = r#"<ActionMaps>
+          <options type="joystick" instance="1" Product="Keychron K2 HE  {0E213434-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="2" Product=" VKB L {0201231D-0000-0000-0000-504944564944}"/>
+        </ActionMaps>"#;
+        let profile = parse_user_profile(xml).unwrap();
+
+        // VKB L alone at rank 1 while saved as js2: a mismatch, but unverified.
+        let only_l = [dev(VKB_L, "VKB L")];
+        let report = analyze_clash_with(&profile, &only_l.iter().collect::<Vec<_>>(), false);
+        assert!(!report.order_verified);
+        assert!(!report.connected[0].clash);
+        assert_eq!(report.connected[0].effective_instance, 1); // guess still exposed
+        assert_eq!(report.connected[0].stored_instance, Some(2));
+        // ...yet has_clash is true purely because the Keychron slot is missing.
+        assert!(report.has_clash);
+        assert_eq!(report.missing.len(), 1);
+        assert_eq!(report.missing[0].stored_instance, 1);
+    }
+
+    /// A "Game.log not found" error, for the fallback tests.
+    fn no_log() -> GameLogError {
+        GameLogError::NotFound { path: "Game.log".into(), reason: "missing".into() }
+    }
+
+    #[test]
+    fn public_entry_applies_platform_order_model() {
+        let profile = parse_user_profile("<ActionMaps/>").unwrap();
+        let devs = [dev(VKB_R, "R"), dev(VKB_L, "L")];
+        let report = analyze_clash(&profile, &devs, Err(no_log()));
+        assert!(matches!(report.source, OrderSource::SdlDerived { .. }));
+        assert_eq!(report.order_verified, cfg!(target_os = "windows"));
+        // On Windows rank 1 is the *last* SDL device; elsewhere the first.
+        let first = report.connected[0].sc_product_guid.as_deref();
+        if cfg!(target_os = "windows") {
+            assert_eq!(first, Some(VKB_L));
+        } else {
+            assert_eq!(first, Some(VKB_R));
+        }
+    }
+
+    /// SC's Linux enumeration exactly as logged on the real setup: R = js1,
+    /// L = js2, the Keychron K2 HE absent (hidden by Wine).
+    fn linux_log() -> LogEnumeration {
+        crate::gamelog::parse(concat!(
+            "<2026-09-08T21:06:00.762Z> - Connected joystick0:  VKBsim Gladiator EVO  R    {0200231D-0000-0000-0000-504944564944}\n",
+            "<2026-09-08T21:06:00.789Z> - Connected joystick1:  VKBsim Gladiator EVO  L    {0201231D-0000-0000-0000-504944564944}\n",
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn game_log_is_the_order_source_and_is_verified_everywhere() {
+        // Saved options match the log -> no clash, on any platform.
+        let xml = r#"<ActionMaps>
+          <options type="joystick" instance="1" Product=" VKBsim Gladiator EVO  R    {0200231D-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="2" Product=" VKBsim Gladiator EVO  L    {0201231D-0000-0000-0000-504944564944}"/>
+        </ActionMaps>"#;
+        let profile = parse_user_profile(xml).unwrap();
+        // SDL sees the K2 HE too (Linux), in an order that is NOT SC's.
+        let sdl = [dev(KEYCHRON_K2HE, "K2 HE"), dev(VKB_R, "VKB R"), dev(VKB_L, "VKB L")];
+        let log = linux_log();
+        let report = analyze_clash(&profile, &sdl, Ok(&log));
+
+        assert_eq!(
+            report.source,
+            OrderSource::GameLog { timestamp: Some("2026-09-08T21:06:00.789Z".into()) }
+        );
+        assert!(report.order_verified);
+        assert!(!report.has_clash);
+        assert!(report.missing.is_empty());
+        // Order comes from the log, not from SDL: R is js1, L is js2.
+        let order: Vec<(u32, Option<&str>)> = report
+            .connected
+            .iter()
+            .map(|s| (s.effective_instance, s.sc_product_guid.as_deref()))
+            .collect();
+        assert_eq!(order, vec![(1, Some(VKB_R)), (2, Some(VKB_L))]);
+        assert!(report.connected.iter().all(|s| s.connected_now));
+        // The K2 HE is SDL-only: unseen by SC, but not a clash.
+        assert_eq!(report.unseen.len(), 1);
+        assert_eq!(report.unseen[0].sc_product_guid.as_deref(), Some(KEYCHRON_K2HE));
+    }
+
+    #[test]
+    fn game_log_detects_shift_against_stale_options() {
+        // Options written with the K2 HE at js1 (e.g. imported from Windows);
+        // SC on Linux never sees it, so R/L sit one slot lower than their binds.
+        let xml = r#"<ActionMaps>
+          <options type="joystick" instance="1" Product="Keychron K2 HE  {0E213434-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="2" Product=" VKBsim Gladiator EVO  R    {0200231D-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="3" Product=" VKBsim Gladiator EVO  L    {0201231D-0000-0000-0000-504944564944}"/>
+        </ActionMaps>"#;
+        let profile = parse_user_profile(xml).unwrap();
+        let sdl = [dev(KEYCHRON_K2HE, "K2 HE"), dev(VKB_R, "VKB R"), dev(VKB_L, "VKB L")];
+        let log = linux_log();
+        let report = analyze_clash(&profile, &sdl, Ok(&log));
+
+        assert!(report.has_clash);
+        assert!(report.connected.iter().all(|s| s.clash));
+        assert_eq!(report.connected[0].stored_instance, Some(2)); // R: binds on js2, SC says js1
+        assert_eq!(report.connected[1].stored_instance, Some(3)); // L: binds on js3, SC says js2
+        // The K2 HE slot is missing from SC's list -- the cause of the shift --
+        // even though SDL sees the device (it is also reported as unseen).
+        assert_eq!(report.missing.len(), 1);
+        assert_eq!(report.missing[0].stored_instance, 1);
+        assert_eq!(report.unseen.len(), 1);
+    }
+
+    #[test]
+    fn game_log_flags_device_unplugged_since_sc_start() {
+        let profile = parse_user_profile("<ActionMaps/>").unwrap();
+        // SC saw R and L at start; L has since been unplugged.
+        let sdl = [dev(VKB_R, "VKB R")];
+        let log = linux_log();
+        let report = analyze_clash(&profile, &sdl, Ok(&log));
+        assert_eq!(report.connected.len(), 2); // SC's view, not SDL's
+        assert!(report.connected[0].connected_now);
+        assert!(!report.connected[1].connected_now);
+        assert!(report.unseen.is_empty());
+    }
+
+    #[test]
+    fn missing_game_log_falls_back_to_sdl_and_carries_the_reason() {
+        let profile = parse_user_profile("<ActionMaps/>").unwrap();
+        let err = GameLogError::NoDeviceLines { path: "x/Game.log".into() };
+        let report = analyze_clash(&profile, &[dev(VKB_R, "R")], Err(err.clone()));
+        assert_eq!(report.source, OrderSource::SdlDerived { log_error: Some(err) });
+        assert_eq!(report.connected.len(), 1); // the SDL fallback still numbers devices
+    }
+
+    #[test]
+    fn ignored_devices_are_dropped_by_guid_case_insensitively() {
+        let devs = [dev(KEYCHRON_K2HE, "K2 HE"), dev(VKB_R, "R")];
+        let ignored = vec![KEYCHRON_K2HE.to_ascii_lowercase()];
+        let kept = without_ignored(&devs, &ignored);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].sc_product_guid.as_deref(), Some(VKB_R));
+        // Nothing ignored -> untouched.
+        assert_eq!(without_ignored(&devs, &[]).len(), 2);
+    }
+
+    #[test]
     fn unknown_device_is_not_a_clash() {
         // A connected device absent from the saved profile carries no stored jsN,
         // so it is flagged "not saved" rather than a hard clash. The saved stick
@@ -301,13 +615,8 @@ mod tests {
           <options type="joystick" instance="1" Product=" VKB L {0201231D-0000-0000-0000-504944564944}"/>
         </ActionMaps>"#;
         let profile = parse_user_profile(xml).unwrap();
-        let report = analyze_clash(
-            &profile,
-            &[
-                dev("{0201231D-0000-0000-0000-504944564944}", "VKB L"),
-                dev("{DEAD0000-0000-0000-0000-504944564944}", "New Stick"),
-            ],
-        );
+        let devs = [dev(VKB_L, "VKB L"), dev("{DEAD0000-0000-0000-0000-504944564944}", "New Stick")];
+        let report = analyze_clash_with(&profile, &devs.iter().collect::<Vec<_>>(), true);
         assert!(!report.has_clash);
         assert_eq!(report.connected[1].stored_instance, None);
         assert!(!report.connected[1].clash);

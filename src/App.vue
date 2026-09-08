@@ -56,26 +56,50 @@ interface BoundAction {
   label: string | null;
 }
 
-// One connected joystick's SC instance status: the jsN SC assigns it now
-// (enum-order rank) vs the jsN its bindings were saved under.
+// One joystick in SC's order: the jsN SC assigns it vs the jsN its bindings
+// were saved under. connected_now: SDL sees it right now (a Game.log slot can
+// be unplugged since SC started).
 interface SlotStatus {
   effective_instance: number;
   stored_instance: number | null;
   sc_product_guid: string | null;
   name: string | null;
   clash: boolean;
+  connected_now: boolean;
 }
 
-// A saved slot whose device is not connected — it dangles and shifts the rest.
+// A saved slot whose device is not in SC's list — it dangles and shifts the rest.
 interface MissingSlot {
   stored_instance: number;
   name: string;
   sc_product_guid: string | null;
 }
 
+// An SDL-visible device SC did not list at its last start: hidden by Wine, or
+// plugged in after SC started.
+interface UnseenDevice {
+  name: string | null;
+  sc_product_guid: string | null;
+}
+
+// Why Game.log could not be used, so the GUI can say exactly what is wrong.
+type GameLogError =
+  | { kind: "not_found"; path: string; reason: string }
+  | { kind: "no_device_lines"; path: string };
+
+type OrderSource =
+  | { kind: "game_log"; timestamp: string | null }
+  | { kind: "sdl_derived"; log_error: GameLogError | null };
+
 interface ClashReport {
   connected: SlotStatus[];
   missing: MissingSlot[];
+  unseen: UnseenDevice[];
+  source: OrderSource;
+  // Whether the SC order is trustworthy (always for Game.log; for the SDL
+  // fallback only where the platform rule is verified). When false,
+  // effective_instance is a guess and no rank clash is asserted.
+  order_verified: boolean;
   has_clash: boolean;
 }
 
@@ -89,6 +113,8 @@ const bindings = ref<ResolvedBinding[]>([]);
 const tokens = ref<Record<string, string>>({});
 const currentInput = ref<{ device: string; token: string | null; actions: BoundAction[] } | null>(null);
 const clash = ref<ClashReport | null>(null);
+// SC Product GUIDs the user marked "SC doesn't see this device" (persisted per OS).
+const ignoredDevices = ref<string[]>([]);
 const error = ref<string | null>(null);
 const loading = ref(false);
 
@@ -133,6 +159,45 @@ function slotFor(guid: string | null): SlotStatus | null {
   return guid ? slotByGuid.value.get(guid) ?? null : null;
 }
 
+// The Game.log source, when that is where the order came from.
+const logSource = computed(() => (clash.value?.source.kind === "game_log" ? clash.value.source : null));
+
+// GUIDs SC did not list at its last start (Game.log source only).
+const unseenGuids = computed<Set<string>>(
+  () => new Set((clash.value?.unseen ?? []).map((u) => u.sc_product_guid).filter((g): g is string => !!g)),
+);
+
+function isUnseen(guid: string | null): boolean {
+  return !!guid && unseenGuids.value.has(guid);
+}
+
+// Slots in SC's last-start list whose device is unplugged now.
+const unpluggedSinceStart = computed<SlotStatus[]>(() => (clash.value?.connected ?? []).filter((s) => !s.connected_now));
+
+// "2026-09-08T21:06:00.762Z" -> "2026-09-08 21:06:00" for display.
+function fmtTimestamp(ts: string | null): string {
+  return ts ? ts.replace("T", " ").replace(/\.\d+Z$/, "").replace(/Z$/, "") : "unknown time";
+}
+
+function isIgnored(guid: string | null): boolean {
+  return !!guid && ignoredDevices.value.some((g) => g.toLowerCase() === guid.toLowerCase());
+}
+
+// Flip "SC doesn't see this device" for a device and persist it. The clash
+// report is recomputed with the device treated as unplugged.
+async function toggleIgnored(guid: string | null) {
+  if (!guid) return;
+  const next = isIgnored(guid)
+    ? ignoredDevices.value.filter((g) => g.toLowerCase() !== guid.toLowerCase())
+    : [...ignoredDevices.value, guid];
+  try {
+    ignoredDevices.value = await invoke<string[]>("set_ignored_devices", { guids: next });
+    await loadClash();
+  } catch (e) {
+    notify(String(e), "error");
+  }
+}
+
 // Instances whose bindings still land on the right device (the device SC now
 // assigns that jsN is the one saved under it). Any other instance is misdirected.
 const healthyInstances = computed<Set<number>>(() => {
@@ -145,9 +210,11 @@ const healthyInstances = computed<Set<number>>(() => {
   return s;
 });
 
-// Is this binding's slot misdirected by the current device-order clash?
+// Is this binding's slot misdirected by the current device-order clash? Only
+// asserted when the derived SC order is verified on this platform — a guessed
+// order must not accuse bindings; missing devices still show as "not connected".
 function bindingClash(token: string): boolean {
-  if (!clash.value?.has_clash) return false;
+  if (!clash.value?.has_clash || !clash.value.order_verified) return false;
   const n = Number(instanceOf(token));
   return Number.isFinite(n) && !healthyInstances.value.has(n);
 }
@@ -270,7 +337,9 @@ onMounted(async () => {
   try {
     actionMaps.value = await invoke<ActionMap[]>("get_actions");
     tokens.value = await invoke<Record<string, string>>("get_tokens");
-    basePath.value = (await invoke<{ base_path: string }>("get_config")).base_path;
+    const cfg = await invoke<{ base_path: string; ignored_devices: string[] }>("get_config");
+    basePath.value = cfg.base_path;
+    ignoredDevices.value = cfg.ignored_devices;
     bindings.value = await invoke<ResolvedBinding[]>("get_bindings");
   } catch (e) {
     error.value = String(e);
@@ -306,18 +375,27 @@ onUnmounted(() => {
     </p>
 
     <ul class="devices">
-      <li v-for="d in devices" :key="d.index" class="device">
+      <li v-for="d in devices" :key="d.index" class="device" :class="{ 'device-ignored': isIgnored(d.sc_product_guid) }">
         <div class="device-name">
           {{ d.sc_name ?? "(unknown device)" }}
-          <span v-if="slotFor(d.sc_product_guid)?.clash" class="js-clash">
+          <span v-if="isIgnored(d.sc_product_guid)" class="js-ignored">
+            SC doesn't see this device
+          </span>
+          <span v-else-if="slotFor(d.sc_product_guid)?.clash" class="js-clash">
             ⚠ SC → js{{ slotFor(d.sc_product_guid)?.effective_instance }}
             (binds js{{ slotFor(d.sc_product_guid)?.stored_instance }})
+          </span>
+          <span v-else-if="slotFor(d.sc_product_guid) && !clash?.order_verified" class="js-unverified">
+            js{{ slotFor(d.sc_product_guid)?.effective_instance }}? · order unverified
           </span>
           <span v-else-if="slotFor(d.sc_product_guid)?.stored_instance" class="js-mapped">
             ✓ js{{ slotFor(d.sc_product_guid)?.effective_instance }}
           </span>
           <span v-else-if="slotFor(d.sc_product_guid)" class="js-new">
             js{{ slotFor(d.sc_product_guid)?.effective_instance }} · not in profile
+          </span>
+          <span v-else-if="isUnseen(d.sc_product_guid)" class="js-unseen">
+            not seen by SC at last start
           </span>
         </div>
         <div class="counts">
@@ -327,9 +405,47 @@ onUnmounted(() => {
           <span v-if="bindingCountFor(d.sc_product_guid)" class="bound-count">
             {{ bindingCountFor(d.sc_product_guid) }} bindings
           </span>
+          <button
+            class="ignore-toggle"
+            :disabled="!d.sc_product_guid"
+            :title="isIgnored(d.sc_product_guid) ? 'Count this device as visible to SC again' : 'Treat this device as one SC never sees (e.g. hidden by Wine); it then counts as unplugged'"
+            @click="toggleIgnored(d.sc_product_guid)"
+          >
+            {{ isIgnored(d.sc_product_guid) ? "Mark: SC sees it" : "Mark: SC doesn't see it" }}
+          </button>
         </div>
       </li>
     </ul>
+
+    <p v-if="logSource" class="source-note">
+      SC device order from <code>Game.log</code> (last game start,
+      {{ fmtTimestamp(logSource.timestamp) }}).
+      <template v-if="clash?.unseen.length">
+        {{ clash?.unseen.length }} device(s) not seen by SC then — hidden from SC
+        (e.g. by Wine) or plugged in later; restart SC to re-enumerate.
+      </template>
+      <template v-if="unpluggedSinceStart.length">
+        {{ unpluggedSinceStart.length }} device(s) SC saw then are unplugged now —
+        SC will renumber on its next start.
+      </template>
+    </p>
+    <p v-else-if="clash && clash.source.kind === 'sdl_derived' && devices.length" class="order-note">
+      <template v-if="clash.source.log_error?.kind === 'not_found'">
+        <code>Game.log</code> not found at <code>{{ clash.source.log_error.path }}</code>
+        ({{ clash.source.log_error.reason }}). Start SC once so it enumerates your
+        devices.
+      </template>
+      <template v-else-if="clash.source.log_error?.kind === 'no_device_lines'">
+        <code>Game.log</code> at <code>{{ clash.source.log_error.path }}</code> lists no
+        joysticks — SC saw none at its last start, or the log format changed.
+      </template>
+      <template v-else>No <code>Game.log</code> consulted (no profile loaded).</template>
+      <template v-if="!clash.order_verified">
+        Device order is derived from SDL and unverified on this platform;
+        <code>jsN</code> numbers are a best guess. Only missing devices are
+        reported as clashes here.
+      </template>
+    </p>
 
     <section v-if="clash?.has_clash" class="clash-banner">
       <div class="clash-title">⚠ Device order clash</div>
@@ -340,8 +456,8 @@ onUnmounted(() => {
       </p>
       <ul v-if="clash.missing.length" class="clash-missing">
         <li v-for="m in clash.missing" :key="m.stored_instance">
-          <strong>js{{ m.stored_instance }}</strong> — {{ m.name }} not connected
-          (slots after it shift down)
+          <strong>js{{ m.stored_instance }}</strong> — {{ m.name }} not in SC's
+          device list (slots after it shift down)
         </li>
       </ul>
     </section>
@@ -517,6 +633,75 @@ h2 {
   padding: 0.05rem 0.35rem;
   margin-left: 0.4rem;
   white-space: nowrap;
+}
+
+.js-unverified {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #b9770e;
+  background: rgba(230, 126, 34, 0.14);
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+  margin-left: 0.4rem;
+  white-space: nowrap;
+}
+
+.order-note {
+  margin: 0.75rem 0 0;
+  font-size: 0.85rem;
+  color: #b9770e;
+}
+
+.order-note code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.source-note {
+  margin: 0.75rem 0 0;
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+
+.source-note code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.js-unseen {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #7f8c8d;
+  background: rgba(127, 140, 141, 0.16);
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+  margin-left: 0.4rem;
+  white-space: nowrap;
+}
+
+.js-ignored {
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-style: italic;
+  color: #7f8c8d;
+  background: rgba(127, 140, 141, 0.16);
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+  margin-left: 0.4rem;
+  white-space: nowrap;
+}
+
+.device-ignored {
+  opacity: 0.55;
+}
+
+.ignore-toggle {
+  margin-left: auto;
+  padding: 0.15em 0.6em;
+  font-size: 0.75rem;
+  font-weight: 500;
+  box-shadow: none;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  background: transparent;
+  color: inherit;
 }
 
 .clash-banner {

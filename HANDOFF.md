@@ -25,9 +25,7 @@ tile, bindings list, actions list (with category tag), live event log, toasts.
 ## Verified facts (this hardware / Wine)
 
 - SDL button `i` == SC `button(i+1)` (the +1 offset holds for buttons).
-- SDL enumeration order == SC `jsN` order (SC = SDL = Wine = DirectInput, all
-  validated on the real setup). GUID stays the device *identity* key, but the
-  enumeration *order* is a reliable signal too.
+- SDL enumeration order != SC `jsN` order — GUID is the only reliable link.
 - SC device name == HID product string (same on Win10 and Wine).
 - The live event pump works on a background thread on Linux.
 

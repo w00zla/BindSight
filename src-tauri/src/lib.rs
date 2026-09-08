@@ -6,6 +6,7 @@ use tauri::{AppHandle, Manager, State};
 
 pub mod bindings;
 pub mod config;
+pub mod gamelog;
 pub mod guid;
 pub mod input;
 pub mod scdata;
@@ -68,8 +69,8 @@ fn get_bindings(
     }
 }
 
-/// Compare SC's saved device order against the connected devices to detect the
-/// `jsN` switch clash (SC assigns `jsN` by start-time device order, ignoring
+/// Compare SC's saved device order against SC's actual device order to detect
+/// the `jsN` switch clash (SC assigns `jsN` by start-time device order, ignoring
 /// name/GUID). Empty when no profile is loaded.
 #[tauri::command]
 fn get_clash_report(
@@ -81,7 +82,28 @@ fn get_clash_report(
         return bindings::ClashReport::default();
     };
     let devices = devices.lock().map(|d| d.clone()).unwrap_or_default();
-    bindings::analyze_clash(profile, &devices)
+    // Devices the user declared invisible to SC count as unplugged.
+    let devices = bindings::without_ignored(&devices, &data.config.ignored_devices);
+    // SC's own enumeration from the last game start is the primary order
+    // source; read fresh each time so a game restart is picked up.
+    let log = gamelog::read(&config::game_log_path(&data.config.base_path));
+    bindings::analyze_clash(profile, &devices, log.as_ref().map_err(Clone::clone))
+}
+
+/// Persist which connected devices the user declared invisible to SC (by SC
+/// Product GUID). Returns the stored list.
+#[tauri::command]
+fn set_ignored_devices(
+    guids: Vec<String>,
+    app: AppHandle,
+    data: State<Mutex<AppData>>,
+) -> Vec<String> {
+    let mut data = data.lock().unwrap();
+    data.config.ignored_devices = guids;
+    if let Err(e) = config::save(&app, &data.config) {
+        eprintln!("bindsight: failed to save config: {e}");
+    }
+    data.config.ignored_devices.clone()
 }
 
 /// Set the SC base path: persist it, reload actionmaps.xml, and report the
@@ -93,7 +115,9 @@ fn set_base_path(
     actions: State<Vec<scdata::ActionMap>>,
     data: State<Mutex<AppData>>,
 ) -> LoadStatus {
-    let config = config::Config { base_path: path.clone() };
+    // Keep the rest of the config (the ignore list) when only the path changes.
+    let ignored_devices = data.lock().unwrap().config.ignored_devices.clone();
+    let config = config::Config { base_path: path.clone(), ignored_devices };
     if let Err(e) = config::save(&app, &config) {
         eprintln!("bindsight: failed to save config: {e}");
     }
@@ -163,8 +187,8 @@ fn load_profile(base_path: &str, actions: &[scdata::ActionMap]) -> (Option<scdat
 
     let xml = match std::fs::read_to_string(&am_path) {
         Ok(xml) => xml,
-        Err(_) => {
-            status.error = Some("Required game files not found".to_string());
+        Err(e) => {
+            status.error = Some(format!("actionmaps.xml not found: {} ({e})", status.actionmaps_path));
             return (None, status);
         }
     };
@@ -175,7 +199,7 @@ fn load_profile(base_path: &str, actions: &[scdata::ActionMap]) -> (Option<scdat
             (Some(profile), status)
         }
         Err(e) => {
-            status.error = Some(e);
+            status.error = Some(format!("actionmaps.xml could not be parsed: {e}"));
             (None, status)
         }
     }
@@ -249,6 +273,7 @@ pub fn run() {
             get_config,
             get_bindings,
             get_clash_report,
+            set_ignored_devices,
             set_base_path,
             resolve_input
         ])
