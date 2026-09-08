@@ -81,6 +81,8 @@ SC runs under Wine/Proton with its **own dinput stack** (maps evdev→DirectInpu
 
 → **Do not blindly assume `sdl_button i == js_button(i+1)`.** Empirically checkable in 30s; the learn flow makes the verification a feature. On Windows (both DirectInput) it matches 1:1. The `pp_` console commands are engine-internal → they work the same under Wine.
 
+**Confirmed (Wine + VKB Gladiator EVO):** SC `js_button1` == SDL `button 0` — the `+1` offset holds and is consistent for buttons under Wine, so the default `sdl i → js(i+1)` mapping is verified rather than guessed. Axes (HID-usage slotting) and hats (POV value vs. exposed-as-buttons) are still to be cross-checked. The learn-flow verification stays in as a safety net for firmware that steps out of line.
+
 ---
 
 ## Instance remap feature (wanted, later)
