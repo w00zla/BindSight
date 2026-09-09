@@ -33,7 +33,9 @@ See `HANDOFF.md` for the current working state.
   `imagemap.ts` the shared image-map types/helpers (incl. token <-> input
   key), `keyboard.ts` the webview keyboard capture (`KeyboardEvent.code` ->
   SC key name, emits `key` inputs into the same handler as `joy-input`),
-  `types.ts` all device/input/binding types. **Tables** (bindings deck, Compare) are built
+  `devices.ts` the shared `deviceName` / `deviceKey` helpers (pads show
+  SDL's controller name; remembered GUI state is keyed by hardware id, never
+  by SDL's index), `types.ts` all device/input/binding types. **Tables** (bindings deck, Compare) are built
   on `tableColumns.ts` (`useTableColumns`: sort state, widths, grid
   template, localStorage persistence) + `components/ColumnHead.vue`
   (sortable headers, resize grips): the last column is the `1fr` filler,
@@ -80,8 +82,10 @@ See `HANDOFF.md` for the current working state.
   + token labels). Runs the StarBreaker sidecar (`p4k extract --regex` for
   `defaultProfile.xml`, `keybinding_localization.xml`, `global.ini`, ~1 s),
   converts via `scdata::parse_*` (unlabeled actions dropped) and caches the
-  JSON under `<app_cache_dir>/<label>/` (no format-version layer: if the
-  JSON shape ever changes, users delete the cache). Loaded in a background
+  JSON under `<app_cache_dir>/<label>/`; `scdata.json` carries a `format`
+  stamp (`CACHE_FORMAT`), bump it whenever the cached shape changes meaning
+  and the cache is re-extracted once instead of loading with silently
+  missing fields. Loaded in a background
   thread at start and on environment change (`lib.rs::spawn_sc_load`; with
   an active `global.ini` override the cache is bypassed and the labels come
   from that file): steps via `scdata-progress` (`LOAD_STEPS` = 4), result
@@ -172,7 +176,9 @@ See `HANDOFF.md` for the current working state.
   Keyboard DE, Xbox controller, PlayStation controller — generated, never
   hand-edited: `scripts/gen-imagemaps.py` holds the geometry once and writes
   both `image.png` and `imagemap.json` (fixed ids `4b7a2c1e-…-000000000001`
-  to `…0004`).
+  to `…0004`). `App.vue`'s `DEFAULT_MAPS` picks the US keyboard and the Xbox
+  pad by default (PlayStation for Sony's vendor id); without a match the
+  first map wins.
 
 ## Commands / how to work
 

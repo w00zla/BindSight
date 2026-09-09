@@ -7,6 +7,9 @@ temp
 # StarBreaker sidecar binaries: fetched by scripts/fetch-starbreaker.sh, not committed
 src-tauri/binaries/
 
+# Python bytecode from scripts/gen-imagemaps.py
+__pycache__/
+
 # --- Tauri/Vite scaffold ---
 # Logs
 logs

@@ -21,6 +21,19 @@ const P4K_REGEX: &str = r"^Data[\\/]Libs[\\/]Config[\\/](defaultProfile|keybindi
 const ACTIONS_FILE: &str = "scdata.json";
 const TOKENS_FILE: &str = "tokens.json";
 
+/// Shape of the cached JSON. Bump it whenever `ActionMap` / `Action` or the
+/// token map change meaning, so an older cache is re-extracted instead of
+/// loading with silently missing fields (serde fills a missing `Option`
+/// with `None`). 2 = keyboard / gamepad defaults and `kb1_` / `gp1_` labels.
+const CACHE_FORMAT: u32 = 2;
+
+/// `scdata.json`: the action master list behind its format stamp.
+#[derive(Serialize, Deserialize)]
+struct CachedActions {
+    format: u32,
+    actionmaps: Vec<ActionMap>,
+}
+
 /// Display labels for input tokens (e.g. `"button9"` -> `"Button 9"`).
 pub type TokenLabels = HashMap<String, String>;
 
@@ -155,13 +168,17 @@ fn cache_dir(cache_root: &Path, version: &ScVersion) -> PathBuf {
 fn read_cache(dir: &Path) -> Option<ScData> {
     let actions = std::fs::read_to_string(dir.join(ACTIONS_FILE)).ok()?;
     let tokens = std::fs::read_to_string(dir.join(TOKENS_FILE)).ok()?;
-    let actions = match serde_json::from_str(&actions) {
+    let actions: CachedActions = match serde_json::from_str(&actions) {
         Ok(a) => a,
         Err(e) => {
             warn!("sc data cache unreadable, rebuilding: {}: {e}", dir.display());
             return None;
         }
     };
+    if actions.format != CACHE_FORMAT {
+        info!("sc data cache format {} != {CACHE_FORMAT}, rebuilding: {}", actions.format, dir.display());
+        return None;
+    }
     let tokens = match serde_json::from_str(&tokens) {
         Ok(t) => t,
         Err(e) => {
@@ -169,12 +186,13 @@ fn read_cache(dir: &Path) -> Option<ScData> {
             return None;
         }
     };
-    Some(ScData { actions, tokens })
+    Some(ScData { actions: actions.actionmaps, tokens })
 }
 
 fn write_cache(dir: &Path, data: &ScData) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let actions = serde_json::to_string(&data.actions).map_err(|e| e.to_string())?;
+    let cached = CachedActions { format: CACHE_FORMAT, actionmaps: data.actions.clone() };
+    let actions = serde_json::to_string(&cached).map_err(|e| e.to_string())?;
     // Sorted for stable output.
     let sorted: BTreeMap<_, _> = data.tokens.iter().collect();
     let tokens = serde_json::to_string(&sorted).map_err(|e| e.to_string())?;
@@ -396,6 +414,21 @@ mod tests {
         assert_eq!(back.actions.len(), 1);
         assert_eq!(back.actions[0].name, "spaceship_general");
         assert_eq!(back.tokens["button1"], "Button 1");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn cache_with_another_format_or_shape_is_rebuilt() {
+        let dir = std::env::temp_dir().join(format!("bindsight-scinstall-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(TOKENS_FILE), b"{}").unwrap();
+        // Format 1 wrote the bare array.
+        std::fs::write(dir.join(ACTIONS_FILE), b"[]").unwrap();
+        assert!(read_cache(&dir).is_none());
+        std::fs::write(dir.join(ACTIONS_FILE), format!(r#"{{"format":{},"actionmaps":[]}}"#, CACHE_FORMAT + 1)).unwrap();
+        assert!(read_cache(&dir).is_none());
+        std::fs::write(dir.join(ACTIONS_FILE), format!(r#"{{"format":{CACHE_FORMAT},"actionmaps":[]}}"#)).unwrap();
+        assert!(read_cache(&dir).is_some());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

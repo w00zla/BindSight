@@ -11,9 +11,11 @@ import LiveCard from "./components/LiveCard.vue";
 import BindingsDeck from "./components/BindingsDeck.vue";
 import ToolsView from "./components/ToolsView.vue";
 import Toasts from "./components/Toasts.vue";
+import { deviceKey, deviceName } from "./devices";
 import Splitter from "./components/Splitter.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
 import type {
+  DeviceKind,
   ActionMap,
   BoundAction,
   ClashReport,
@@ -42,10 +44,20 @@ import { KEYBOARD_GUID, startKeyboardCapture } from "./keyboard";
 
 const MAX_EVENTS = 500;
 
-// Sony vendor id: a PlayStation pad defaults to the PlayStation image-map.
-const SONY_VENDOR = 0x054c;
-const PAD_MAP_XBOX = "4b7a2c1e-0001-4000-8000-000000000003";
+// Bundled image-map picked by default per device kind, when the user has not
+// chosen one: the US keyboard and the Xbox controller; a Sony pad gets the
+// PlayStation map. Anything else falls back to the first matching map.
+const DEFAULT_MAPS: Partial<Record<DeviceKind, string>> = {
+  keyboard: "4b7a2c1e-0001-4000-8000-000000000001",
+  gamepad: "4b7a2c1e-0001-4000-8000-000000000003",
+};
 const PAD_MAP_PS = "4b7a2c1e-0001-4000-8000-000000000004";
+const SONY_VENDOR = 0x054c;
+
+function defaultMapId(d: DeviceInfo): string | undefined {
+  if (d.kind === "gamepad" && d.sdl_vendor === SONY_VENDOR) return PAD_MAP_PS;
+  return DEFAULT_MAPS[d.kind];
+}
 
 const devices = ref<DeviceInfo[]>([]);
 const events = ref<LoggedInput[]>([]);
@@ -100,10 +112,8 @@ function chosenMapId(d: DeviceInfo | null | undefined): string | null {
   const pick = hardwareId ? mapChoices.value[hardwareId.toLowerCase()] : undefined;
   const chosen = list.find((s) => s.id === pick);
   if (chosen) return chosen.id;
-  if (d?.kind === "gamepad" && list.some((s) => s.id === PAD_MAP_XBOX) && list.some((s) => s.id === PAD_MAP_PS)) {
-    return d.sdl_vendor === SONY_VENDOR ? PAD_MAP_PS : PAD_MAP_XBOX;
-  }
-  return list[0].id;
+  const fallback = d ? defaultMapId(d) : undefined;
+  return list.find((s) => s.id === fallback)?.id ?? list[0].id;
 }
 
 function imgSrc(id: string, file: string): string {
@@ -114,11 +124,12 @@ function imgSrc(id: string, file: string): string {
 // bindings and no tile, and the user can hide any device by hand.
 function onStage(d: DeviceInfo): boolean {
   if (d.kind === "gamepad" && d.gamepad_slot === null) return false;
+  if (isIgnored(d.sc_product_guid)) return false;
   return !isStageHidden(d);
 }
 
 const mapViews = computed<ImageMapView[]>(() =>
-  devices.value.flatMap((d) => {
+  orderedDevices.value.flatMap((d) => {
     if (!onStage(d)) return [];
     const id = chosenMapId(d);
     const p = id ? loadedMaps.value[id] : null;
@@ -195,8 +206,8 @@ function resetLive() {
 
 // Connected, not excluded devices without an image-map (placeholder tiles).
 const stagePlaceholders = computed<DeviceInfo[]>(() =>
-  devices.value.filter(
-    (d) => onStage(d) && !isIgnored(d.sc_product_guid) && !mapViews.value.some((v) => v.device.index === d.index),
+  orderedDevices.value.filter(
+    (d) => onStage(d) && !mapViews.value.some((v) => v.device.index === d.index),
   ),
 );
 
@@ -326,7 +337,7 @@ function resolvePin(b: ResolvedBinding): { guid: string; key: string } | { reaso
   const key = inputKeyForToken(b.token, d);
   if (!key) return { reason: `${tokenLabel(b.token)}: no SDL axis for it (${d.axes_error ?? "not in HID descriptor"})` };
   const has = inMap(d.sdl_guid, key);
-  if (has === null) return { reason: `${d.sc_name ?? d.sdl_name} has no image-map` };
+  if (has === null) return { reason: `${deviceName(d)} has no image-map` };
   if (!has) return { reason: `No area for ${tokenLabel(b.token)}` };
   return { guid: d.sdl_guid, key };
 }
@@ -423,14 +434,7 @@ function bindingCountFor(d: DeviceInfo): number {
   if (d.kind === "gamepad") {
     return d.gamepad_slot === null ? 0 : bindings.value.filter((b) => b.device_kind === "gamepad").length;
   }
-  if (!d.sc_product_guid) return 0;
-  return bindings.value.filter((b) => b.device_guid === d.sc_product_guid).length;
-}
-
-// The device tile's name: pads carry SDL's controller name.
-function deviceName(d: DeviceInfo): string {
-  if (d.kind === "gamepad") return d.controller_name ?? d.sc_name ?? d.sdl_name;
-  return d.sc_name ?? d.sdl_name;
+  return bindings.value.filter((b) => sameHardware(b.device_guid, d.sc_product_guid)).length;
 }
 
 // SC did not list this device at its last start. The keyboard is always there;
@@ -466,6 +470,19 @@ function isUnseen(guid: string | null): boolean {
 function isIgnored(guid: string | null): boolean {
   return !!guid && ignoredDevices.value.some((g) => g.toLowerCase() === guid.toLowerCase());
 }
+
+// Display order everywhere a device list is shown: the keyboard, the slotted
+// pad, the joysticks SC sees, then everything SC does not (unseen, excluded,
+// pads without a slot) — SDL order within a group.
+function deviceRank(d: DeviceInfo): number {
+  if (d.kind === "keyboard") return 0;
+  if (d.kind === "gamepad" && d.gamepad_slot === null) return 3;
+  if (deviceUnseen(d) || isIgnored(d.sc_product_guid)) return 3;
+  return d.kind === "gamepad" ? 1 : 2;
+}
+const orderedDevices = computed<DeviceInfo[]>(() =>
+  [...devices.value].sort((a, b) => deviceRank(a) - deviceRank(b) || a.index - b.index),
+);
 // Settings dialog Save: apply the exclusions and the environments; the
 // backend reloads when the active environment changed.
 async function applySettings(s: { environments: Record<string, Environment>; ignored: string[] }) {
@@ -858,7 +875,7 @@ onUnmounted(() => {
     <SettingsDialog
       v-if="showSettings"
       :environments="environments"
-      :devices="devices"
+      :devices="orderedDevices"
       :ignored="ignoredDevices"
       @close="showSettings = false"
       @save="applySettings"
@@ -871,7 +888,7 @@ onUnmounted(() => {
         <div class="panel-title">Connected devices</div>
         <div class="rail">
         <DeviceTile
-          v-for="d in devices"
+          v-for="d in orderedDevices"
           :key="d.index"
           :device="d"
           :slot="slotFor(d.sc_product_guid)"
@@ -895,6 +912,7 @@ onUnmounted(() => {
 
       <ImageStage
         :views="mapViews"
+        :sequence="orderedDevices.map(deviceKey)"
         :placeholders="stagePlaceholders"
         :height="stageHeight"
         :imgSrc="imgSrc"
@@ -939,7 +957,7 @@ onUnmounted(() => {
     <ImageMapEditor
       v-else-if="mode === 'devices'"
       ref="editor"
-      :devices="devices"
+      :devices="orderedDevices"
       :events="events"
       :keyInput="keyInput"
       @notify="notify"

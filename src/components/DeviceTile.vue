@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import Icon from "./Icon.vue";
 import type { DeviceInfo, SlotStatus } from "../types";
+import { deviceName } from "../devices";
 
 const props = defineProps<{
   device: DeviceInfo;
@@ -33,10 +34,7 @@ const kindChip = computed(() => {
   return props.device.kind === "gamepad" && !noSlot.value ? "gp1" : null;
 });
 
-const name = computed(() => {
-  const d = props.device;
-  return d.kind === "gamepad" ? (d.controller_name ?? d.sc_name ?? d.sdl_name) : (d.sc_name ?? d.sdl_name);
-});
+const name = computed(() => deviceName(props.device));
 
 const state = computed(() => {
   const d = props.device;

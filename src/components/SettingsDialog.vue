@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
 import { ENVIRONMENTS, type DeviceInfo, type Environment } from "../types";
+import { deviceName } from "../devices";
 
 const props = defineProps<{ environments: Record<string, Environment>; devices: DeviceInfo[]; ignored: string[] }>();
 const emit = defineEmits<{
@@ -30,7 +31,7 @@ const addable = computed(() => withGuid.value.filter((d) => !isExcluded(d.sc_pro
 
 function nameFor(guid: string): string {
   const d = withGuid.value.find((x) => x.sc_product_guid.toLowerCase() === guid.toLowerCase());
-  return d ? (d.sc_name ?? d.sdl_name) : guid;
+  return d ? deviceName(d) : guid;
 }
 
 function remove(guid: string) {
@@ -115,7 +116,7 @@ async function browseIni(slug: string) {
             </span>
             <select v-if="addable.length" v-model="addPick" class="add" @change="add">
               <option value="" disabled>Add device</option>
-              <option v-for="d in addable" :key="d.index" :value="d.sc_product_guid">{{ d.sc_name ?? d.sdl_name }}</option>
+              <option v-for="d in addable" :key="d.index" :value="d.sc_product_guid">{{ deviceName(d) }}</option>
             </select>
           </div>
         </section>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import DeviceImage from "./DeviceImage.vue";
+import { deviceKey, deviceName } from "../devices";
 import Icon from "./Icon.vue";
 import Splitter from "./Splitter.vue";
 import type { DeviceInfo, ImageMapView } from "../types";
@@ -10,6 +11,9 @@ const props = defineProps<{
   views: ImageMapView[];
   // Connected devices without an image-map: shown as placeholder tiles.
   placeholders: DeviceInfo[];
+  // Device keys in the app's display order — the tile order until the user
+  // swaps tiles by hand.
+  sequence: string[];
   // Stage height in px (the parent owns the vertical splitter).
   height: number;
   imgSrc: (id: string, file: string) => string;
@@ -19,13 +23,13 @@ const emit = defineEmits<{ choose: [hardwareId: string | null, id: string] }>();
 
 type Tile = { device: DeviceInfo; view: ImageMapView | null };
 
-// Tile order: user-swapped device indices first (remembered), the rest in
-// SDL order.
+// Tile order: user-swapped device keys first (remembered), the rest in the
+// app's display order.
 const ORDER_KEY = "bindsight.stage.order";
-const order = ref<number[]>([]);
+const order = ref<string[]>([]);
 try {
   const parsed = JSON.parse(localStorage.getItem(ORDER_KEY) ?? "[]") as unknown;
-  if (Array.isArray(parsed) && parsed.every((x) => typeof x === "number")) order.value = parsed;
+  if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) order.value = parsed;
 } catch {
   /* SDL order */
 }
@@ -36,14 +40,15 @@ const tiles = computed<Tile[]>(() => {
     ...props.placeholders.map((d) => ({ device: d, view: null })),
   ];
   const rank = (t: Tile) => {
-    const i = order.value.indexOf(t.device.index);
-    return i === -1 ? order.value.length + t.device.index : i;
+    const key = deviceKey(t.device);
+    const i = order.value.indexOf(key);
+    return i === -1 ? order.value.length + props.sequence.indexOf(key) : i;
   };
   return all.sort((a, b) => rank(a) - rank(b));
 });
 
 function swap(i: number) {
-  const ids = tiles.value.map((t) => t.device.index);
+  const ids = tiles.value.map((t) => deviceKey(t.device));
   [ids[i], ids[i + 1]] = [ids[i + 1], ids[i]];
   order.value = ids;
   try {
@@ -137,7 +142,7 @@ function onReset(i: number) {
             </select>
             <span v-else class="name">{{ t.view.map.name }}</span>
           </template>
-          <span v-else class="name">{{ t.device.sc_name ?? t.device.sdl_name }}</span>
+          <span v-else class="name">{{ deviceName(t.device) }}</span>
           <button v-if="i > 0" type="button" class="move" title="Move left" @click="swap(i - 1)">
             <Icon name="arrow-left" :size="14" />
           </button>

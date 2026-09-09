@@ -14,6 +14,7 @@ import type { VueKonvaRef } from "vue-konva";
 import Icon, { type IconName } from "./Icon.vue";
 import ConfirmDialog, { type ConfirmButton } from "./ConfirmDialog.vue";
 import type { DeviceInfo, JoyInput, LoggedInput } from "../types";
+import { deviceName } from "../devices";
 import {
   SYMBOL_PATHS,
   symbolPx,
@@ -91,12 +92,8 @@ function readPaint() {
 const selectedGuid = ref("");
 const device = computed(() => props.devices.find((d) => d.sdl_guid === selectedGuid.value) ?? null);
 
-// Pads carry SDL's controller name, everything else SC's.
-function displayName(d: DeviceInfo): string {
-  return d.kind === "gamepad" ? (d.controller_name ?? d.sc_name ?? d.sdl_name) : (d.sc_name ?? d.sdl_name);
-}
 
-const deviceName = computed(() => (device.value ? displayName(device.value) : "—"));
+const selectedName = computed(() => (device.value ? deviceName(device.value) : "—"));
 
 const summaries = ref<ImageMapSummary[]>([]);
 
@@ -363,7 +360,7 @@ async function newMap() {
     const imagePath = await pickImage();
     if (!imagePath) return;
     const m = await invoke<ImageMap>("create_imagemap", {
-      name: displayName(d),
+      name: deviceName(d),
       hardwareId: d.hardware_id,
       hardwareName: d.sc_name ?? "",
       imagePath,
@@ -514,7 +511,6 @@ watch(
 onMounted(async () => {
   readPaint();
   unlisten.push(await listen<JoyInput>("joy-input", (e) => takeInput(e.payload)));
-  window.addEventListener("keydown", onKeyDown);
   await loadSummaries();
   if (!openId.value) await openFirst();
 });
@@ -522,23 +518,9 @@ onMounted(async () => {
 onUnmounted(() => {
   unlisten.forEach((fn) => fn());
   unlisten = [];
-  window.removeEventListener("keydown", onKeyDown);
   ro?.disconnect();
   ro = null;
 });
-
-function onKeyDown(e: KeyboardEvent) {
-  const t = e.target as HTMLElement | null;
-  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-  if (e.key === "Escape") {
-    cancelDraw();
-    selectedId.value = null;
-  } else if (e.key === "Enter") {
-    commitPolygon();
-  } else if (e.key === "Delete" || e.key === "Backspace") {
-    deleteSelected();
-  }
-}
 
 // --- areas -----------------------------------------------------------------
 
@@ -939,7 +921,7 @@ function shortGuid(guid: string): string {
 
 function nameOfGuid(guid: string): string {
   const d = props.devices.find((dev) => dev.sdl_guid === guid);
-  return d ? displayName(d) : guid;
+  return d ? deviceName(d) : guid;
 }
 
 function deviceOfGuid(guid: string): DeviceInfo | undefined {
@@ -1045,7 +1027,7 @@ function eventLine(ev: LoggedInput): string {
 function logText(): string {
   const lines = [`BindSight device log ${new Date().toISOString()}`, "", "Devices"];
   for (const d of props.devices) {
-    lines.push(`#${d.index} ${displayName(d)}`);
+    lines.push(`#${d.index} ${deviceName(d)}`);
     for (const [k, v] of deviceRows(d)) lines.push(`    ${k.padEnd(15)} ${v}`);
   }
   if (!props.devices.length) lines.push("    none");
@@ -1105,7 +1087,7 @@ function deviceLine(d: DeviceInfo): string {
               :class="{ on: d.sdl_guid === selectedGuid, dim: !d.hardware_id }"
               @click="selectDevice(d)"
             >
-              <div class="dev-name">{{ displayName(d) }}</div>
+              <div class="dev-name">{{ deviceName(d) }}</div>
               <div class="dev-line">{{ deviceLine(d) }}</div>
             </div>
 
@@ -1182,7 +1164,7 @@ function deviceLine(d: DeviceInfo): string {
           <div v-for="d in props.devices" :key="d.index" class="log-dev">
             <div class="log-line">
               <span class="log-key">#{{ d.index }}</span>
-              <span class="log-name">{{ displayName(d) }}</span>
+              <span class="log-name">{{ deviceName(d) }}</span>
             </div>
             <div v-for="[k, v] in deviceRows(d)" :key="k" class="log-kv">
               <span class="log-dim">{{ k }}</span>
@@ -1360,7 +1342,7 @@ function deviceLine(d: DeviceInfo): string {
           <Icon name="bolt" :size="22" />
           <span class="mono key" :class="{ idle: !currentKey }">{{ currentKey ?? "—" }}</span>
         </div>
-        <div class="ic-sub">{{ deviceName }} · {{ currentCountText }}</div>
+        <div class="ic-sub">{{ selectedName }} · {{ currentCountText }}</div>
         <div class="ic-btns">
           <button
             type="button"
