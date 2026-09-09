@@ -25,8 +25,9 @@ export default defineConfig(() => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching `src-tauri`, and the git worktrees
+      //    under `.claude/` (parallel sessions build their own `dist/` there)
+      ignored: ["**/src-tauri/**", "**/.claude/**"],
     },
   },
 }));

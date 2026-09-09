@@ -1,9 +1,8 @@
 # local temporary files for analysing etc
 temp
 
-# don't include 3rd party stuff due to updates and license
-data/starbreaker
-data/extracted
+# StarBreaker sidecar binaries: fetched by scripts/fetch-starbreaker.sh, not committed
+src-tauri/binaries/
 
 # --- Tauri/Vite scaffold ---
 # Logs

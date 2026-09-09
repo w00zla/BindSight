@@ -20,6 +20,7 @@ import type {
   ActionMap,
   ResolvedBinding,
   LoadStatus,
+  ScStatus,
   BoundAction,
   SlotStatus,
   ClashReport,
@@ -37,6 +38,10 @@ const bindings = ref<ResolvedBinding[]>([]);
 const tokens = ref<Record<string, string>>({});
 const currentInput = ref<CurrentInput | null>(null);
 const clash = ref<ClashReport | null>(null);
+// The install's version and game-data load state (updated via `scdata-changed`).
+const scStatus = ref<ScStatus | null>(null);
+// Set while a base-path change is being loaded, so its result gets a toast.
+let awaitingPathLoad = false;
 // SC Product GUIDs the user marked "SC doesn't see this device" (persisted per OS).
 const ignoredDevices = ref<string[]>([]);
 const error = ref<string | null>(null);
@@ -507,18 +512,34 @@ function notify(message: string, type: "ok" | "error" = "ok") {
   }, TOAST_MS);
 }
 
+// Persist the base path; the backend reloads the install's game data and
+// profile in the background and reports via `scdata-changed`.
 async function saveBasePath() {
   try {
-    const s = await invoke<LoadStatus>("set_base_path", { path: basePath.value });
-    bindings.value = s.bindings;
-    await loadClash();
-    if (s.loaded) {
-      notify(`Loaded ${s.bindings.length} joystick binding(s)`, "ok");
-    } else {
-      notify(s.error ?? "Load failed", "error");
-    }
+    awaitingPathLoad = true;
+    await invoke("set_base_path", { path: basePath.value });
+    scStatus.value = await invoke<ScStatus>("get_sc_status");
   } catch (e) {
+    awaitingPathLoad = false;
     notify(String(e), "error");
+  }
+}
+
+// The install's game data (re)loaded: pick up actions, tokens, bindings.
+async function onScDataChanged(s: LoadStatus) {
+  scStatus.value = s.sc;
+  actionMaps.value = await invoke<ActionMap[]>("get_actions");
+  tokens.value = await invoke<Record<string, string>>("get_tokens");
+  bindings.value = s.bindings;
+  await loadClash();
+  if (!awaitingPathLoad) return;
+  awaitingPathLoad = false;
+  if (s.sc.error) {
+    notify(s.sc.error, "error");
+  } else if (s.loaded) {
+    notify(`Loaded ${s.bindings.length} joystick binding(s)`, "ok");
+  } else {
+    notify(s.error ?? "Load failed", "error");
   }
 }
 
@@ -584,9 +605,18 @@ onMounted(async () => {
       await reloadMaps();
     }),
   );
+  // Registered before the initial fetch below, so a load finishing in
+  // between is not missed.
+  unlisten.push(await listen<LoadStatus>("scdata-changed", (e) => onScDataChanged(e.payload)));
+  unlisten.push(
+    await listen<ScStatus>("scdata-progress", (e) => {
+      scStatus.value = e.payload;
+    }),
+  );
   await refresh();
 
   try {
+    scStatus.value = await invoke<ScStatus>("get_sc_status");
     actionMaps.value = await invoke<ActionMap[]>("get_actions");
     tokens.value = await invoke<Record<string, string>>("get_tokens");
     const cfg = await invoke<{
@@ -617,6 +647,7 @@ onUnmounted(() => {
     <TopBar
       :mode="mode"
       :basePath="basePath"
+      :scVersion="scStatus?.version?.label ?? ''"
       :loading="loading"
       @update:mode="setMode"
       @refresh="refresh"
@@ -649,7 +680,13 @@ onUnmounted(() => {
         <div v-if="!devices.length" class="tile-none">None</div>
         </div>
       </div>
-      <StatusPanel :report="clash" :loadError="error" @apply="applyResort" @copy="copyResortCommands" />
+      <StatusPanel
+        :report="clash"
+        :loadError="error"
+        :sc="scStatus"
+        @apply="applyResort"
+        @copy="copyResortCommands"
+      />
       </div>
 
       <ImageStage

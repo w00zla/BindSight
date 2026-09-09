@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use base64::Engine;
+use log::{error, warn};
 use serde::{Deserialize, Serialize};
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager, State};
@@ -216,7 +217,7 @@ fn read_root(root: &Path) -> Vec<ImageMap> {
         }
         match read_map(&dir) {
             Ok(p) => out.push(p),
-            Err(e) => eprintln!("bindsight: skipping image-map {}: {e}", dir.display()),
+            Err(e) => warn!("skipping image-map {}: {e}", dir.display()),
         }
     }
     out
@@ -341,7 +342,8 @@ pub fn save(bundled_root: &Path, user_root: &Path, map: ImageMap) -> Result<Imag
 /// deleted.
 pub fn delete(bundled_root: &Path, user_root: &Path, id: &str) -> Result<(), String> {
     let dir = writable_dir(bundled_root, user_root, id)?;
-    fs::remove_dir_all(&dir).map_err(|e| e.to_string())
+    fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn mime_for(file: &str) -> Option<&'static str> {
@@ -511,7 +513,7 @@ pub(crate) fn list_imagemaps(app: AppHandle) -> Vec<ImageMapSummary> {
     match user_root(&app) {
         Ok(user) => list(&bundled_root(&app), &user),
         Err(e) => {
-            eprintln!("bindsight: no app data dir: {e}");
+            error!("no app data dir: {e}");
             list(&bundled_root(&app), Path::new(""))
         }
     }
@@ -593,7 +595,7 @@ pub(crate) fn set_imagemap_choice(
         }
     }
     if let Err(e) = config::save(&app, &data.config) {
-        eprintln!("bindsight: failed to save config: {e}");
+        error!("failed to save config: {e}");
     }
     data.config.clone()
 }

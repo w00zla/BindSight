@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use log::{debug, error, info, warn};
 use sdl2::event::Event;
 use sdl2::joystick::{HatState, Joystick};
 use sdl2::JoystickSubsystem;
@@ -82,7 +83,13 @@ struct HidTable {
 
 fn hid_table() -> HidTable {
     let mut map: HashMap<(u16, u16), HidInfo> = HashMap::new();
-    let api = hidapi::HidApi::new().ok();
+    let api = match hidapi::HidApi::new() {
+        Ok(api) => Some(api),
+        Err(e) => {
+            warn!("hidapi init failed: {e}");
+            None
+        }
+    };
     if let Some(api) = &api {
         for dev in api.device_list() {
             let entry = map
@@ -159,7 +166,7 @@ pub fn enumerate() -> Result<Vec<DeviceInfo>, String> {
 pub fn spawn(app: AppHandle, devices: DeviceList) {
     std::thread::spawn(move || {
         if let Err(e) = run(app, devices) {
-            eprintln!("bindsight: input thread stopped: {e}");
+            error!("input thread stopped: {e}");
         }
     });
 }
@@ -168,6 +175,7 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
     let sdl = sdl2::init()?;
     let joystick = sdl.joystick()?;
     let mut event_pump = sdl.event_pump()?;
+    info!("SDL initialized, input thread started");
 
     // instance_id -> open handle (kept alive so its events keep being reported)
     let mut opened: HashMap<u32, Joystick> = HashMap::new();
@@ -244,13 +252,45 @@ fn reopen_all(
     let count = joystick.num_joysticks()?;
     let mut list = Vec::with_capacity(count as usize);
     for index in 0..count {
-        let Ok(stick) = joystick.open(index) else {
-            continue;
+        let stick = match joystick.open(index) {
+            Ok(stick) => stick,
+            Err(e) => {
+                warn!("failed to open joystick {index}: {e}");
+                continue;
+            }
         };
         let info = device_info(&stick, index, &hid);
         guids.insert(stick.instance_id(), info.sdl_guid.clone());
         list.push(info);
         opened.insert(stick.instance_id(), stick);
+    }
+
+    // SDL raises one JoyDeviceAdded per device at startup, each of which
+    // lands here; only log the list when it actually differs.
+    let changed = devices
+        .lock()
+        .map(|shared| shared.iter().map(|d| &d.sdl_guid).ne(list.iter().map(|d| &d.sdl_guid)))
+        .unwrap_or(true);
+    if changed {
+        info!("enumerating joysticks: {count} found");
+        for info in &list {
+            let name = info.sc_name.as_deref().unwrap_or(&info.sdl_name);
+            info!(
+                "device {}: {name} sdl_guid={} sc_guid={} buttons={} axes={} hats={} sc_axes={:?}",
+                info.index,
+                info.sdl_guid,
+                info.sc_product_guid.as_deref().unwrap_or("-"),
+                info.num_buttons,
+                info.num_axes,
+                info.num_hats,
+                info.axes
+            );
+            if let Some(err) = &info.axes_error {
+                warn!("device {}: {name}: axes unavailable: {err}", info.index);
+            }
+        }
+    } else {
+        debug!("enumerating joysticks: {count} found, unchanged");
     }
 
     if let Ok(mut shared) = devices.lock() {

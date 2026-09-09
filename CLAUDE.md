@@ -10,10 +10,11 @@ See `HANDOFF.md` for the current working state.
   the user is German; the code is not.)
 - **Commits**: imperative subject, body explaining the why. Commit only when the
   user asks.
-- **Repo content policy**: `starbreaker` and other third-party tools are never
-  committed (license). Extracted SC data (`data/extracted/`) is gitignored
-  (staleness), but the *derived* `scdata.json` / `tokens.json` resources are
-  committed (SC's localization strings are freely usable; regenerate per patch).
+- **Repo content policy**: no SC game data in the repo — the app extracts what
+  it needs from the user's install at runtime (see `scinstall.rs`). The
+  StarBreaker sidecar binaries (MIT) are not committed either:
+  `scripts/fetch-starbreaker.sh` downloads the pinned release into
+  `src-tauri/binaries/` (gitignored) and verifies SHA256.
 
 ## Stack
 
@@ -45,6 +46,16 @@ See `HANDOFF.md` for the current working state.
 - `scdata.rs` — parse `defaultProfile.xml` (action master list), `global.ini`
   (labels), `keybinding_localization.xml` (input token labels), and the user's
   `actionmaps.xml` (rebinds + `<options>` device map).
+- `scinstall.rs` — the configured install: version from `build_manifest.id`
+  (`ScVersion`, label `<branch minus sc-alpha->.<P4 changelist>`, e.g.
+  `4.10.0-hotfix.12572603`), and the game data (`ScData`: action master list
+  + token labels). Runs the StarBreaker sidecar (`p4k extract --regex` for
+  `defaultProfile.xml`, `keybinding_localization.xml`, `global.ini`, ~1 s),
+  converts via `scdata::parse_*` (unlabeled actions dropped) and caches the
+  JSON under `<app_cache_dir>/v1/<label>/`; `v1` = our JSON shape, bump it
+  when the shape changes. Loaded in a background thread at start and on
+  base-path change (`lib.rs::spawn_sc_load`): steps via `scdata-progress`
+  (`LOAD_STEPS` = 4), result via `scdata-changed`.
 - `bindings.rs` — `BindingIndex` (token -> bound actions), `button_token`/
   `hat_token` (with the +1 offset), `instance_for_guid`, `resolve_bindings`,
   `analyze_clash` (saved `<options>` vs. `Game.log` order — the only order
@@ -64,8 +75,23 @@ See `HANDOFF.md` for the current working state.
   with a fresh id; import assigns a fresh id too). Zip export/import,
   image add/remove/read (data URL), validation. Pure logic takes `&Path`
   roots; the `#[tauri::command]` wrappers only resolve dirs.
-- `lib.rs` — Tauri commands, state wiring, the input thread spawn, the Wayland
-  DMABUF workaround.
+- `lib.rs` — Tauri commands, state wiring (`AppData`: config, the install's
+  game data + load status, profile, binding index), the input thread spawn,
+  the SC data loader thread, the Wayland DMABUF workaround, logging setup.
+- **Logging**: the `log` crate everywhere (never `println!`/`eprintln!`),
+  `tauri-plugin-log` writes to stdout and `<app_log_dir>/bindsight.log`
+  (2 MB, 3 files kept; Linux `~/.local/share/com.w00zla.bindsight/logs/`).
+  Our crate logs down to DEBUG, dependencies from WARN. The webview console
+  (`console.*`, uncaught errors, unhandled rejections) is forwarded by
+  `src/logging.ts` via the plugin's `log` command with the plain `webview`
+  target (the JS package would tag a source location the level filter
+  cannot match), so frontend messages land in the same file. Severities: ERROR =
+  a feature is broken (config not saved, SC data failed, input thread died,
+  panic), WARN = degraded but running (profile not loaded, Game.log missing,
+  axes unknown, unreadable cache), INFO = state changes and facts (startup
+  environment, device enumeration, SC version, extraction, profile/Game.log
+  contents, user actions), DEBUG = detail (command lines, load steps,
+  unchanged re-enumerations). Never log per-input events.
 
 ## Image-map data model (`imagemap.json`, format 3)
 
@@ -102,14 +128,21 @@ cargo run --example log_joystick_events                  # live event log
 cargo run --example hid_names                            # HID product strings
 cargo run --example hid_axes [-- --hex]                  # HID axis usages + derived SC axes
 
-# Regenerate the bundled SC data (after an SC patch / re-extract)
-cd src-tauri
-cargo run --example convert_scdata -- ../data/extracted/defaultProfile.xml ../data/extracted/global.ini resources/scdata.json
-cargo run --example convert_tokens -- ../data/extracted/keybinding_localization.xml ../data/extracted/global.ini resources/tokens.json
-
-# Re-extract raw SC data from the game (needs the starbreaker binary in data/)
-cd data && ./extract_sc_datafiles.sh <path/to/Data.p4k>
+# Fetch the StarBreaker sidecar binaries (once, and after bumping the pinned version)
+scripts/fetch-starbreaker.sh
 ```
+
+The SC game data is extracted from the configured install at runtime and
+cached per game version (`~/.cache/com.w00zla.bindsight/v1/<label>/` on
+Linux); delete that dir to force a re-extract.
+
+## Prerequisites (all platforms)
+
+The StarBreaker sidecar binaries in `src-tauri/binaries/` — run
+`scripts/fetch-starbreaker.sh` (needs `curl`, `tar`, `unzip`) or
+`scripts/fetch-starbreaker.ps1` (PowerShell); keep version + hashes in both
+in sync. Without them every `cargo build` fails in the Tauri build script
+(`resource path binaries/starbreaker-<triple> doesn't exist`).
 
 ## Prerequisites (Fedora/Nobara)
 

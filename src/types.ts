@@ -49,12 +49,33 @@ export interface ResolvedBinding {
   is_default: boolean;
 }
 
+// Version of the configured SC install (from build_manifest.id).
+export interface ScVersion {
+  // Display label / cache key, e.g. "4.10.0-hotfix.12572603".
+  label: string;
+  branch: string;
+  version: string;
+  changelist: string;
+  build_id: string;
+}
+
+// The install's version and how loading its game data went.
+export interface ScStatus {
+  version: ScVersion | null;
+  loading: boolean;
+  // Completed load steps out of `steps` while loading.
+  progress: number;
+  steps: number;
+  error: string | null;
+}
+
 export interface LoadStatus {
   base_path: string;
   actionmaps_path: string;
   loaded: boolean;
   error: string | null;
   bindings: ResolvedBinding[];
+  sc: ScStatus;
 }
 
 export interface BoundAction {

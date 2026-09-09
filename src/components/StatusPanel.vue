@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import Icon from "./Icon.vue";
-import type { ClashReport } from "../types";
+import type { ClashReport, ScStatus } from "../types";
 
-const props = defineProps<{ report: ClashReport | null; loadError: string | null }>();
+const props = defineProps<{ report: ClashReport | null; loadError: string | null; sc: ScStatus | null }>();
 const emit = defineEmits<{ apply: []; copy: [] }>();
 
 const logErrorTitle = computed(() => {
@@ -13,7 +13,12 @@ const logErrorTitle = computed(() => {
 });
 
 const hasIssue = computed(
-  () => !!props.loadError || !!props.report?.log_error || !!props.report?.missing.length || !!props.report?.has_clash,
+  () =>
+    !!props.sc?.error ||
+    !!props.loadError ||
+    !!props.report?.log_error ||
+    !!props.report?.missing.length ||
+    !!props.report?.has_clash,
 );
 </script>
 
@@ -21,9 +26,27 @@ const hasIssue = computed(
   <div class="status-panel">
     <div class="panel-title">Status</div>
     <div class="tiles">
-      <div v-if="!hasIssue" class="tile ok">
+      <div v-if="sc?.loading" class="tile loading">
+        <div class="row">
+          <Icon name="clock" :size="16" />
+          <span>Reading SC data…</span>
+        </div>
+        <div class="steps">
+          <span v-for="i in sc.steps" :key="i" class="step" :class="{ done: i <= sc.progress }" />
+        </div>
+      </div>
+
+      <div v-else-if="!hasIssue" class="tile ok">
         <Icon name="check" :size="16" />
         <span>No issues</span>
+      </div>
+
+      <div v-if="sc?.error" class="tile error detail">
+        <div class="row">
+          <Icon name="warning" :size="16" />
+          <span class="name">No SC data</span>
+        </div>
+        <div class="error mono">{{ sc.error }}</div>
       </div>
 
       <div v-if="loadError" class="tile issue">
@@ -113,12 +136,55 @@ const hasIssue = computed(
   color: var(--warn);
 }
 
+/* Hard failures (no game data at all), as opposed to warnings. */
+.tile.error {
+  background: rgba(255, 92, 108, 0.1);
+  border: 1px solid rgba(255, 92, 108, 0.5);
+  color: var(--err);
+}
+
 .tile.clash {
   flex-direction: column;
   align-items: stretch;
   justify-content: center;
   gap: 8px;
   min-width: 480px;
+}
+
+.tile.loading,
+.tile.detail {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 8px;
+}
+
+.tile.detail {
+  max-width: 480px;
+}
+
+/* Segmented progress: one cell per load step, filled as they complete. */
+.steps {
+  display: flex;
+  gap: 4px;
+}
+
+.step {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-surface-3);
+  transition: background 150ms;
+}
+
+.step.done {
+  background: var(--accent);
+}
+
+.error {
+  font-size: 12px;
+  color: var(--text);
+  word-break: break-all;
 }
 
 .row {

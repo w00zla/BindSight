@@ -3,7 +3,7 @@ import { computed } from "vue";
 import Icon from "./Icon.vue";
 import type { Mode } from "../types";
 
-const props = defineProps<{ mode: Mode; basePath: string; loading: boolean }>();
+const props = defineProps<{ mode: Mode; basePath: string; scVersion: string; loading: boolean }>();
 const emit = defineEmits<{ "update:mode": [mode: Mode]; refresh: []; settings: [] }>();
 
 const TABS: { mode: Mode; label: string; icon: "live" | "tools" | "devices" }[] = [
@@ -38,6 +38,7 @@ const installSlug = computed(() => {
     </div>
     <div class="spacer" />
     <div v-if="installSlug" class="install-chip mono">{{ installSlug }}</div>
+    <div v-if="scVersion" class="version-chip mono">{{ scVersion }}</div>
     <button type="button" class="refresh-btn" :disabled="loading" @click="emit('refresh')">
       <Icon name="refresh" :size="16" />
       {{ loading ? "Scanning…" : "Refresh" }}
@@ -110,6 +111,17 @@ const installSlug = computed(() => {
   font-size: 13px;
   letter-spacing: 0.08em;
   color: var(--text);
+}
+
+.version-chip {
+  display: flex;
+  align-items: center;
+  height: var(--h-chip);
+  padding: 0 12px;
+  border-radius: var(--radius-control);
+  background: var(--bg-surface-2);
+  font-size: 13px;
+  color: var(--text-2);
 }
 
 .refresh-btn {

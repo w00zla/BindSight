@@ -9,9 +9,18 @@ The core loop is closed end-to-end:
 
 1. **Devices**: SDL enumerates connected joysticks; `hidapi` gives SC's own
    device name; the GUID bridge maps each to its SC Product GUID.
-2. **SC data**: `defaultProfile.xml` + `global.ini` are pre-converted to the
-   bundled `scdata.json` (action master list + labels, per-instance token labels
-   in `tokens.json`).
+2. **SC data** (2026-09-09): extracted from the configured install at runtime.
+   `build_manifest.id` gives the game version (shown as a chip in the top bar,
+   e.g. `4.10.0-hotfix.12572603`); the bundled StarBreaker sidecar pulls
+   `defaultProfile.xml`, `keybinding_localization.xml` and `global.ini` out of
+   `Data.p4k` (~1 s), the app converts them to the action master list + token
+   labels and caches the JSON per version in the app cache dir. Loading runs
+   in the background at start and on base-path change; the Status panel shows
+   `Reading SC data…` with a four-segment step bar meanwhile (manifest,
+   extracted, converted, cached; `scdata-progress` events) and `No SC data`
+   with the error text when the manifest, `Data.p4k` or the sidecar is
+   missing or StarBreaker fails. Nothing is bundled any more, so a new SC
+   patch needs no app update.
 3. **Bindings**: the app reads the configured install's `actionmaps.xml`
    (rebinds + `<options>` device map) and folds in the shipped `js1` defaults
    from `defaultProfile.xml` for every action the user never rebound (tagged
@@ -65,6 +74,16 @@ The core loop is closed end-to-end:
    area blue; the bindings list can pin axis areas. Devices whose descriptor
    cannot be read or placed carry `axes_error` (shown on the tile, e.g. a
    `/dev/hidraw` without permission) and get no axis tokens.
+
+10. **Logging** (2026-09-09): `tauri-plugin-log` -> stdout + a rotating
+    `bindsight.log` in the app log dir (paths in the README). Startup logs
+    OS/app/tauri/webview/SDL versions, all app dirs, the session env and the
+    config; then SC version + extraction/cache, device enumeration (per
+    device incl. GUIDs and derived axes, only when the list changed), the
+    profile's `<options>` and what `Game.log` says, plus user actions (base
+    path, exclusions, resort). The webview console and uncaught frontend
+    errors are forwarded too (`src/logging.ts`, target `webview`). Per-input
+    events are never logged. Severity rules in `CLAUDE.md`.
 
 GUI (redesigned 2026-09-09, phases 0-2 of the plan in the design session;
 look = RSI Pledge-Store palette + cyan live accent, Bai Jamjuree / Share Tech
@@ -209,9 +228,12 @@ the memory `gui-naming-decisions` and the plan below.
 
 ## Working data
 
-`data/extracted/` (gitignored) holds the user's extracted `defaultProfile.xml`,
-`global.ini`, `keybinding_localization.xml` and a working copy of `actionmaps.xml`
-for offline parsing/converting.
+The extracted SC files live only transiently in the cache dir during a load;
+the cached JSON per version is under `<app_cache_dir>/v1/<label>/` (Linux:
+`~/.cache/com.w00zla.bindsight/`). For offline parsing (the `parse_*`
+examples) extract them by hand:
+`src-tauri/binaries/starbreaker-<triple> p4k extract --p4k <Data.p4k> -o <dir> --regex '...' --convert cryxml`
+(regex in `scinstall.rs`).
 
 ## Gotchas
 

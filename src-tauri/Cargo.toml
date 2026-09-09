@@ -29,6 +29,9 @@ uuid = { version = "1.26.0", features = ["v4"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 base64 = "0.23.1"
 tauri-plugin-dialog = "2.7.3"
+tauri-plugin-log = "2"
+log = "0.4"
+os_info = { version = "3", default-features = false }
 
 # SDL2 is linked differently per platform. On Windows we build it from source
 # and static-link it, so the app needs no SDL2.dll and no system SDL2 install
