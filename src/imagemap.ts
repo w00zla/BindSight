@@ -1,7 +1,7 @@
 // Image-map types (mirroring imagemap.json, format 3) plus the small helpers
 // both renderers share.
 
-import type { JoyInput } from "./types";
+import type { DeviceInfo, JoyInput } from "./types";
 
 export type SymbolKind = "arrow" | "cw" | "ccw";
 
@@ -22,7 +22,8 @@ export interface ImageFile {
 
 export interface Area {
   id: string;
-  // SDL-level input key: `button:<n>`, `hat:<n>:<dir>`, `axis:<n>`.
+  // SDL-level input key: `button:<n>`, `hat:<n>:<dir>`, `axis:<n>` (joystick),
+  // `key:<sc name>` (keyboard) or `pad:<sc name>` (gamepad).
   input: string;
   shape: Shape;
 }
@@ -48,8 +49,8 @@ export interface ImageMapSummary {
 
 export type HighlightClass = "bound" | "none";
 
-// Input key for a live event: buttons only while pressed, hats only when not
-// centered, axes always. `null` when the event does not name an input.
+// Input key for a live event: buttons and keys only while pressed, hats only
+// when not centered, axes always. `null` when the event does not name an input.
 export function inputKey(ev: JoyInput): string | null {
   switch (ev.kind) {
     case "button":
@@ -58,10 +59,47 @@ export function inputKey(ev: JoyInput): string | null {
       return ev.direction === "centered" ? null : `hat:${ev.index}:${ev.direction}`;
     case "axis":
       return `axis:${ev.index}`;
+    case "padbutton":
+      return ev.pressed ? `pad:${ev.name}` : null;
+    case "padaxis":
+      return `pad:${ev.name}`;
+    case "key":
+      return ev.pressed ? `key:${ev.name}` : null;
   }
 }
 
-// Hardware ids are SC Product GUIDs; compare case-insensitively.
+// Everything after the last `+` of a combo token, e.g. "lalt+x" -> "x".
+function comboTail(name: string): string {
+  return name.slice(name.lastIndexOf("+") + 1);
+}
+
+// Image-map input key for an SC token on a device. Joystick tokens undo the +1
+// offset of button/hat numbering and go through the device's HID-derived axis
+// names (`js2_rotz` -> the SDL index whose name is `rotz`); keyboard and
+// gamepad tokens map 1:1 to the event name, a combo to its last part.
+export function inputKeyForToken(token: string, d: DeviceInfo): string | null {
+  if (token.startsWith("kb1_")) {
+    const name = comboTail(token.slice(4));
+    return name ? `key:${name}` : null;
+  }
+  if (token.startsWith("gp1_")) {
+    const name = comboTail(token.slice(4));
+    return name ? `pad:${name}` : null;
+  }
+  const b = token.match(/^js\d+_button(\d+)$/);
+  if (b) return `button:${Number(b[1]) - 1}`;
+  const h = token.match(/^js\d+_hat(\d+)_(up|down|left|right)$/);
+  if (h) return `hat:${Number(h[1]) - 1}:${h[2]}`;
+  const a = token.match(/^js\d+_([a-z0-9]+)$/);
+  if (a) {
+    const i = d.axes.indexOf(a[1]);
+    if (i >= 0) return `axis:${i}`;
+  }
+  return null;
+}
+
+// Hardware ids are SC Product GUIDs (or "keyboard" / "gamepad"); compare
+// case-insensitively.
 export function sameHardware(a: string | null | undefined, b: string | null | undefined): boolean {
   return !!a && !!b && a.toLowerCase() === b.toLowerCase();
 }

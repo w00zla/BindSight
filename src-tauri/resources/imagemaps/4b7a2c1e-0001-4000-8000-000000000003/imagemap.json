@@ -1,0 +1,385 @@
+{
+  "format": 3,
+  "id": "4b7a2c1e-0001-4000-8000-000000000003",
+  "name": "Xbox controller",
+  "hardware_id": "gamepad",
+  "hardware_name": "Gamepad",
+  "image": {
+    "file": "image.png",
+    "label": "Top"
+  },
+  "areas": [
+    {
+      "id": "a1",
+      "input": "pad:triggerl",
+      "shape": {
+        "kind": "rect",
+        "x": 0.175,
+        "y": 0.018824,
+        "w": 0.145833,
+        "h": 0.096471,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a2",
+      "input": "pad:triggerl_btn",
+      "shape": {
+        "kind": "rect",
+        "x": 0.186667,
+        "y": 0.035294,
+        "w": 0.1225,
+        "h": 0.063529,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a3",
+      "input": "pad:triggerr",
+      "shape": {
+        "kind": "rect",
+        "x": 0.679167,
+        "y": 0.018824,
+        "w": 0.145833,
+        "h": 0.096471,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a4",
+      "input": "pad:triggerr_btn",
+      "shape": {
+        "kind": "rect",
+        "x": 0.690833,
+        "y": 0.035294,
+        "w": 0.1225,
+        "h": 0.063529,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a5",
+      "input": "pad:shoulderl",
+      "shape": {
+        "kind": "rect",
+        "x": 0.1625,
+        "y": 0.122353,
+        "w": 0.170833,
+        "h": 0.077647,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a6",
+      "input": "pad:shoulderr",
+      "shape": {
+        "kind": "rect",
+        "x": 0.666667,
+        "y": 0.122353,
+        "w": 0.170833,
+        "h": 0.077647,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a7",
+      "input": "pad:thumbl_up",
+      "shape": {
+        "kind": "symbol",
+        "symbol": "arrow",
+        "x": 0.258333,
+        "y": 0.238824,
+        "w": 0.04,
+        "h": 0.047059,
+        "rotation": -90.0
+      }
+    },
+    {
+      "id": "a8",
+      "input": "pad:thumbl_down",
+      "shape": {
+        "kind": "symbol",
+        "symbol": "arrow",
+        "x": 0.258333,
+        "y": 0.502353,
+        "w": 0.04,
+        "h": 0.047059,
+        "rotation": 90.0
+      }
+    },
+    {
+      "id": "a9",
+      "input": "pad:thumbl_left",
+      "shape": {
+        "kind": "symbol",
+        "symbol": "arrow",
+        "x": 0.165,
+        "y": 0.370588,
+        "w": 0.04,
+        "h": 0.047059,
+        "rotation": 180.0
+      }
+    },
+    {
+      "id": "a10",
+      "input": "pad:thumbl_right",
+      "shape": {
+        "kind": "symbol",
+        "symbol": "arrow",
+        "x": 0.351667,
+        "y": 0.370588,
+        "w": 0.04,
+        "h": 0.047059,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a11",
+      "input": "pad:thumbl",
+      "shape": {
+        "kind": "ellipse",
+        "cx": 0.258333,
+        "cy": 0.370588,
+        "rx": 0.051667,
+        "ry": 0.072941,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a12",
+      "input": "pad:thumblx",
+      "shape": {
+        "kind": "symbol",
+        "symbol": "arrow",
+        "x": 0.258333,
+        "y": 0.370588,
+        "w": 0.14,
+        "h": 0.061176,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a13",
+      "input": "pad:thumbly",
+      "shape": {
+        "kind": "symbol",
+        "symbol": "arrow",
+        "x": 0.258333,
+        "y": 0.370588,
+        "w": 0.14,
+        "h": 0.061176,
+        "rotation": 90.0
+      }
+    },
+    {
+      "id": "a14",
+      "input": "pad:thumbr_up",
+      "shape": {
+        "kind": "symbol",
+        "symbol": "arrow",
+        "x": 0.620833,
+        "y": 0.474118,
+        "w": 0.04,
+        "h": 0.047059,
+        "rotation": -90.0
+      }
+    },
+    {
+      "id": "a15",
+      "input": "pad:thumbr_down",
+      "shape": {
+        "kind": "symbol",
+        "symbol": "arrow",
+        "x": 0.620833,
+        "y": 0.737647,
+        "w": 0.04,
+        "h": 0.047059,
+        "rotation": 90.0
+      }
+    },
+    {
+      "id": "a16",
+      "input": "pad:thumbr_left",
+      "shape": {
+        "kind": "symbol",
+        "symbol": "arrow",
+        "x": 0.5275,
+        "y": 0.605882,
+        "w": 0.04,
+        "h": 0.047059,
+        "rotation": 180.0
+      }
+    },
+    {
+      "id": "a17",
+      "input": "pad:thumbr_right",
+      "shape": {
+        "kind": "symbol",
+        "symbol": "arrow",
+        "x": 0.714167,
+        "y": 0.605882,
+        "w": 0.04,
+        "h": 0.047059,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a18",
+      "input": "pad:thumbr",
+      "shape": {
+        "kind": "ellipse",
+        "cx": 0.620833,
+        "cy": 0.605882,
+        "rx": 0.051667,
+        "ry": 0.072941,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a19",
+      "input": "pad:thumbrx",
+      "shape": {
+        "kind": "symbol",
+        "symbol": "arrow",
+        "x": 0.620833,
+        "y": 0.605882,
+        "w": 0.14,
+        "h": 0.061176,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a20",
+      "input": "pad:thumbry",
+      "shape": {
+        "kind": "symbol",
+        "symbol": "arrow",
+        "x": 0.620833,
+        "y": 0.605882,
+        "w": 0.14,
+        "h": 0.061176,
+        "rotation": 90.0
+      }
+    },
+    {
+      "id": "a21",
+      "input": "pad:dpad_up",
+      "shape": {
+        "kind": "rect",
+        "x": 0.345833,
+        "y": 0.478824,
+        "w": 0.066667,
+        "h": 0.08,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a22",
+      "input": "pad:dpad_down",
+      "shape": {
+        "kind": "rect",
+        "x": 0.345833,
+        "y": 0.652941,
+        "w": 0.066667,
+        "h": 0.08,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a23",
+      "input": "pad:dpad_left",
+      "shape": {
+        "kind": "rect",
+        "x": 0.289167,
+        "y": 0.558824,
+        "w": 0.056667,
+        "h": 0.094118,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a24",
+      "input": "pad:dpad_right",
+      "shape": {
+        "kind": "rect",
+        "x": 0.4125,
+        "y": 0.558824,
+        "w": 0.056667,
+        "h": 0.094118,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a25",
+      "input": "pad:a",
+      "shape": {
+        "kind": "ellipse",
+        "cx": 0.741667,
+        "cy": 0.445882,
+        "rx": 0.033333,
+        "ry": 0.047059,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a26",
+      "input": "pad:b",
+      "shape": {
+        "kind": "ellipse",
+        "cx": 0.803333,
+        "cy": 0.358824,
+        "rx": 0.033333,
+        "ry": 0.047059,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a27",
+      "input": "pad:x",
+      "shape": {
+        "kind": "ellipse",
+        "cx": 0.68,
+        "cy": 0.358824,
+        "rx": 0.033333,
+        "ry": 0.047059,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a28",
+      "input": "pad:y",
+      "shape": {
+        "kind": "ellipse",
+        "cx": 0.741667,
+        "cy": 0.271765,
+        "rx": 0.033333,
+        "ry": 0.047059,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a29",
+      "input": "pad:back",
+      "shape": {
+        "kind": "ellipse",
+        "cx": 0.454167,
+        "cy": 0.376471,
+        "rx": 0.023333,
+        "ry": 0.027059,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": "a30",
+      "input": "pad:start",
+      "shape": {
+        "kind": "ellipse",
+        "cx": 0.545833,
+        "cy": 0.376471,
+        "rx": 0.023333,
+        "ry": 0.027059,
+        "rotation": 0.0
+      }
+    }
+  ]
+}

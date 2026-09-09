@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use crate::gamelog::{GameLogError, LogEnumeration};
 use crate::input::DeviceInfo;
-use crate::scdata::{is_joystick_rebind, parse_js_binding, ActionMap, UserProfile};
+use crate::scdata::{parse_rebind, Action, ActionMap, DeviceKind, UserProfile};
 
 /// An action a token is bound to, with the context (actionmap) it applies in.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -20,13 +20,16 @@ pub struct BoundAction {
     pub actionmap: String,
     pub action: String,
     pub label: Option<String>,
-    /// Comes from `defaultProfile.xml`'s joystick default (always on `js1`),
-    /// not from a user rebind.
+    /// Comes from `defaultProfile.xml`'s default for this device kind (always
+    /// on instance 1), not from a user rebind.
     pub is_default: bool,
+    /// Which device kind the token belongs to.
+    pub device_kind: DeviceKind,
 }
 
-/// Instance SC applies `defaultProfile.xml`'s unnumbered joystick defaults to
+/// Instance SC applies `defaultProfile.xml`'s unnumbered defaults to
 /// (`joystick="button1"` means `js1_button1`) — confirmed by the user.
+/// Keyboard and gamepad only ever have instance 1 anyway.
 const DEFAULT_INSTANCE: u32 = 1;
 
 /// Full SC token for an unnumbered joystick default from `defaultProfile.xml`.
@@ -34,16 +37,36 @@ pub fn default_token(token: &str) -> String {
     format!("js{DEFAULT_INSTANCE}_{token}")
 }
 
-/// Actions whose joystick binding the user touched in `actionmaps.xml` — any
-/// rebind with a `js` input, including a blank one (`js1_ `) that unbinds the
-/// shipped default. For those the default no longer applies. A keyboard/mouse/
-/// gamepad-only rebind does not count: rebinds are per device.
-fn joystick_touched(profile: &UserProfile) -> HashSet<(&str, &str)> {
+/// Full SC token for an unnumbered default of any device kind.
+fn default_token_of(kind: DeviceKind, token: &str) -> String {
+    format!("{}{DEFAULT_INSTANCE}_{token}", kind.token_prefix())
+}
+
+/// The default binding an action ships with for one device kind.
+fn default_of(action: &Action, kind: DeviceKind) -> Option<&String> {
+    match kind {
+        DeviceKind::Joystick => action.joystick_default.as_ref(),
+        DeviceKind::Keyboard => action.keyboard_default.as_ref(),
+        DeviceKind::Gamepad => action.gamepad_default.as_ref(),
+    }
+}
+
+/// Every device kind that carries defaults and bindings, in display order.
+const KINDS: [DeviceKind; 3] = [DeviceKind::Joystick, DeviceKind::Keyboard, DeviceKind::Gamepad];
+
+/// Actions whose binding for a device kind the user touched in
+/// `actionmaps.xml` — any rebind naming that device, including a blank one
+/// (`js1_ `, `kb1_ `) that unbinds the shipped default. For those the default
+/// no longer applies. "Touched" is per kind: a keyboard rebind leaves the
+/// joystick default alone, and vice versa.
+fn touched_per_kind(profile: &UserProfile) -> HashSet<(DeviceKind, &str, &str)> {
     profile
         .rebinds
         .iter()
-        .filter(|r| is_joystick_rebind(&r.input))
-        .map(|r| (r.actionmap.as_str(), r.action.as_str()))
+        .filter_map(|r| {
+            let target = parse_rebind(&r.input)?;
+            Some((target.kind, r.actionmap.as_str(), r.action.as_str()))
+        })
         .collect()
 }
 
@@ -67,10 +90,8 @@ impl BindingIndex {
 
         let mut by_token: HashMap<String, Vec<BoundAction>> = HashMap::new();
         for rebind in &profile.rebinds {
-            let Some((instance, token)) = parse_js_binding(&rebind.input) else {
-                continue;
-            };
-            let full_token = format!("js{instance}_{token}");
+            let Some(target) = parse_rebind(&rebind.input) else { continue };
+            let Some(full_token) = target.full_token() else { continue };
             let label = label_of
                 .get(&(rebind.actionmap.as_str(), rebind.action.as_str()))
                 .cloned()
@@ -80,23 +101,28 @@ impl BindingIndex {
                 action: rebind.action.clone(),
                 label,
                 is_default: false,
+                device_kind: target.kind,
             });
         }
 
-        // Shipped defaults (always js1) for actions the user never touched.
-        let touched = joystick_touched(profile);
+        // Shipped defaults (always instance 1) for every device kind the user
+        // never touched for that action.
+        let touched = touched_per_kind(profile);
         for map in maps {
             for action in &map.actions {
-                let Some(token) = &action.joystick_default else { continue };
-                if touched.contains(&(map.name.as_str(), action.name.as_str())) {
-                    continue;
+                for kind in KINDS {
+                    let Some(token) = default_of(action, kind) else { continue };
+                    if touched.contains(&(kind, map.name.as_str(), action.name.as_str())) {
+                        continue;
+                    }
+                    by_token.entry(default_token_of(kind, token)).or_default().push(BoundAction {
+                        actionmap: map.name.clone(),
+                        action: action.name.clone(),
+                        label: action.label.clone(),
+                        is_default: true,
+                        device_kind: kind,
+                    });
                 }
-                by_token.entry(default_token(token)).or_default().push(BoundAction {
-                    actionmap: map.name.clone(),
-                    action: action.name.clone(),
-                    label: action.label.clone(),
-                    is_default: true,
-                });
             }
         }
 
@@ -132,26 +158,42 @@ pub fn hat_token(instance: u32, sdl_hat_index: u8, direction: &str) -> Option<St
     }
 }
 
-/// One user joystick binding, resolved to a device and a label for display.
+/// One user binding, resolved to a device and a label for display.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ResolvedBinding {
     pub token: String,
-    /// Device name recorded for this binding's `jsN` instance (from `<options>`).
+    /// Device name recorded for this binding's `jsN` instance (from
+    /// `<options>`), or the fixed `"Keyboard"` / `"Gamepad"`.
     pub device: Option<String>,
     /// SC Product GUID of that instance, to match against connected devices.
+    /// Always `None` for keyboard and gamepad.
     pub device_guid: Option<String>,
+    /// Which device kind the token belongs to.
+    pub device_kind: DeviceKind,
+    /// SC instance: `jsN` for joysticks, always 1 for keyboard and gamepad.
+    pub instance: u32,
     pub actionmap: String,
     pub action: String,
     pub label: Option<String>,
-    /// A shipped default from `defaultProfile.xml` (on `js1`), not a user rebind.
+    /// A shipped default from `defaultProfile.xml` (on instance 1), not a user
+    /// rebind.
     pub is_default: bool,
 }
 
-/// Flatten the user's joystick rebinds into resolved bindings: each real (bound)
-/// joystick input with its SC token, the device it sits on, and the action's
-/// label. Non-joystick or unbound rebinds are skipped. Shipped `js1` defaults
-/// are appended for every action the user never touched (see
-/// [`joystick_touched`]).
+/// The fixed device name for a kind without a `<options>` entry of its own.
+fn fixed_device_name(kind: DeviceKind) -> Option<String> {
+    match kind {
+        DeviceKind::Joystick => None,
+        DeviceKind::Keyboard => Some("Keyboard".to_string()),
+        DeviceKind::Gamepad => Some("Gamepad".to_string()),
+    }
+}
+
+/// Flatten the user's rebinds into resolved bindings: each real (bound) input
+/// with its SC token, the device it sits on, and the action's label. Unbound
+/// (blank) and mouse rebinds are skipped. Shipped instance-1 defaults are
+/// appended for every action/device kind the user never touched (see
+/// [`touched_per_kind`]).
 pub fn resolve_bindings(maps: &[ActionMap], profile: &UserProfile) -> Vec<ResolvedBinding> {
     let mut label_of: HashMap<(&str, &str), Option<String>> = HashMap::new();
     for map in maps {
@@ -164,17 +206,26 @@ pub fn resolve_bindings(maps: &[ActionMap], profile: &UserProfile) -> Vec<Resolv
         .iter()
         .map(|d| (d.instance, (d.product_name.as_str(), d.product_guid.as_deref())))
         .collect();
+    // Joysticks take their name/GUID from `<options>`; kb/gp are fixed.
+    let device_for = |kind: DeviceKind, instance: u32| match kind {
+        DeviceKind::Joystick => {
+            let d = device_of.get(&instance);
+            (d.map(|d| d.0.to_string()), d.and_then(|d| d.1.map(String::from)))
+        }
+        _ => (fixed_device_name(kind), None),
+    };
 
     let mut out = Vec::new();
     for rebind in &profile.rebinds {
-        let Some((instance, token)) = parse_js_binding(&rebind.input) else {
-            continue;
-        };
-        let device = device_of.get(&instance);
+        let Some(target) = parse_rebind(&rebind.input) else { continue };
+        let Some(token) = target.full_token() else { continue };
+        let (device, device_guid) = device_for(target.kind, target.instance);
         out.push(ResolvedBinding {
-            token: format!("js{instance}_{token}"),
-            device: device.map(|d| d.0.to_string()),
-            device_guid: device.and_then(|d| d.1.map(String::from)),
+            token,
+            device,
+            device_guid,
+            device_kind: target.kind,
+            instance: target.instance,
             actionmap: rebind.actionmap.clone(),
             action: rebind.action.clone(),
             label: label_of
@@ -185,23 +236,27 @@ pub fn resolve_bindings(maps: &[ActionMap], profile: &UserProfile) -> Vec<Resolv
         });
     }
 
-    let touched = joystick_touched(profile);
-    let default_device = device_of.get(&DEFAULT_INSTANCE);
+    let touched = touched_per_kind(profile);
     for map in maps {
         for action in &map.actions {
-            let Some(token) = &action.joystick_default else { continue };
-            if touched.contains(&(map.name.as_str(), action.name.as_str())) {
-                continue;
+            for kind in KINDS {
+                let Some(token) = default_of(action, kind) else { continue };
+                if touched.contains(&(kind, map.name.as_str(), action.name.as_str())) {
+                    continue;
+                }
+                let (device, device_guid) = device_for(kind, DEFAULT_INSTANCE);
+                out.push(ResolvedBinding {
+                    token: default_token_of(kind, token),
+                    device,
+                    device_guid,
+                    device_kind: kind,
+                    instance: DEFAULT_INSTANCE,
+                    actionmap: map.name.clone(),
+                    action: action.name.clone(),
+                    label: action.label.clone(),
+                    is_default: true,
+                });
             }
-            out.push(ResolvedBinding {
-                token: default_token(token),
-                device: default_device.map(|d| d.0.to_string()),
-                device_guid: default_device.and_then(|d| d.1.map(String::from)),
-                actionmap: map.name.clone(),
-                action: action.name.clone(),
-                label: action.label.clone(),
-                is_default: true,
-            });
         }
     }
     out
@@ -281,6 +336,9 @@ pub struct ClashReport {
     /// order: `pp_resortdevices joystick A B` moves the bindings of `jsA` to
     /// `jsB` (and B's to A), so each cycle becomes a chain of swaps.
     pub resort_commands: Vec<String>,
+    /// SC listed a gamepad (`Connected xinput0: …`) at its last start. Pads
+    /// have no slot/order of their own; this is purely "does SC see it".
+    pub gamepad_seen: bool,
 }
 
 /// Case-insensitive SC Product GUID equality; `None` never matches.
@@ -316,6 +374,10 @@ pub fn analyze_clash(
         Ok(log) => log,
         Err(err) => return ClashReport { log_error: Some(err), ..Default::default() },
     };
+
+    // Only joysticks have an SC slot; the keyboard and gamepads never take
+    // part in the order, and must not turn up as "unseen" either.
+    let devices: Vec<&DeviceInfo> = devices.iter().filter(|d| d.kind == DeviceKind::Joystick).collect();
 
     let mut connected = Vec::with_capacity(log.joysticks.len());
     let mut has_clash = false;
@@ -367,6 +429,7 @@ pub fn analyze_clash(
         has_clash,
         resort,
         resort_commands,
+        gamepad_seen: !log.gamepads.is_empty(),
     }
 }
 
@@ -843,11 +906,17 @@ mod tests {
         // Explicitly unbound (blank js rebind): nothing at all.
         assert!(find("unbound").is_empty());
 
-        // A keyboard-only rebind leaves the joystick default in place.
+        // A keyboard-only rebind leaves the joystick default in place; the
+        // keyboard binding itself is resolved alongside it.
         let k = find("kb_only");
-        assert_eq!(k.len(), 1);
-        assert_eq!(k[0].token, "js1_button2");
-        assert!(k[0].is_default);
+        assert_eq!(k.len(), 2);
+        let js = k.iter().find(|b| b.device_kind == DeviceKind::Joystick).unwrap();
+        assert_eq!(js.token, "js1_button2");
+        assert!(js.is_default);
+        let kb = k.iter().find(|b| b.device_kind == DeviceKind::Keyboard).unwrap();
+        assert_eq!(kb.token, "kb1_k");
+        assert_eq!((kb.instance, kb.device.as_deref(), &kb.device_guid), (1, Some("Keyboard"), &None));
+        assert!(!kb.is_default);
 
         assert!(find("no_default").is_empty());
 
@@ -858,5 +927,94 @@ mod tests {
         assert!(hit[0].is_default);
         assert!(index.resolve("js1_x").is_empty()); // replaced by the js2_rotz rebind
         assert!(index.resolve("js1_y").is_empty()); // unbound
+    }
+
+    #[test]
+    fn defaults_and_touched_state_are_per_device_kind() {
+        // Every action ships all three defaults; the user rebinds exactly one
+        // device per action. Only that device's default must give way.
+        let profile_xml = r#"<profile>
+          <actionmap name="m" UILabel="@m">
+            <action name="js_rebound" joystick="button1" keyboard="a" gamepad="x"/>
+            <action name="kb_rebound" joystick="button2" keyboard="b" gamepad="y"/>
+            <action name="gp_rebound" joystick="button3" keyboard="c" gamepad="back"/>
+            <action name="gp_unbound" joystick="button4" keyboard="d" gamepad="start"/>
+            <action name="combo_default" keyboard="lalt+x">
+              <gamepad activationMode="tap" input="shoulderl+thumbl_left"/>
+            </action>
+          </actionmap>
+        </profile>"#;
+        let maps = parse_default_profile(profile_xml, &HashMap::new()).unwrap();
+
+        let user_xml = r#"<ActionMaps>
+          <actionmap name="m">
+            <action name="js_rebound"><rebind input="js2_button9"/></action>
+            <action name="kb_rebound"><rebind input="kb1_lctrl+e"/></action>
+            <action name="gp_rebound"><rebind input="gp1_shoulderl+y"/></action>
+            <action name="gp_unbound"><rebind input="gp1_ "/></action>
+          </actionmap>
+        </ActionMaps>"#;
+        let profile = parse_user_profile(user_xml).unwrap();
+
+        let resolved = resolve_bindings(&maps, &profile);
+        let tokens = |action: &str| {
+            let mut t: Vec<&str> = resolved.iter().filter(|b| b.action == action).map(|b| b.token.as_str()).collect();
+            t.sort_unstable();
+            t
+        };
+
+        // The rebound device loses its default, the other two keep theirs.
+        assert_eq!(tokens("js_rebound"), vec!["gp1_x", "js2_button9", "kb1_a"]);
+        assert_eq!(tokens("kb_rebound"), vec!["gp1_y", "js1_button2", "kb1_lctrl+e"]);
+        assert_eq!(tokens("gp_rebound"), vec!["gp1_shoulderl+y", "js1_button3", "kb1_c"]);
+        // A blank gamepad rebind unbinds only the gamepad default.
+        assert_eq!(tokens("gp_unbound"), vec!["js1_button4", "kb1_d"]);
+        // Defaults with modifiers keep them inside the token.
+        assert_eq!(tokens("combo_default"), vec!["gp1_shoulderl+thumbl_left", "kb1_lalt+x"]);
+
+        // The live index agrees, and tags the kind on every hit.
+        let index = BindingIndex::build(&maps, &profile);
+        let kb = index.resolve("kb1_lctrl+e");
+        assert_eq!(kb.len(), 1);
+        assert_eq!(kb[0].device_kind, DeviceKind::Keyboard);
+        assert!(!kb[0].is_default);
+
+        let gp = index.resolve("gp1_shoulderl+thumbl_left");
+        assert_eq!(gp.len(), 1);
+        assert_eq!(gp[0].device_kind, DeviceKind::Gamepad);
+        assert!(gp[0].is_default);
+
+        assert!(index.resolve("gp1_start").is_empty()); // blank rebind
+        assert!(index.resolve("js1_button1").is_empty()); // moved to js2
+        assert_eq!(index.resolve("js2_button9")[0].device_kind, DeviceKind::Joystick);
+    }
+
+    #[test]
+    fn clash_analysis_ignores_keyboard_and_gamepad_devices() {
+        let xml = r#"<ActionMaps>
+          <options type="joystick" instance="1" Product=" VKB L {0201231D-0000-0000-0000-504944564944}"/>
+        </ActionMaps>"#;
+        let profile = parse_user_profile(xml).unwrap();
+        let mut pad = dev("{028E045E-0000-0000-0000-504944564944}", "Gamepad");
+        pad.kind = DeviceKind::Gamepad;
+        let mut keyboard = DeviceInfo { kind: DeviceKind::Keyboard, ..DeviceInfo::default() };
+        keyboard.sc_name = Some("Keyboard".into());
+        let devs = [dev(VKB_L, "VKB L"), pad, keyboard];
+
+        let log = crate::gamelog::parse(concat!(
+            "<t> - Connected joystick0:  VKB L {0201231D-0000-0000-0000-504944564944}\n",
+            "<t> - Connected xinput0: Gamepad\n",
+        ))
+        .unwrap();
+        let report = analyze_clash(&profile, &devs, Ok(&log));
+
+        assert!(report.gamepad_seen);
+        assert!(!report.has_clash);
+        assert_eq!(report.connected.len(), 1); // only the stick has a slot
+        assert!(report.unseen.is_empty()); // pad and keyboard are not "unseen"
+
+        // No xinput line -> SC did not see a pad at its last start.
+        let log = log_of(&[("VKB L", VKB_L)]);
+        assert!(!analyze_clash(&profile, &devs, Ok(&log)).gamepad_seen);
     }
 }

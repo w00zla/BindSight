@@ -2,12 +2,26 @@
 
 import type { ImageMap, ImageMapSummary } from "./imagemap";
 
+// What a device is: SC binds one keyboard (kb1) and one gamepad (gp1) plus
+// any number of joysticks (jsN).
+export type DeviceKind = "joystick" | "gamepad" | "keyboard";
+
 export interface DeviceInfo {
   index: number;
+  kind: DeviceKind;
   sc_name: string | null;
   sdl_name: string;
   sdl_guid: string;
   sc_product_guid: string | null;
+  // Key for image-maps and the image-map choice: a joystick's SC Product GUID,
+  // "gamepad" for the pad holding the gp1 slot, "keyboard" for the keyboard,
+  // null for anything that cannot hold bindings (a further pad).
+  hardware_id: string | null;
+  // 1 for the first game controller (= gp1, first come first serve like SC),
+  // null for every further pad and for non-pads.
+  gamepad_slot: number | null;
+  // SDL_GameControllerName, for pads only.
+  controller_name: string | null;
   num_buttons: number;
   num_axes: number;
   num_hats: number;
@@ -47,17 +61,20 @@ export interface HidInterface {
 }
 
 // `timestamp` = SDL's event time in ms since SDL init, `instance_id` = the
-// SDL joystick instance.
+// SDL joystick instance. Gamepad inputs carry SC's name instead of an index;
+// `key` events are made in the webview (guid "keyboard", instance 0).
 interface JoyInputBase {
   guid: string;
-  index: number;
   timestamp: number;
   instance_id: number;
 }
 export type JoyInput =
-  | (JoyInputBase & { kind: "button"; pressed: boolean })
-  | (JoyInputBase & { kind: "axis"; value: number })
-  | (JoyInputBase & { kind: "hat"; direction: string; raw: number });
+  | (JoyInputBase & { kind: "button"; index: number; pressed: boolean })
+  | (JoyInputBase & { kind: "axis"; index: number; value: number })
+  | (JoyInputBase & { kind: "hat"; index: number; direction: string; raw: number })
+  | (JoyInputBase & { kind: "padbutton"; name: string; pressed: boolean })
+  | (JoyInputBase & { kind: "padaxis"; name: string; value: number })
+  | (JoyInputBase & { kind: "key"; name: string; pressed: boolean });
 
 // A JoyInput as kept in the device log, with the wall-clock time it arrived.
 export type LoggedInput = JoyInput & { at: number };
@@ -89,6 +106,8 @@ export interface Action {
   label: string | null;
   description: string | null;
   joystick_default: string | null;
+  keyboard_default: string | null;
+  gamepad_default: string | null;
 }
 
 export interface ActionMap {
@@ -101,6 +120,9 @@ export interface ResolvedBinding {
   token: string;
   device: string | null;
   device_guid: string | null;
+  device_kind: DeviceKind;
+  // jsN for joysticks; always 1 for the keyboard and the gamepad.
+  instance: number;
   actionmap: string;
   action: string;
   label: string | null;
@@ -142,6 +164,7 @@ export interface BoundAction {
   action: string;
   label: string | null;
   is_default: boolean;
+  device_kind: DeviceKind;
 }
 
 // One joystick in SC's order: the jsN SC assigns it vs the jsN its bindings
@@ -191,6 +214,8 @@ export interface ClashReport {
   log_timestamp: string | null;
   log_error: GameLogError | null;
   has_clash: boolean;
+  // SC listed a gamepad at its last start (`Connected xinput0:`).
+  gamepad_seen: boolean;
   resort: ResortMove[];
   // In-game equivalent of `resort`: pp_resortdevices swaps, in order.
   resort_commands: string[];
@@ -200,6 +225,7 @@ export interface ClashReport {
 // `sc_guid` lets the tile tell whether SC sees the device at all.
 export interface CurrentInput {
   device: string;
+  kind: DeviceKind;
   sc_guid: string | null;
   token: string | null;
   sdl: string;
@@ -248,7 +274,9 @@ export interface ActionRef {
 // One SC token whose bound actions differ between A and B.
 export interface DiffRow {
   token: string;
-  // The N in jsN_..., or null for a token without a js prefix.
+  device_kind: DeviceKind;
+  // The N in jsN_..., 1 for the keyboard and the gamepad, null for a token
+  // with no recognisable device prefix.
   instance: number | null;
   kind: DiffKind;
   a: ActionRef[];

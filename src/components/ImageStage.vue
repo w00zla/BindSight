@@ -15,7 +15,7 @@ const props = defineProps<{
   imgSrc: (id: string, file: string) => string;
   activeFor: (sdlGuid: string) => Map<string, HighlightClass>;
 }>();
-const emit = defineEmits<{ choose: [guid: string | null, id: string] }>();
+const emit = defineEmits<{ choose: [hardwareId: string | null, id: string] }>();
 
 type Tile = { device: DeviceInfo; view: ImageMapView | null };
 
@@ -131,7 +131,7 @@ function onReset(i: number) {
               v-if="t.view.options.length > 1"
               class="picker"
               :value="t.view.map.id"
-              @change="emit('choose', t.device.sc_product_guid, ($event.target as HTMLSelectElement).value)"
+              @change="emit('choose', t.device.hardware_id, ($event.target as HTMLSelectElement).value)"
             >
               <option v-for="s in t.view.options" :key="s.id" :value="s.id">{{ s.name }}</option>
             </select>

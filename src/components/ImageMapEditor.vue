@@ -26,7 +26,9 @@ import {
   type SymbolKind,
 } from "../imagemap";
 
-const props = defineProps<{ devices: DeviceInfo[]; events: LoggedInput[] }>();
+// `keyInput`: the last key captured in the webview — the backend never sees
+// keys, so App hands them over instead of an event.
+const props = defineProps<{ devices: DeviceInfo[]; events: LoggedInput[]; keyInput: JoyInput | null }>();
 const emit = defineEmits<{ notify: [message: string, type: "ok" | "error"]; saved: []; clearLog: [] }>();
 
 // No active tool == select/move mode.
@@ -88,12 +90,18 @@ function readPaint() {
 
 const selectedGuid = ref("");
 const device = computed(() => props.devices.find((d) => d.sdl_guid === selectedGuid.value) ?? null);
-const deviceName = computed(() => (device.value ? (device.value.sc_name ?? device.value.sdl_name) : "—"));
+
+// Pads carry SDL's controller name, everything else SC's.
+function displayName(d: DeviceInfo): string {
+  return d.kind === "gamepad" ? (d.controller_name ?? d.sc_name ?? d.sdl_name) : (d.sc_name ?? d.sdl_name);
+}
+
+const deviceName = computed(() => (device.value ? displayName(device.value) : "—"));
 
 const summaries = ref<ImageMapSummary[]>([]);
 
 function mapsFor(d: DeviceInfo): ImageMapSummary[] {
-  return summaries.value.filter((s) => sameHardware(s.hardware_id, d.sc_product_guid));
+  return summaries.value.filter((s) => sameHardware(s.hardware_id, d.hardware_id));
 }
 
 const deviceMaps = computed(() => (device.value ? mapsFor(device.value) : []));
@@ -201,7 +209,9 @@ async function requestLeave(): Promise<boolean> {
   return true;
 }
 
-defineExpose({ requestLeave });
+// `selectedGuid` and `confirmOpen` tell App whether to capture keys.
+const confirmOpen = computed(() => confirm.value !== null);
+defineExpose({ requestLeave, selectedGuid, confirmOpen });
 
 // --- loading ---------------------------------------------------------------
 
@@ -295,7 +305,7 @@ watch(
   () => props.devices,
   (list) => {
     if (list.some((d) => d.sdl_guid === selectedGuid.value)) return;
-    selectedGuid.value = list.find((d) => d.sc_product_guid)?.sdl_guid ?? "";
+    selectedGuid.value = list.find((d) => d.hardware_id)?.sdl_guid ?? "";
     currentKey.value = null;
     closeMap();
     void openFirst();
@@ -312,7 +322,7 @@ async function openFirst() {
 
 async function selectDevice(d: DeviceInfo) {
   showLog.value = false;
-  if (!d.sc_product_guid || d.sdl_guid === selectedGuid.value) return;
+  if (!d.hardware_id || d.sdl_guid === selectedGuid.value) return;
   if (!(await requestLeave())) return;
   selectedGuid.value = d.sdl_guid;
   currentKey.value = null;
@@ -347,14 +357,14 @@ async function pickImage(): Promise<string | null> {
 
 async function newMap() {
   const d = device.value;
-  if (!d?.sc_product_guid) return;
+  if (!d?.hardware_id) return;
   if (!(await requestLeave())) return;
   try {
     const imagePath = await pickImage();
     if (!imagePath) return;
     const m = await invoke<ImageMap>("create_imagemap", {
-      name: d.sc_name ?? d.sdl_name,
-      hardwareId: d.sc_product_guid,
+      name: displayName(d),
+      hardwareId: d.hardware_id,
       hardwareName: d.sc_name ?? "",
       imagePath,
     });
@@ -446,7 +456,7 @@ async function importMap() {
     const s = await invoke<ImageMapSummary>("import_imagemap", { sourcePath: src });
     imgCache.clear();
     await loadSummaries();
-    const d = props.devices.find((dev) => sameHardware(dev.sc_product_guid, s.hardware_id));
+    const d = props.devices.find((dev) => sameHardware(dev.hardware_id, s.hardware_id));
     if (d) {
       selectedGuid.value = d.sdl_guid;
       await loadMap(s.id);
@@ -487,15 +497,23 @@ async function replaceImage() {
 
 let unlisten: UnlistenFn[] = [];
 
+function takeInput(ev: JoyInput) {
+  if (ev.guid !== selectedGuid.value) return;
+  const key = inputKey(ev);
+  if (key) currentKey.value = key;
+}
+
+// Keys arrive as a prop (App captures them), joystick and pad events directly.
+watch(
+  () => props.keyInput,
+  (ev) => {
+    if (ev) takeInput(ev);
+  },
+);
+
 onMounted(async () => {
   readPaint();
-  unlisten.push(
-    await listen<JoyInput>("joy-input", (e) => {
-      if (e.payload.guid !== selectedGuid.value) return;
-      const key = inputKey(e.payload);
-      if (key) currentKey.value = key;
-    }),
-  );
+  unlisten.push(await listen<JoyInput>("joy-input", (e) => takeInput(e.payload)));
   window.addEventListener("keydown", onKeyDown);
   await loadSummaries();
   if (!openId.value) await openFirst();
@@ -921,7 +939,7 @@ function shortGuid(guid: string): string {
 
 function nameOfGuid(guid: string): string {
   const d = props.devices.find((dev) => dev.sdl_guid === guid);
-  return d?.sc_name ?? d?.sdl_name ?? guid;
+  return d ? displayName(d) : guid;
 }
 
 function deviceOfGuid(guid: string): DeviceInfo | undefined {
@@ -937,6 +955,12 @@ function eventText(ev: JoyInput): string {
       const sc = deviceOfGuid(ev.guid)?.axes[ev.index];
       return `axis ${ev.index}${sc ? ` (${sc})` : ""} = ${ev.value} (${(ev.value / 32767).toFixed(3)})`;
     }
+    case "padbutton":
+      return `pad ${ev.name} ${ev.pressed ? "down" : "up"}`;
+    case "padaxis":
+      return `pad ${ev.name} = ${ev.value} (${(ev.value / 32767).toFixed(3)})`;
+    case "key":
+      return `key ${ev.name} ${ev.pressed ? "down" : "up"}`;
     default:
       return `hat ${ev.index} ${ev.direction} (raw ${ev.raw})`;
   }
@@ -978,12 +1002,22 @@ function compactUsages(usages: string[]): string {
   return out.join(" ");
 }
 
-// Key/value rows of everything known about a device.
+// Key/value rows of everything known about a device. The keyboard is a
+// synthetic device — it has nothing but its name and its hardware id.
 function deviceRows(d: DeviceInfo): [string, string][] {
+  if (d.kind === "keyboard") {
+    return [
+      ["kind", d.kind],
+      ["sdl name", d.sdl_name],
+      ["hardware id", d.hardware_id ?? "—"],
+    ];
+  }
   return [
+    ["kind", d.kind === "gamepad" ? `gamepad · slot ${d.gamepad_slot ?? "—"} · ${d.controller_name ?? "—"}` : d.kind],
     ["sdl name", d.sdl_name],
     ["sdl guid", d.sdl_guid],
     ["sc product", d.sc_product_guid ?? "—"],
+    ["hardware id", d.hardware_id ?? "—"],
     ["sdl", `index ${d.index} · instance ${d.sdl_instance_id} · type ${d.sdl_type} · path ${d.sdl_path ?? "—"}`],
     ["usb", `vid ${hex4(d.sdl_vendor)} · pid ${hex4(d.sdl_product)} · version ${hex4(d.sdl_product_version)} · power ${d.power_level}`],
     [
@@ -1011,7 +1045,7 @@ function eventLine(ev: LoggedInput): string {
 function logText(): string {
   const lines = [`BindSight device log ${new Date().toISOString()}`, "", "Devices"];
   for (const d of props.devices) {
-    lines.push(`#${d.index} ${d.sc_name ?? "—"}`);
+    lines.push(`#${d.index} ${displayName(d)}`);
     for (const [k, v] of deviceRows(d)) lines.push(`    ${k.padEnd(15)} ${v}`);
   }
   if (!props.devices.length) lines.push("    none");
@@ -1037,11 +1071,14 @@ async function saveLog() {
 }
 
 function deviceLine(d: DeviceInfo): string {
+  if (d.kind === "gamepad" && d.gamepad_slot === null) return "no slot";
   const parts: string[] = [];
-  if (d.num_buttons) parts.push(`${d.num_buttons} btn`);
-  if (d.num_axes) parts.push(`${d.num_axes} ${d.num_axes === 1 ? "axis" : "axes"}`);
-  if (d.num_hats) parts.push(`${d.num_hats} ${d.num_hats === 1 ? "hat" : "hats"}`);
-  if (!d.sc_product_guid) {
+  if (d.kind !== "keyboard") {
+    if (d.num_buttons) parts.push(`${d.num_buttons} btn`);
+    if (d.num_axes) parts.push(`${d.num_axes} ${d.num_axes === 1 ? "axis" : "axes"}`);
+    if (d.num_hats) parts.push(`${d.num_hats} ${d.num_hats === 1 ? "hat" : "hats"}`);
+  }
+  if (!d.hardware_id) {
     parts.push("no SC id");
   } else if (d.sdl_guid !== selectedGuid.value) {
     const n = mapsFor(d).length;
@@ -1065,14 +1102,14 @@ function deviceLine(d: DeviceInfo): string {
           <template v-for="d in props.devices" :key="d.index">
             <div
               class="dev"
-              :class="{ on: d.sdl_guid === selectedGuid, dim: !d.sc_product_guid }"
+              :class="{ on: d.sdl_guid === selectedGuid, dim: !d.hardware_id }"
               @click="selectDevice(d)"
             >
-              <div class="dev-name">{{ d.sc_name ?? d.sdl_name }}</div>
+              <div class="dev-name">{{ displayName(d) }}</div>
               <div class="dev-line">{{ deviceLine(d) }}</div>
             </div>
 
-            <div v-if="d.sdl_guid === selectedGuid && d.sc_product_guid" class="maps">
+            <div v-if="d.sdl_guid === selectedGuid && d.hardware_id" class="maps">
               <div
                 v-for="s in deviceMaps"
                 :key="s.id"
@@ -1145,7 +1182,7 @@ function deviceLine(d: DeviceInfo): string {
           <div v-for="d in props.devices" :key="d.index" class="log-dev">
             <div class="log-line">
               <span class="log-key">#{{ d.index }}</span>
-              <span class="log-name">{{ d.sc_name ?? "—" }}</span>
+              <span class="log-name">{{ displayName(d) }}</span>
             </div>
             <div v-for="[k, v] in deviceRows(d)" :key="k" class="log-kv">
               <span class="log-dim">{{ k }}</span>

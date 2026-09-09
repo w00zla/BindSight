@@ -3,8 +3,9 @@
 //!
 //!     cargo run --example enum_joysticks
 //!
-//! Thin wrapper around `bindsight_lib::input::list_joysticks` — the same code
-//! path the Tauri `list_joysticks` command uses. The SC Product GUID printed
+//! Thin wrapper around `bindsight_lib::input::enumerate` — the same code path
+//! the Tauri `list_devices` command's device list is built from (minus the
+//! synthetic keyboard the app appends). The SC Product GUID printed
 //! here is derived from the SDL GUID and should line up with SC's
 //! `options/@Product` value.
 

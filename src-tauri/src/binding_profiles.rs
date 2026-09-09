@@ -31,7 +31,8 @@ pub struct BindingProfileSummary {
     /// The `profileName` the export was saved under, or the file stem if
     /// that attribute is missing/blank.
     pub name: String,
-    /// Joystick bindings in the binding profile, per [`bindings::resolve_bindings`].
+    /// Bindings in the binding profile across all devices, per
+    /// [`bindings::resolve_bindings`].
     pub bindings: usize,
     /// File mtime, unix seconds; 0 if unknown.
     pub modified: u64,
@@ -220,7 +221,8 @@ mod tests {
     }
 
     /// A minimal export-shaped layout: header + one joystick + two joystick
-    /// rebinds + one keyboard rebind (must not count as a joystick binding).
+    /// rebinds + one keyboard rebind (all three count — the summary covers
+    /// every device).
     fn layout_xml(profile_name: &str) -> String {
         format!(
             r#"<ActionMaps version="1" optionsVersion="2" rebindVersion="2" profileName="{profile_name}">
@@ -257,18 +259,24 @@ mod tests {
                     label: Some("Eject".into()),
                     description: None,
                     joystick_default: None,
+                    keyboard_default: None,
+                    gamepad_default: None,
                 },
                 scdata::Action {
                     name: "v_toggle_flight_mode".into(),
                     label: Some("Toggle Flight Mode".into()),
                     description: None,
                     joystick_default: None,
+                    keyboard_default: None,
+                    gamepad_default: None,
                 },
                 scdata::Action {
                     name: "v_open_menu".into(),
                     label: Some("Open Menu".into()),
                     description: None,
                     joystick_default: None,
+                    keyboard_default: None,
+                    gamepad_default: None,
                 },
             ],
         }]
@@ -288,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn summarize_counts_joystick_bindings_only() {
+    fn summarize_counts_bindings_of_every_device() {
         let t = Tmp::new();
         let path = t.path("layout_test_exported.xml");
         fs::write(&path, layout_xml("Test")).unwrap();
@@ -296,7 +304,7 @@ mod tests {
         let s = summarize(&path, &sample_actions()).unwrap();
         assert_eq!(s.file, "layout_test_exported.xml");
         assert_eq!(s.name, "Test");
-        assert_eq!(s.bindings, 2); // js1_button1 + js1_button2, not kb1_space
+        assert_eq!(s.bindings, 3); // js1_button1 + js1_button2 + kb1_space
     }
 
     #[test]
@@ -344,7 +352,7 @@ mod tests {
 
         let s = import(&dir, &src, &sample_actions()).unwrap();
         assert_eq!(s.file, "layout_a_exported.xml");
-        assert_eq!(s.bindings, 2);
+        assert_eq!(s.bindings, 3);
         assert!(dir.join("layout_a_exported.xml").is_file());
 
         // Importing the same file name again is refused.

@@ -30,9 +30,22 @@ import type {
   ScStatus,
   SlotStatus,
 } from "./types";
-import { sameHardware, type HighlightClass, type ImageMap, type ImageMapSummary } from "./imagemap";
+import {
+  inputKey,
+  inputKeyForToken,
+  sameHardware,
+  type HighlightClass,
+  type ImageMap,
+  type ImageMapSummary,
+} from "./imagemap";
+import { KEYBOARD_GUID, startKeyboardCapture } from "./keyboard";
 
 const MAX_EVENTS = 500;
+
+// Sony vendor id: a PlayStation pad defaults to the PlayStation image-map.
+const SONY_VENDOR = 0x054c;
+const PAD_MAP_XBOX = "4b7a2c1e-0001-4000-8000-000000000003";
+const PAD_MAP_PS = "4b7a2c1e-0001-4000-8000-000000000004";
 
 const devices = ref<DeviceInfo[]>([]);
 const events = ref<LoggedInput[]>([]);
@@ -43,6 +56,8 @@ const activeEnv = ref("LIVE");
 const bindings = ref<ResolvedBinding[]>([]);
 const tokens = ref<Record<string, string>>({});
 const currentInput = ref<CurrentInput | null>(null);
+// The last captured key event, handed to the editor (only the webview sees keys).
+const keyInput = ref<JoyInput | null>(null);
 const clash = ref<ClashReport | null>(null);
 // The install's version and game-data load state (updated via `scdata-changed`).
 const scStatus = ref<ScStatus | null>(null);
@@ -72,29 +87,71 @@ const mapChoices = ref<Record<string, string>>({});
 const activeInputs = ref<Record<string, Record<string, HighlightClass>>>({});
 const axisTimers = new Map<string, number>();
 
-function mapsFor(guid: string | null): ImageMapSummary[] {
-  return mapSummaries.value.filter((s) => sameHardware(s.hardware_id, guid));
+function mapsFor(hardwareId: string | null): ImageMapSummary[] {
+  return mapSummaries.value.filter((s) => sameHardware(s.hardware_id, hardwareId));
 }
 
-// The user's pick for this device, else the single/first matching map.
-function chosenMapId(guid: string | null): string | null {
-  const list = mapsFor(guid);
+// The user's pick for this device, else the bundled default for a pad, else
+// the single/first matching map.
+function chosenMapId(d: DeviceInfo | null | undefined): string | null {
+  const hardwareId = d?.hardware_id ?? null;
+  const list = mapsFor(hardwareId);
   if (!list.length) return null;
-  const pick = guid ? mapChoices.value[guid.toLowerCase()] : undefined;
-  return list.find((s) => s.id === pick)?.id ?? list[0].id;
+  const pick = hardwareId ? mapChoices.value[hardwareId.toLowerCase()] : undefined;
+  const chosen = list.find((s) => s.id === pick);
+  if (chosen) return chosen.id;
+  if (d?.kind === "gamepad" && list.some((s) => s.id === PAD_MAP_XBOX) && list.some((s) => s.id === PAD_MAP_PS)) {
+    return d.sdl_vendor === SONY_VENDOR ? PAD_MAP_PS : PAD_MAP_XBOX;
+  }
+  return list[0].id;
 }
 
 function imgSrc(id: string, file: string): string {
   return mapImages.value[`${id}/${file}`] ?? "";
 }
 
+// Devices the stage shows at all: a further pad has no slot, so it has no
+// bindings and no tile, and the user can hide any device by hand.
+function onStage(d: DeviceInfo): boolean {
+  if (d.kind === "gamepad" && d.gamepad_slot === null) return false;
+  return !isStageHidden(d);
+}
+
 const mapViews = computed<ImageMapView[]>(() =>
   devices.value.flatMap((d) => {
-    const id = chosenMapId(d.sc_product_guid);
+    if (!onStage(d)) return [];
+    const id = chosenMapId(d);
     const p = id ? loadedMaps.value[id] : null;
-    return p ? [{ device: d, map: p, options: mapsFor(d.sc_product_guid) }] : [];
+    return p ? [{ device: d, map: p, options: mapsFor(d.hardware_id) }] : [];
   }),
 );
+
+// Devices the user took off the stage, by lowercase hardware id.
+const HIDDEN_KEY = "bindsight.stage.hidden";
+const stageHidden = ref<string[]>([]);
+try {
+  const parsed = JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "[]") as unknown;
+  if (Array.isArray(parsed)) stageHidden.value = parsed.filter((x): x is string => typeof x === "string");
+} catch {
+  /* nothing hidden */
+}
+
+function isStageHidden(d: DeviceInfo): boolean {
+  return !!d.hardware_id && stageHidden.value.includes(d.hardware_id.toLowerCase());
+}
+
+function toggleStageHidden(d: DeviceInfo) {
+  if (!d.hardware_id) return;
+  const id = d.hardware_id.toLowerCase();
+  stageHidden.value = stageHidden.value.includes(id)
+    ? stageHidden.value.filter((x) => x !== id)
+    : [...stageHidden.value, id];
+  try {
+    localStorage.setItem(HIDDEN_KEY, JSON.stringify(stageHidden.value));
+  } catch {
+    /* the choice simply does not persist */
+  }
+}
 
 // Resizable layout: stage height and live-card width, remembered locally.
 const LAYOUT_KEY = "bindsight.layout";
@@ -139,7 +196,7 @@ function resetLive() {
 // Connected, not excluded devices without an image-map (placeholder tiles).
 const stagePlaceholders = computed<DeviceInfo[]>(() =>
   devices.value.filter(
-    (d) => !isIgnored(d.sc_product_guid) && !mapViews.value.some((v) => v.device.index === d.index),
+    (d) => onStage(d) && !isIgnored(d.sc_product_guid) && !mapViews.value.some((v) => v.device.index === d.index),
   ),
 );
 
@@ -155,7 +212,7 @@ async function loadMapImage(id: string, file: string) {
 
 async function loadChosenMaps() {
   for (const d of devices.value) {
-    const id = chosenMapId(d.sc_product_guid);
+    const id = chosenMapId(d);
     if (!id || loadedMaps.value[id]) continue;
     try {
       const p = await invoke<ImageMap>("get_imagemap", { id });
@@ -197,11 +254,11 @@ async function setMode(m: Mode) {
   if (m === "live") await reloadMaps();
 }
 
-async function setMapChoice(guid: string | null, id: string) {
-  if (!guid) return;
+async function setMapChoice(hardwareId: string | null, id: string) {
+  if (!hardwareId) return;
   try {
     const cfg = await invoke<{ imagemap_choices: Record<string, string> }>("set_imagemap_choice", {
-      hardwareId: guid,
+      hardwareId,
       imagemapId: id || null,
     });
     mapChoices.value = cfg.imagemap_choices;
@@ -234,30 +291,25 @@ function activeFor(guid: string): Map<string, HighlightClass> {
   return m;
 }
 
-// Image-map input key for an SC token on a device. Undoes the +1 offset of
-// button/hat numbering; axes go through the device's HID-derived axis names
-// (`js2_rotz` -> the SDL index whose name is `rotz`).
-function inputKeyForToken(token: string, d: DeviceInfo): string | null {
-  const b = token.match(/^js\d+_button(\d+)$/);
-  if (b) return `button:${Number(b[1]) - 1}`;
-  const h = token.match(/^js\d+_hat(\d+)_(up|down|left|right)$/);
-  if (h) return `hat:${Number(h[1]) - 1}:${h[2]}`;
-  const a = token.match(/^js\d+_([a-z0-9]+)$/);
-  if (a) {
-    const i = d.axes.indexOf(a[1]);
-    if (i >= 0) return `axis:${i}`;
-  }
-  return null;
-}
-
 // Does the map shown for this device (by SDL GUID) have an area for the
 // input? `null` when the device has no image-map.
 function inMap(sdlGuid: string, key: string): boolean | null {
-  const d = devices.value.find((dev) => dev.sdl_guid === sdlGuid);
-  const id = chosenMapId(d?.sc_product_guid ?? null);
+  const id = chosenMapId(deviceOf(sdlGuid));
   const p = id ? loadedMaps.value[id] : null;
   if (!p) return null;
   return p.areas.some((a) => a.input === key);
+}
+
+function deviceOf(sdlGuid: string): DeviceInfo | undefined {
+  return devices.value.find((d) => d.sdl_guid === sdlGuid);
+}
+
+// The connected device a binding belongs to: joysticks by GUID, keyboard and
+// gamepad by kind (SC has exactly one of each).
+function deviceForBinding(b: ResolvedBinding): DeviceInfo | undefined {
+  if (b.device_kind === "keyboard") return devices.value.find((d) => d.kind === "keyboard");
+  if (b.device_kind === "gamepad") return devices.value.find((d) => d.kind === "gamepad" && d.gamepad_slot !== null);
+  return devices.value.find((d) => !!b.device_guid && sameHardware(d.hardware_id, b.device_guid));
 }
 
 // Can a binding in the list be lit on an image-map image? Needs a connected
@@ -269,7 +321,7 @@ function pinTarget(b: ResolvedBinding): { guid: string; key: string } | null {
 
 // Where a binding would light up, or why it cannot.
 function resolvePin(b: ResolvedBinding): { guid: string; key: string } | { reason: string } {
-  const d = devices.value.find((dev) => !!b.device_guid && sameHardware(dev.sc_product_guid, b.device_guid));
+  const d = deviceForBinding(b);
   if (!d) return { reason: `${b.device ?? "Device"} not connected` };
   const key = inputKeyForToken(b.token, d);
   if (!key) return { reason: `${tokenLabel(b.token)}: no SDL axis for it (${d.axes_error ?? "not in HID descriptor"})` };
@@ -299,11 +351,12 @@ function togglePin(b: ResolvedBinding) {
   pinned.value = isPinned(b) ? null : r;
 }
 
-// Buttons stay lit while held, hats until centered, axes pulse.
+// Buttons and keys stay lit while held, hats until centered, axes pulse.
 function trackActive(p: JoyInput) {
-  if (p.kind === "button") {
-    if (p.pressed) setActive(p.guid, `button:${p.index}`, "none");
-    else clearActive(p.guid, (k) => k === `button:${p.index}`);
+  if (p.kind === "button" || p.kind === "padbutton" || p.kind === "key") {
+    const key = p.kind === "button" ? `button:${p.index}` : `${p.kind === "key" ? "key" : "pad"}:${p.name}`;
+    if (p.pressed) setActive(p.guid, key, "none");
+    else clearActive(p.guid, (k) => k === key);
     return;
   }
   if (p.kind === "hat") {
@@ -311,7 +364,7 @@ function trackActive(p: JoyInput) {
     if (p.direction !== "centered") setActive(p.guid, `hat:${p.index}:${p.direction}`, "none");
     return;
   }
-  const key = `axis:${p.index}`;
+  const key = p.kind === "axis" ? `axis:${p.index}` : `pad:${p.name}`;
   setActive(p.guid, key, "none");
   const tk = `${p.guid}#${key}`;
   const prev = axisTimers.get(tk);
@@ -323,6 +376,16 @@ function trackActive(p: JoyInput) {
       axisTimers.delete(tk);
     }, AXIS_PULSE_MS),
   );
+}
+
+// Currently held key/pad-button names per device GUID, most recent first: the
+// modifier candidates for the next press (`kb1_lalt+x`).
+const heldNames = new Map<string, string[]>();
+
+function trackHeld(p: JoyInput) {
+  if (p.kind !== "key" && p.kind !== "padbutton") return;
+  const rest = (heldNames.get(p.guid) ?? []).filter((n) => n !== p.name);
+  heldNames.set(p.guid, p.pressed ? [p.name, ...rest] : rest);
 }
 
 // SC's own display label for a full token, e.g. "js2_button1" -> "Button 1
@@ -337,9 +400,9 @@ function actionmapLabel(name: string): string {
   return actionMaps.value.find((m) => m.name === name)?.label ?? name;
 }
 
-// Is the device recorded for this binding currently connected (matched by GUID)?
+// Is the device recorded for this binding currently connected?
 function isConnected(b: ResolvedBinding): boolean {
-  return !!b.device_guid && devices.value.some((d) => d.sc_product_guid === b.device_guid);
+  return !!deviceForBinding(b);
 }
 
 // SC instance number from a token, e.g. "js2_button9" -> "2".
@@ -347,10 +410,35 @@ function instanceOf(token: string): string {
   return token.match(/^js(\d+)_/)?.[1] ?? "?";
 }
 
+// SC's name for the device a binding sits on: js1, js2, kb1, gp1.
+function deviceLabel(b: ResolvedBinding): string {
+  if (b.device_kind === "keyboard") return "kb1";
+  if (b.device_kind === "gamepad") return "gp1";
+  return `js${b.instance}`;
+}
+
 // Number of bindings assigned to a device.
-function bindingCountFor(guid: string | null): number {
-  if (!guid) return 0;
-  return bindings.value.filter((b) => b.device_guid === guid).length;
+function bindingCountFor(d: DeviceInfo): number {
+  if (d.kind === "keyboard") return bindings.value.filter((b) => b.device_kind === "keyboard").length;
+  if (d.kind === "gamepad") {
+    return d.gamepad_slot === null ? 0 : bindings.value.filter((b) => b.device_kind === "gamepad").length;
+  }
+  if (!d.sc_product_guid) return 0;
+  return bindings.value.filter((b) => b.device_guid === d.sc_product_guid).length;
+}
+
+// The device tile's name: pads carry SDL's controller name.
+function deviceName(d: DeviceInfo): string {
+  if (d.kind === "gamepad") return d.controller_name ?? d.sc_name ?? d.sdl_name;
+  return d.sc_name ?? d.sdl_name;
+}
+
+// SC did not list this device at its last start. The keyboard is always there;
+// a slotted pad rides on the log's xinput line.
+function deviceUnseen(d: DeviceInfo): boolean {
+  if (d.kind === "keyboard") return false;
+  if (d.kind === "gamepad") return d.gamepad_slot !== null && clash.value?.gamepad_seen === false;
+  return isUnseen(d.sc_product_guid);
 }
 
 // Connected-slot status by GUID, from the clash report.
@@ -463,57 +551,102 @@ async function applyResort() {
   }
 }
 
-// Resolve a live button/hat input to its token and bound action(s) and show it.
-// Axes stream events; resolve one per axis at most every AXIS_RESOLVE_MS.
+// Resolve a live input to its token and bound action(s) and show it. Axes
+// stream events; resolve one per axis at most every AXIS_RESOLVE_MS.
 const AXIS_RESOLVE_MS = 150;
 const lastAxisResolve = new Map<string, number>();
-function axisDue(guid: string, index: number): boolean {
-  const k = `${guid}#${index}`;
+function axisDue(guid: string, key: string): boolean {
+  const k = `${guid}#${key}`;
   const now = Date.now();
   if (now - (lastAxisResolve.get(k) ?? 0) < AXIS_RESOLVE_MS) return false;
   lastAxisResolve.set(k, now);
   return true;
 }
 
-async function showBinding(
-  guid: string,
-  kind: "button" | "hat" | "axis",
-  index: number,
-  direction: string | null,
-) {
+interface InputResolution {
+  token: string | null;
+  actions: BoundAction[];
+}
+
+async function showBinding(p: JoyInput) {
+  const key = inputKey(p);
+  if (!key) return;
   try {
-    const res = await invoke<{ token: string | null; actions: BoundAction[] }>("resolve_input", {
-      guid,
-      kind,
-      index,
-      direction,
-    });
-    const key = kind === "button" ? `button:${index}` : kind === "axis" ? `axis:${index}` : `hat:${index}:${direction}`;
-    currentInput.value = {
-      device: nameFor(guid),
-      sc_guid: devices.value.find((d) => d.sdl_guid === guid)?.sc_product_guid ?? null,
-      token: res.token,
-      sdl: sdlInputName(kind, index, direction),
-      actions: res.actions,
-      in_imagemap: inMap(guid, key),
-    };
-    if (res.actions.length && currentInput.value.in_imagemap === false) {
-      // One toast per input while it is on screen — hammering a button
-      // must not stack them.
-      const tk = `${guid}#${key}`;
-      const now = Date.now();
-      if (lastMissingToast.key !== tk || now - lastMissingToast.at > TOAST_MS) {
-        lastMissingToast = { key: tk, at: now };
-        notify(`No area for ${res.token ? tokenLabel(res.token) : currentInput.value.sdl}`, "error");
-      }
+    if (p.kind === "button" || p.kind === "axis" || p.kind === "hat") {
+      const res = await invoke<InputResolution>("resolve_input", {
+        guid: p.guid,
+        kind: p.kind,
+        index: p.index,
+        direction: p.kind === "hat" ? p.direction : null,
+      });
+      applyResolution(p, key, res);
+      return;
     }
-    // Upgrade the image-map highlight to blue when SC has a binding — but only
-    // while the input is still held (the resolve is async).
-    if (activeInputs.value[guid]?.[key] !== undefined) {
-      setActive(guid, key, res.actions.length ? "bound" : "none");
-    }
+    // Keyboard and gamepad: SC folds modifiers into the token, so ask for the
+    // combos with the other held names first and fall back to the plain token.
+    const prefix = p.kind === "key" ? "kb1" : "gp1";
+    const others = (heldNames.get(p.guid) ?? []).filter((n) => n !== p.name);
+    const candidates = [...others.map((n) => `${prefix}_${n}+${p.name}`), `${prefix}_${p.name}`];
+    applyResolution(p, key, await invoke<InputResolution>("resolve_tokens", { candidates }));
   } catch {
     /* ignore transient resolve errors */
+  }
+}
+
+function applyResolution(p: JoyInput, key: string, res: InputResolution) {
+  const d = deviceOf(p.guid);
+  currentInput.value = {
+    device: d ? deviceName(d) : p.guid,
+    kind: d?.kind ?? "joystick",
+    sc_guid: d?.sc_product_guid ?? null,
+    token: res.token,
+    sdl: sdlInputName(p),
+    actions: res.actions,
+    in_imagemap: inMap(p.guid, key),
+  };
+  if (res.actions.length && currentInput.value.in_imagemap === false) {
+    // One toast per input while it is on screen — hammering a button
+    // must not stack them.
+    const tk = `${p.guid}#${key}`;
+    const now = Date.now();
+    if (lastMissingToast.key !== tk || now - lastMissingToast.at > TOAST_MS) {
+      lastMissingToast = { key: tk, at: now };
+      notify(`No area for ${res.token ? tokenLabel(res.token) : currentInput.value.sdl}`, "error");
+    }
+  }
+  // Upgrade the image-map highlight to blue when SC has a binding — but only
+  // while the input is still held (the resolve is async).
+  if (activeInputs.value[p.guid]?.[key] !== undefined) {
+    setActive(p.guid, key, res.actions.length ? "bound" : "none");
+  }
+}
+
+// One path for every live input, whatever made it: the raw log collects in
+// every mode, the editor owns the input while an image-map is being edited.
+function onInput(p: JoyInput) {
+  events.value.unshift({ ...p, at: Date.now() });
+  if (events.value.length > MAX_EVENTS) events.value.pop();
+  trackHeld(p);
+  if (p.kind === "key") keyInput.value = p;
+  if (mode.value !== "live") return;
+  trackActive(p);
+  // A pad without a slot is not gp1 — SC has no bindings for it.
+  if ((p.kind === "padbutton" || p.kind === "padaxis") && deviceOf(p.guid)?.gamepad_slot === null) return;
+  switch (p.kind) {
+    case "button":
+    case "padbutton":
+    case "key":
+      if (p.pressed) showBinding(p);
+      break;
+    case "hat":
+      if (p.direction !== "centered") showBinding(p);
+      break;
+    case "axis":
+      if (axisDue(p.guid, `axis:${p.index}`)) showBinding(p);
+      break;
+    case "padaxis":
+      if (axisDue(p.guid, `pad:${p.name}`)) showBinding(p);
+      break;
   }
 }
 
@@ -582,7 +715,7 @@ async function onScDataChanged(s: LoadStatus) {
   if (s.sc.error) {
     notify(s.sc.error, "error");
   } else if (s.loaded) {
-    notify(`Loaded ${s.bindings.length} joystick binding(s)`, "ok");
+    notify(`Loaded ${s.bindings.length} binding(s)`, "ok");
   } else {
     notify(s.error ?? "Load failed", "error");
   }
@@ -594,7 +727,7 @@ async function refresh() {
   loading.value = true;
   error.value = null;
   try {
-    devices.value = await invoke<DeviceInfo[]>("list_joysticks");
+    devices.value = await invoke<DeviceInfo[]>("list_devices");
     const s = await invoke<LoadStatus>("reload");
     takeStatus(s);
   } catch (e) {
@@ -610,57 +743,61 @@ async function refresh() {
 // devices-changed per device at startup, and the install did not change).
 async function refreshDevices() {
   try {
-    devices.value = await invoke<DeviceInfo[]>("list_joysticks");
+    devices.value = await invoke<DeviceInfo[]>("list_devices");
   } catch (e) {
     error.value = String(e);
   }
   await loadClash();
 }
 
-function nameFor(guid: string): string {
-  const d = devices.value.find((dev) => dev.sdl_guid === guid);
-  return d?.sc_name ?? guid;
-}
-
-// SDL-side name of a live input, e.g. "button 5", "axis 2" or "hat 0 up".
-function sdlInputName(kind: "button" | "hat" | "axis", index: number, direction: string | null): string {
-  if (kind === "hat") return `hat ${index} ${direction ?? ""}`.trim();
-  return `${kind} ${index}`;
+// SDL-side name of a live input, e.g. "button 5", "hat 0 up", "key lshift".
+function sdlInputName(p: JoyInput): string {
+  switch (p.kind) {
+    case "hat":
+      return `hat ${p.index} ${p.direction}`.trim();
+    case "key":
+      return `key ${p.name}`;
+    case "padbutton":
+    case "padaxis":
+      return `pad ${p.name}`;
+    default:
+      return `${p.kind} ${p.index}`;
+  }
 }
 
 // Live card colour: yellow when SC doesn't see the device (unseen or excluded
 // — any SC token is meaningless then), blue when the input has SC bindings,
-// grey otherwise.
+// grey otherwise. The keyboard is always there for SC.
 function liveState(): "unseen" | "bound" | "none" {
   const c = currentInput.value;
   if (!c) return "none";
-  if (isIgnored(c.sc_guid) || isUnseen(c.sc_guid)) return "unseen";
+  if (c.kind === "joystick" && (isIgnored(c.sc_guid) || isUnseen(c.sc_guid))) return "unseen";
+  if (c.kind === "gamepad" && (isIgnored(c.sc_guid) || clash.value?.gamepad_seen === false)) return "unseen";
   return c.actions.length ? "bound" : "none";
 }
 
 
 let unlisten: UnlistenFn[] = [];
+let stopKeyboard: (() => void) | null = null;
+
+// Keys are captured in Monitor mode, and in Devices mode while the editor has
+// the keyboard selected — never over a dialog, where they are typing.
+function keyboardActive(): boolean {
+  if (showSettings.value) return false;
+  if (mode.value === "live") return true;
+  if (mode.value !== "devices") return false;
+  return !editor.value?.confirmOpen && editor.value?.selectedGuid === KEYBOARD_GUID;
+}
+
+// A pad button held while the window loses focus would stay a modifier.
+function clearHeld() {
+  heldNames.clear();
+}
 
 onMounted(async () => {
-  unlisten.push(
-    await listen<JoyInput>("joy-input", (e) => {
-      const p = e.payload;
-      // The raw log collects in every mode (shown in Devices).
-      events.value.unshift({ ...p, at: Date.now() });
-      if (events.value.length > MAX_EVENTS) events.value.pop();
-      // The editor owns the input while an image-map is being edited.
-      if (mode.value !== "live") return;
-      trackActive(p);
-
-      if (p.kind === "button" && p.pressed) {
-        showBinding(p.guid, "button", p.index, null);
-      } else if (p.kind === "hat" && p.direction !== "centered") {
-        showBinding(p.guid, "hat", p.index, p.direction);
-      } else if (p.kind === "axis" && axisDue(p.guid, p.index)) {
-        showBinding(p.guid, "axis", p.index, null);
-      }
-    }),
-  );
+  stopKeyboard = startKeyboardCapture(onInput, keyboardActive);
+  window.addEventListener("blur", clearHeld);
+  unlisten.push(await listen<JoyInput>("joy-input", (e) => onInput(e.payload)));
   unlisten.push(
     await listen("devices-changed", async () => {
       await refreshDevices();
@@ -697,6 +834,9 @@ onMounted(async () => {
 onUnmounted(() => {
   unlisten.forEach((fn) => fn());
   unlisten = [];
+  stopKeyboard?.();
+  stopKeyboard = null;
+  window.removeEventListener("blur", clearHeld);
   axisTimers.forEach((t) => clearTimeout(t));
   axisTimers.clear();
 });
@@ -736,8 +876,10 @@ onUnmounted(() => {
           :device="d"
           :slot="slotFor(d.sc_product_guid)"
           :ignored="isIgnored(d.sc_product_guid)"
-          :unseen="isUnseen(d.sc_product_guid)"
-          :bindingCount="bindingCountFor(d.sc_product_guid)"
+          :unseen="deviceUnseen(d)"
+          :bindingCount="bindingCountFor(d)"
+          :hidden="isStageHidden(d)"
+          @toggleMap="toggleStageHidden(d)"
         />
         <div v-if="!devices.length" class="tile-none">None</div>
         </div>
@@ -775,7 +917,7 @@ onUnmounted(() => {
           :currentToken="currentInput?.token ?? null"
           :tokenLabel="tokenLabel"
           :categoryLabel="actionmapLabel"
-          :instanceOf="instanceOf"
+          :deviceLabel="deviceLabel"
           :isClash="bindingClash"
           :isConnected="isConnected"
           :isMissing="missingInMap"
@@ -799,6 +941,7 @@ onUnmounted(() => {
       ref="editor"
       :devices="devices"
       :events="events"
+      :keyInput="keyInput"
       @notify="notify"
       @saved="onMapsSaved"
       @clear-log="events = []"

@@ -35,7 +35,8 @@ pub struct BackupSummary {
     pub id: String,
     pub created: u64,
     pub reason: String,
-    /// Joystick bindings in the backed-up file, per [`binding_profiles::summarize`].
+    /// Bindings in the backed-up file across all devices, per
+    /// [`binding_profiles::summarize`].
     pub bindings: usize,
 }
 
@@ -263,7 +264,8 @@ mod tests {
     }
 
     /// A minimal actionmaps-shaped XML: one joystick + two joystick rebinds +
-    /// one keyboard rebind (must not count as a joystick binding).
+    /// one keyboard rebind (all three count — the summary covers every
+    /// device).
     fn actionmaps_xml() -> String {
         r#"<ActionMaps version="1" optionsVersion="2" rebindVersion="2">
  <options type="joystick" instance="1" Product="Stick {0200231D-0000-0000-0000-504944564944}"/>
@@ -293,18 +295,24 @@ mod tests {
                     label: Some("Eject".into()),
                     description: None,
                     joystick_default: None,
+                    keyboard_default: None,
+                    gamepad_default: None,
                 },
                 scdata::Action {
                     name: "v_toggle_flight_mode".into(),
                     label: Some("Toggle Flight Mode".into()),
                     description: None,
                     joystick_default: None,
+                    keyboard_default: None,
+                    gamepad_default: None,
                 },
                 scdata::Action {
                     name: "v_open_menu".into(),
                     label: Some("Open Menu".into()),
                     description: None,
                     joystick_default: None,
+                    keyboard_default: None,
+                    gamepad_default: None,
                 },
             ],
         }]
@@ -338,7 +346,7 @@ mod tests {
 
         let s = create(&root, &am, "  before Fix via config  ", &sample_actions()).unwrap();
         assert_eq!(s.reason, "before Fix via config");
-        assert_eq!(s.bindings, 2); // js1_button1 + js1_button2, not kb1_space
+        assert_eq!(s.bindings, 3); // js1_button1 + js1_button2 + kb1_space
         assert!(root.join(&s.id).join(XML_FILE).is_file());
         assert_eq!(fs::read_to_string(root.join(&s.id).join(XML_FILE)).unwrap(), actionmaps_xml());
 
@@ -391,7 +399,7 @@ mod tests {
         assert_eq!(found[0].id, "20240101-000000");
         assert_eq!(found[1].id, "20230101-000000");
         for s in &found {
-            assert_eq!(s.bindings, 2);
+            assert_eq!(s.bindings, 3);
         }
 
         assert!(list(&t.path("missing"), &sample_actions()).is_empty());

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import Icon from "./Icon.vue";
 import type { DeviceInfo, SlotStatus } from "../types";
 
 const props = defineProps<{
@@ -8,32 +9,67 @@ const props = defineProps<{
   ignored: boolean;
   unseen: boolean;
   bindingCount: number;
+  // Taken off the image stage by the user.
+  hidden: boolean;
 }>();
+const emit = defineEmits<{ toggleMap: [] }>();
 
-const dimmed = computed(() => props.ignored || props.unseen);
+// A further pad holds no SC slot: it cannot carry bindings.
+const noSlot = computed(() => props.device.kind === "gamepad" && props.device.gamepad_slot === null);
+const dimmed = computed(() => props.ignored || props.unseen || noSlot.value);
 
 // dot: filled ok = seen with no clash, filled warn = clash, hollow otherwise.
 const dotState = computed<"ok" | "warn" | "hollow">(() => {
   if (dimmed.value) return "hollow";
+  if (props.device.kind !== "joystick") return "ok";
   if (props.slot?.clash) return "warn";
   if (props.slot) return "ok";
   return "hollow";
 });
 
-const statusText = computed(() => {
-  if (props.ignored) return "excluded";
-  if (props.unseen) return "not seen by SC";
-  return `${props.bindingCount} bindings · ${props.device.num_buttons} btn · ${props.device.num_axes} axes · ${props.device.num_hats} hats`;
+// SC's fixed instance chip for the keyboard and the slotted pad.
+const kindChip = computed(() => {
+  if (props.device.kind === "keyboard") return "kb1";
+  return props.device.kind === "gamepad" && !noSlot.value ? "gp1" : null;
 });
+
+const name = computed(() => {
+  const d = props.device;
+  return d.kind === "gamepad" ? (d.controller_name ?? d.sc_name ?? d.sdl_name) : (d.sc_name ?? d.sdl_name);
+});
+
+const state = computed(() => {
+  const d = props.device;
+  if (props.ignored) return "excluded";
+  if (noSlot.value) return "no slot";
+  if (props.unseen) return "not seen by SC";
+  const counts =
+    d.kind === "keyboard" ? [] : [`${d.num_buttons} btn`, `${d.num_axes} axes`, `${d.num_hats} hats`];
+  return [`${props.bindingCount} bindings`, ...counts].join(" · ");
+});
+
+const statusText = computed(() => (props.hidden ? `${state.value} · hidden` : state.value));
 </script>
 
 <template>
   <div class="tile" :class="{ clash: slot?.clash }" :style="{ opacity: dimmed ? 0.55 : 1 }">
     <div class="row1">
       <span class="dot" :class="dotState" />
-      <span class="name">{{ device.sc_name ?? device.sdl_name }}</span>
-      <span v-if="slot?.clash" class="chip clash-chip mono">js{{ slot.stored_instance }} → js{{ slot.effective_instance }}</span>
-      <span v-else-if="slot" class="chip mono">js{{ slot.effective_instance }}</span>
+      <span class="name">{{ name }}</span>
+      <template v-if="device.kind === 'joystick'">
+        <span v-if="slot?.clash" class="chip clash-chip mono">js{{ slot.stored_instance }} → js{{ slot.effective_instance }}</span>
+        <span v-else-if="slot" class="chip mono">js{{ slot.effective_instance }}</span>
+      </template>
+      <span v-else-if="kindChip" class="chip mono">{{ kindChip }}</span>
+      <button
+        v-if="device.hardware_id"
+        type="button"
+        class="eye"
+        :title="hidden ? 'Show on stage' : 'Hide from stage'"
+        @click="emit('toggleMap')"
+      >
+        <Icon :name="hidden ? 'eye-off' : 'eye'" :size="14" />
+      </button>
     </div>
     <div class="row2">{{ statusText }}</div>
   </div>
@@ -112,5 +148,25 @@ const statusText = computed(() => {
 .row2 {
   font-size: 13px;
   color: var(--text-2);
+}
+
+/* Sized to the row so the button does not stretch the tile. */
+.eye {
+  width: 16px;
+  height: 16px;
+  line-height: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.eye:hover {
+  color: var(--accent);
 }
 </style>

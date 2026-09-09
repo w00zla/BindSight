@@ -37,6 +37,8 @@ export const ICONS = {
   history: '<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/>',
   compare: '<path d="M12 3v18"/><rect x="3" y="6" width="6" height="12" rx="1"/><rect x="15" y="6" width="6" height="12" rx="1"/>',
   'arrow-right': '<path d="M4 12h14M13 6l6 6-6 6"/>',
+  eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
+  'eye-off': '<path d="M10.6 6.2A9.9 9.9 0 0 1 12 6c6.4 0 10 7 10 7a17 17 0 0 1-3 3.8"/><path d="M6.6 7.6A17 17 0 0 0 2 13s3.6 7 10 7a9.8 9.8 0 0 0 4.5-1.1"/><path d="M9.9 10.9a3 3 0 0 0 4.2 4.2"/><path d="M3 3l18 18"/>',
   'shape-rect': '<rect x="4" y="5" width="16" height="14" rx="1"/>',
   'shape-ellipse': '<ellipse cx="12" cy="12" rx="8" ry="6"/>',
   'shape-polygon': '<path d="M12 3l8 6-3 10H7L4 9z"/>',

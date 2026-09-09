@@ -1,8 +1,9 @@
-//! Compare the joystick bindings of two sources — the live `actionmaps.xml`,
-//! an exported binding profile, or a backup — by SC token (`js1_button5`,
-//! `js2_rotz`, …). For each token, the set of actions bound to it (identified
-//! by `(actionmap, action)`, a label difference alone never counts) is
-//! compared between the two sides; only tokens that differ are reported.
+//! Compare the bindings of two sources — the live `actionmaps.xml`, an
+//! exported binding profile, or a backup — by SC token (`js1_button5`,
+//! `js2_rotz`, `kb1_lalt+x`, `gp1_a`, …). For each token, the set of actions
+//! bound to it (identified by `(actionmap, action)`, a label difference alone
+//! never counts) is compared between the two sides; only tokens that differ
+//! are reported. Rows are grouped joystick first, then keyboard, then gamepad.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -14,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
 use crate::bindings::{self, ResolvedBinding};
+use crate::scdata::DeviceKind;
 use crate::{backups, binding_profiles, config, scdata, AppData};
 
 /// One action a token is bound to, for display in a diff row. Equality for
@@ -42,8 +44,11 @@ pub enum DiffKind {
 #[derive(Debug, Clone, Serialize)]
 pub struct DiffRow {
     pub token: String,
-    /// The `N` in `jsN_...`, or `None` for a token with no `js` prefix.
+    /// The `N` in `jsN_...`, `1` for a `kb1_`/`gp1_` token, or `None` for a
+    /// token with no recognisable device prefix.
     pub instance: Option<u32>,
+    /// Which device the token belongs to (joystick for an unrecognised one).
+    pub device_kind: DeviceKind,
     pub kind: DiffKind,
     /// Actions bound to this token in A, sorted by `(actionmap, action)`.
     pub a: Vec<ActionRef>,
@@ -54,8 +59,9 @@ pub struct DiffRow {
 /// Result of comparing two binding sets.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct DiffReport {
-    /// Sorted by token: `jsN` ascending, then by input kind/number within a
-    /// device (numeric-aware, so `button2` sorts before `button10`).
+    /// Sorted by token: joystick rows first, then keyboard, then gamepad;
+    /// within a device by instance ascending, then by input kind/number
+    /// (numeric-aware, so `button2` sorts before `button10`).
     pub rows: Vec<DiffRow>,
     pub added: usize,
     pub removed: usize,
@@ -96,20 +102,36 @@ fn group(bindings: &[ResolvedBinding]) -> BTreeMap<String, Vec<ActionRef>> {
     map
 }
 
-/// The `N` in a `jsN_...` token, or `None` if it has no `js` prefix.
-fn instance_of(token: &str) -> Option<u32> {
-    let rest = token.strip_prefix("js")?;
-    let (num, _) = rest.split_once('_')?;
-    num.parse().ok()
+/// Split a full SC token into its device, instance and the rest: `js2_rotz` ->
+/// `(Joystick, 2, "rotz")`, `kb1_lalt+x` -> `(Keyboard, 1, "lalt+x")`. `None`
+/// for a token with no recognisable device prefix.
+fn split_token(token: &str) -> Option<(DeviceKind, u32, &str)> {
+    for kind in [DeviceKind::Joystick, DeviceKind::Keyboard, DeviceKind::Gamepad] {
+        let Some(rest) = token.strip_prefix(kind.token_prefix()) else { continue };
+        let Some((num, rest)) = rest.split_once('_') else { continue };
+        if let Ok(instance) = num.parse::<u32>() {
+            return Some((kind, instance, rest));
+        }
+    }
+    None
 }
 
-/// The part of a token after its `jsN_` prefix, or the whole token if it has
+/// The `N` in a `jsN_`/`kb1_`/`gp1_` token, or `None` if it has no device
+/// prefix.
+fn instance_of(token: &str) -> Option<u32> {
+    split_token(token).map(|(_, instance, _)| instance)
+}
+
+/// The device a token belongs to; an unrecognised token counts as a joystick
+/// one so it keeps sorting with the joystick rows as it always did.
+fn kind_of(token: &str) -> DeviceKind {
+    split_token(token).map_or(DeviceKind::Joystick, |(kind, _, _)| kind)
+}
+
+/// The part of a token after its device prefix, or the whole token if it has
 /// none.
 fn rest_of(token: &str) -> &str {
-    match token.strip_prefix("js").and_then(|r| r.split_once('_')) {
-        Some((num, rest)) if num.parse::<u32>().is_ok() => rest,
-        _ => token,
-    }
+    split_token(token).map_or(token, |(_, _, rest)| rest)
 }
 
 /// Numeric-aware string compare: alternating digit/non-digit runs, digit runs
@@ -154,15 +176,18 @@ fn take_digits(it: &mut std::iter::Peekable<std::str::Chars>) -> u64 {
     s.parse().unwrap_or(0)
 }
 
-/// Row order: by `jsN` instance ascending (tokens without one sort last),
-/// then numeric-aware by the rest of the token.
+/// Row order: joystick rows first, then keyboard, then gamepad; within a
+/// device by instance ascending (tokens without one sort last), then
+/// numeric-aware by the rest of the token.
 fn compare_tokens(a: &str, b: &str) -> Ordering {
-    match (instance_of(a), instance_of(b)) {
-        (Some(x), Some(y)) if x != y => x.cmp(&y),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        _ => natural_cmp(rest_of(a), rest_of(b)),
-    }
+    kind_of(a)
+        .cmp(&kind_of(b))
+        .then_with(|| match (instance_of(a), instance_of(b)) {
+            (Some(x), Some(y)) if x != y => x.cmp(&y),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            _ => natural_cmp(rest_of(a), rest_of(b)),
+        })
 }
 
 /// Compare two resolved binding sets by token. Only tokens whose action sets
@@ -199,7 +224,14 @@ pub fn diff_bindings(a: &[ResolvedBinding], b: &[ResolvedBinding]) -> DiffReport
             DiffKind::Changed
         };
 
-        rows.push(DiffRow { token: token.clone(), instance: instance_of(token), kind, a: a_actions, b: b_actions });
+        rows.push(DiffRow {
+            token: token.clone(),
+            instance: instance_of(token),
+            device_kind: kind_of(token),
+            kind,
+            a: a_actions,
+            b: b_actions,
+        });
     }
 
     rows.sort_by(|x, y| compare_tokens(&x.token, &y.token));
@@ -274,6 +306,8 @@ mod tests {
             token: token.to_string(),
             device: None,
             device_guid: None,
+            device_kind: kind_of(token),
+            instance: instance_of(token).unwrap_or(1),
             actionmap: actionmap.to_string(),
             action: action.to_string(),
             label: None,
@@ -363,12 +397,35 @@ mod tests {
     }
 
     #[test]
-    fn instance_is_parsed_from_the_js_prefix() {
-        let a = vec![rb("js12_button1", "m", "a"), rb("kb1_a", "m", "b")];
+    fn instance_and_kind_are_parsed_from_the_device_prefix() {
+        let a = vec![
+            rb("js12_button1", "m", "a"),
+            rb("kb1_lalt+x", "m", "b"),
+            rb("gp1_a", "m", "c"),
+            rb("weird", "m", "d"),
+        ];
         let report = diff_bindings(&a, &[]);
-        let by_token = |t: &str| report.rows.iter().find(|r| r.token == t).unwrap().instance;
-        assert_eq!(by_token("js12_button1"), Some(12));
-        assert_eq!(by_token("kb1_a"), None);
+        let row = |t: &str| report.rows.iter().find(|r| r.token == t).unwrap();
+        assert_eq!((row("js12_button1").instance, row("js12_button1").device_kind), (Some(12), DeviceKind::Joystick));
+        assert_eq!((row("kb1_lalt+x").instance, row("kb1_lalt+x").device_kind), (Some(1), DeviceKind::Keyboard));
+        assert_eq!((row("gp1_a").instance, row("gp1_a").device_kind), (Some(1), DeviceKind::Gamepad));
+        // An unrecognisable token keeps the old behaviour: no instance.
+        assert_eq!((row("weird").instance, row("weird").device_kind), (None, DeviceKind::Joystick));
+    }
+
+    #[test]
+    fn rows_group_joystick_then_keyboard_then_gamepad() {
+        let a = vec![
+            rb("gp1_a", "m", "pad"),
+            rb("kb1_b", "m", "key_b"),
+            rb("js2_x", "m", "throttle"),
+            rb("kb1_a", "m", "key_a"),
+            rb("js1_button2", "m", "b2"),
+            rb("js1_button10", "m", "b10"),
+        ];
+        let report = diff_bindings(&a, &[]);
+        let tokens: Vec<&str> = report.rows.iter().map(|r| r.token.as_str()).collect();
+        assert_eq!(tokens, vec!["js1_button2", "js1_button10", "js2_x", "kb1_a", "kb1_b", "gp1_a"]);
     }
 
     #[test]
@@ -392,6 +449,8 @@ mod tests {
                 label: Some("Eject".into()),
                 description: None,
                 joystick_default: None,
+                keyboard_default: None,
+                gamepad_default: None,
             }],
         }];
 

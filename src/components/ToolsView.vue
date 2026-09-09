@@ -247,20 +247,35 @@ async function deleteBackup(b: BackupSummary) {
 // --- diff filters ----------------------------------------------------------
 
 const kindFilter = ref<DiffKind | "all">("all");
-const instanceFilter = ref<number[]>([]);
+const deviceFilter = ref<string[]>([]);
 const search = ref("");
 
-// Joystick instances present in the report, ascending.
-const instances = computed<number[]>(() => {
-  const set = new Set<number>();
-  for (const r of report.value?.rows ?? []) if (r.instance !== null) set.add(r.instance);
-  return [...set].sort((a, b) => a - b);
+// SC's own device order: the joysticks by instance, then keyboard, then gamepad.
+const KIND_RANK: Record<DiffRow["device_kind"], number> = { joystick: 0, keyboard: 1, gamepad: 2 };
+
+function deviceRank(r: DiffRow): number {
+  return KIND_RANK[r.device_kind] * 100 + (r.instance ?? -1);
+}
+
+// SC's device name for a row: js1, js2, kb1, gp1 — or "—" for a token whose
+// device the backend could not name.
+function deviceLabel(r: DiffRow): string {
+  if (r.device_kind === "keyboard") return "kb1";
+  if (r.device_kind === "gamepad") return "gp1";
+  return r.instance === null ? "—" : `js${r.instance}`;
+}
+
+// Distinct devices present in the report, in SC's order.
+const deviceLabels = computed<string[]>(() => {
+  const seen = new Map<string, number>();
+  for (const r of report.value?.rows ?? []) seen.set(deviceLabel(r), deviceRank(r));
+  return [...seen.entries()].sort((a, b) => a[1] - b[1]).map(([label]) => label);
 });
 
-function toggleInstance(n: number) {
-  instanceFilter.value = instanceFilter.value.includes(n)
-    ? instanceFilter.value.filter((x) => x !== n)
-    : [...instanceFilter.value, n];
+function toggleDevice(label: string) {
+  deviceFilter.value = deviceFilter.value.includes(label)
+    ? deviceFilter.value.filter((x) => x !== label)
+    : [...deviceFilter.value, label];
 }
 
 function refText(r: ActionRef): string {
@@ -294,7 +309,7 @@ function cellValue(r: DiffRow, key: string): string | number {
     case "sign":
       return r.kind;
     case "device":
-      return r.instance ?? -1;
+      return deviceRank(r);
     case "input":
       return inputPart(r.token);
     case "action":
@@ -310,7 +325,7 @@ const filteredRows = computed<DiffRow[]>(() => {
   const q = search.value.trim().toLowerCase();
   const rows = (report.value?.rows ?? []).filter((r) => {
     if (kindFilter.value !== "all" && r.kind !== kindFilter.value) return false;
-    if (instanceFilter.value.length && (r.instance === null || !instanceFilter.value.includes(r.instance))) return false;
+    if (deviceFilter.value.length && !deviceFilter.value.includes(deviceLabel(r))) return false;
     return !q || haystack(r).includes(q);
   });
   return sortRows(rows, cols.sort.value, cellValue, (a, b) => collator.compare(a.token, b.token));
@@ -328,9 +343,9 @@ function cellText(refs: ActionRef[]): string {
 
 const SIGNS: Record<DiffKind, string> = { added: "+", removed: "−", changed: "~" };
 
-// Input token without its jsN_ prefix, e.g. "js1_button5" -> "button5".
+// Input token without its device prefix, e.g. "js1_button5" -> "button5".
 function inputPart(token: string): string {
-  return token.replace(/^js\d+_/, "");
+  return token.replace(/^(js\d+|kb1|gp1)_/, "");
 }
 
 const sameSource = computed(() => aKey.value === bKey.value);
@@ -503,17 +518,17 @@ onMounted(async () => {
             ~{{ report?.changed ?? 0 }}
           </button>
         </div>
-        <div v-if="instances.length" class="divider" />
-        <div v-if="instances.length" class="chips">
+        <div v-if="deviceLabels.length" class="divider" />
+        <div v-if="deviceLabels.length" class="chips">
           <button
-            v-for="n in instances"
-            :key="n"
+            v-for="label in deviceLabels"
+            :key="label"
             type="button"
             class="chip mono"
-            :class="{ active: instanceFilter.includes(n) }"
-            @click="toggleInstance(n)"
+            :class="{ active: deviceFilter.includes(label) }"
+            @click="toggleDevice(label)"
           >
-            js{{ n }}
+            {{ label }}
           </button>
         </div>
         <div class="search">
@@ -532,7 +547,7 @@ onMounted(async () => {
         />
         <div v-for="r in filteredRows" :key="r.token" class="row diff-row" :class="r.kind">
           <span class="sign">{{ SIGNS[r.kind] }}</span>
-          <span class="mono dim">{{ r.instance === null ? "—" : `js${r.instance}` }}</span>
+          <span class="mono dim">{{ deviceLabel(r) }}</span>
           <span class="mono dim" :title="r.token">{{ inputPart(r.token) }}</span>
           <span>{{ rowAction(r) }}</span>
           <span :class="r.a.length ? 'side' : 'empty'">{{ cellText(r.a) }}</span>

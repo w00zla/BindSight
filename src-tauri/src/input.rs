@@ -1,31 +1,56 @@
-//! Joystick input via the SDL raw joystick API (not the GameController
-//! abstraction).
+//! Live device input via SDL: the raw joystick API for sticks and throttles,
+//! the GameController API for gamepads.
 //!
 //! A single background thread owns the one SDL context (rust-sdl2 allows only
-//! one at a time), keeps every connected joystick open so their events are
+//! one at a time), keeps every connected device open so their events are
 //! reported, pumps the event loop and forwards each button/axis/hat change to
 //! the frontend as a `joy-input` Tauri event. It also maintains the shared
-//! device list and emits `devices-changed` on hot-plug; the `list_joysticks`
+//! device list and emits `devices-changed` on hot-plug; the `list_devices`
 //! command only reads that list, so a second SDL context never exists.
+//!
+//! A device SDL recognises as a game controller is opened twice: as a joystick
+//! (for the raw facts in [`DeviceInfo`]) and as a controller (for the events).
+//! Its raw `Joy*` events are dropped so every pad input is reported once, under
+//! its SC name (`a`, `dpad_up`, `thumblx`) rather than an index. SC binds
+//! exactly one pad, so the first one in SDL index order gets the `gp1` slot.
+//!
+//! The keyboard is a synthetic entry appended to the device list: SC has one
+//! `kb1` and the actual key events are captured in the webview, not here.
 //!
 //! The standalone [`enumerate`] path (used by the examples) makes its own
 //! short-lived context and must not run while the app's input thread is alive.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use log::{error, info, warn};
+use sdl2::controller::{Axis, Button, GameController};
 use sdl2::event::Event;
 use sdl2::joystick::{HatState, Joystick};
-use sdl2::JoystickSubsystem;
+use sdl2::{GameControllerSubsystem, JoystickSubsystem};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::guid::sdl_guid_to_sc_product;
+use crate::scdata::DeviceKind;
 
 /// Only forward an axis once it has moved more than this since the last
 /// forwarded value, so continuous jitter does not flood the frontend.
 const AXIS_EMIT_THRESHOLD: i32 = 3000;
+
+/// Half of SDL's axis range: the point at which a gamepad trigger or thumb
+/// stick direction counts as a pressed button (SC's `triggerl_btn`,
+/// `thumbl_left`, …, which have no axis of their own).
+const DERIVED_BUTTON_THRESHOLD: i16 = 16384;
+
+/// SDL index of the synthetic keyboard entry — far beyond any real device, so
+/// it never collides and always sorts last.
+const KEYBOARD_INDEX: u32 = 10000;
+
+/// The image-map/hardware key of the one keyboard and the one gamepad SC
+/// knows. Joysticks use their SC Product GUID instead.
+const KEYBOARD_HARDWARE_ID: &str = "keyboard";
+const GAMEPAD_HARDWARE_ID: &str = "gamepad";
 
 /// One hidapi interface behind the device's USB vendor/product (a device can
 /// expose several: joystick, keyboard, vendor-specific …). Device-log only.
@@ -43,10 +68,24 @@ pub struct HidInterface {
     pub bus_type: String,
 }
 
-/// A connected joystick as BindSight sees it. Everything below `axes_error`
+/// A connected device as BindSight sees it. Everything below `axes_error`
 /// is troubleshooting detail for the device log.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct DeviceInfo {
+    /// Joystick, gamepad, or the synthetic keyboard.
+    pub kind: DeviceKind,
+    /// The key for image-maps and `imagemap_choices`: a joystick's SC Product
+    /// GUID, the fixed `"gamepad"` for the pad holding the `gp1` slot, the
+    /// fixed `"keyboard"`, and `None` for anything that cannot be bound
+    /// (a further pad, a joystick with an unparseable GUID).
+    pub hardware_id: Option<String>,
+    /// `Some(1)` for the first game controller in SDL index order — SC's one
+    /// `gp1` slot, first come first serve. `None` for every further pad and
+    /// for non-pads.
+    pub gamepad_slot: Option<u32>,
+    /// `SDL_GameControllerName` for pads, `None` otherwise. Usually friendlier
+    /// than the raw joystick name.
+    pub controller_name: Option<String>,
     /// SDL enumeration index (NOT SC's `jsN` instance number — the two differ).
     pub index: u32,
     /// The device name exactly as SC shows it: the HID product string
@@ -89,19 +128,98 @@ pub struct DeviceInfo {
 }
 
 /// Shared, hot-pluggable device list, maintained by the input thread and read
-/// by the `list_joysticks` command.
+/// by the `list_devices` command.
 pub type DeviceList = Arc<Mutex<Vec<DeviceInfo>>>;
 
 /// A single live input change, forwarded to the frontend as a `joy-input`
 /// event. `guid` is the device's SDL GUID, the join key to [`DeviceInfo`].
 /// `timestamp` is SDL's event time (ms since SDL init), `instance_id` the
-/// SDL joystick instance the event came from.
+/// SDL joystick instance the event came from. Pad events carry SC's input
+/// name instead of an index; the frontend adds `key` events of the same shape
+/// for the keyboard.
 #[derive(Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum InputEvent {
     Button { guid: String, index: u8, pressed: bool, timestamp: u32, instance_id: u32 },
     Axis { guid: String, index: u8, value: i16, timestamp: u32, instance_id: u32 },
     Hat { guid: String, index: u8, direction: String, raw: u8, timestamp: u32, instance_id: u32 },
+    PadButton { guid: String, name: String, pressed: bool, timestamp: u32, instance_id: u32 },
+    PadAxis { guid: String, name: String, value: i16, timestamp: u32, instance_id: u32 },
+}
+
+/// SC's name for an SDL controller button. `Guide`, `Misc1`, `Paddle1..4` and
+/// `Touchpad` have no SC token — they are still reported so the device log and
+/// the image-map editor see every press.
+fn pad_button_name(button: Button) -> &'static str {
+    match button {
+        Button::A => "a",
+        Button::B => "b",
+        Button::X => "x",
+        Button::Y => "y",
+        Button::Back => "back",
+        Button::Start => "start",
+        Button::Guide => "guide",
+        Button::LeftShoulder => "shoulderl",
+        Button::RightShoulder => "shoulderr",
+        Button::LeftStick => "thumbl",
+        Button::RightStick => "thumbr",
+        Button::DPadUp => "dpad_up",
+        Button::DPadDown => "dpad_down",
+        Button::DPadLeft => "dpad_left",
+        Button::DPadRight => "dpad_right",
+        Button::Misc1 => "misc1",
+        Button::Paddle1 => "paddle1",
+        Button::Paddle2 => "paddle2",
+        Button::Paddle3 => "paddle3",
+        Button::Paddle4 => "paddle4",
+        Button::Touchpad => "touchpad",
+    }
+}
+
+/// SC's name for an SDL controller axis.
+fn pad_axis_name(axis: Axis) -> &'static str {
+    match axis {
+        Axis::LeftX => "thumblx",
+        Axis::LeftY => "thumbly",
+        Axis::RightX => "thumbrx",
+        Axis::RightY => "thumbry",
+        Axis::TriggerLeft => "triggerl",
+        Axis::TriggerRight => "triggerr",
+    }
+}
+
+/// The buttons SC derives from a pad axis, as `(name, pressed)` for the
+/// current axis value: triggers press past half travel, thumb sticks press in
+/// each direction. SDL's Y axis is negative upwards.
+fn derived_pad_buttons(axis: Axis, value: i16) -> Vec<(&'static str, bool)> {
+    let (low, high) = match axis {
+        Axis::LeftX => ("thumbl_left", "thumbl_right"),
+        Axis::LeftY => ("thumbl_up", "thumbl_down"),
+        Axis::RightX => ("thumbr_left", "thumbr_right"),
+        Axis::RightY => ("thumbr_up", "thumbr_down"),
+        Axis::TriggerLeft => return vec![("triggerl_btn", value >= DERIVED_BUTTON_THRESHOLD)],
+        Axis::TriggerRight => return vec![("triggerr_btn", value >= DERIVED_BUTTON_THRESHOLD)],
+    };
+    vec![
+        (low, value <= -DERIVED_BUTTON_THRESHOLD),
+        (high, value >= DERIVED_BUTTON_THRESHOLD),
+    ]
+}
+
+/// The synthetic keyboard entry, appended last to every device list. SC knows
+/// exactly one keyboard and never logs it, so it is always "there"; its key
+/// events are captured in the webview, never here.
+fn keyboard_device() -> DeviceInfo {
+    DeviceInfo {
+        kind: DeviceKind::Keyboard,
+        hardware_id: Some(KEYBOARD_HARDWARE_ID.to_string()),
+        index: KEYBOARD_INDEX,
+        sc_name: Some("Keyboard".to_string()),
+        sdl_name: "Keyboard".to_string(),
+        sdl_guid: KEYBOARD_HARDWARE_ID.to_string(),
+        power_level: String::new(),
+        ..DeviceInfo::default()
+    }
 }
 
 /// What hidapi knows about a USB `(vendor, product)`: the HID product string
@@ -188,7 +306,10 @@ fn sdl_type_name(t: sdl2::sys::SDL_JoystickType) -> &'static str {
     }
 }
 
-fn device_info(stick: &Joystick, index: u32, hid: &HidTable) -> DeviceInfo {
+/// Build the [`DeviceInfo`] for one open joystick. `pad` carries the game
+/// controller facts when SDL recognises the device as one, and whether it took
+/// SC's single `gp1` slot.
+fn device_info(stick: &Joystick, index: u32, hid: &HidTable, pad: Option<(&GameController, bool)>) -> DeviceInfo {
     let sdl_guid = stick.guid().string();
     let vid_pid = crate::guid::sdl_guid_vendor_product(&sdl_guid);
     let hid_info = vid_pid.and_then(|k| hid.get(k));
@@ -216,11 +337,23 @@ fn device_info(stick: &Joystick, index: u32, hid: &HidTable) -> DeviceInfo {
             (!path.is_null()).then(|| std::ffi::CStr::from_ptr(path).to_string_lossy().into_owned()),
         )
     };
+    let sc_product_guid = sdl_guid_to_sc_product(&sdl_guid);
+    let kind = if pad.is_some() { DeviceKind::Gamepad } else { DeviceKind::Joystick };
+    let has_slot = matches!(pad, Some((_, true)));
     DeviceInfo {
+        kind,
+        // Only the pad on SC's single `gp1` slot can carry bindings, so only
+        // it gets an image-map key; a further pad gets none.
+        hardware_id: match kind {
+            DeviceKind::Gamepad => has_slot.then(|| GAMEPAD_HARDWARE_ID.to_string()),
+            _ => sc_product_guid.clone(),
+        },
+        gamepad_slot: has_slot.then_some(1),
+        controller_name: pad.map(|(c, _)| c.name()),
         index,
         sc_name,
         sdl_name: stick.name(),
-        sc_product_guid: sdl_guid_to_sc_product(&sdl_guid),
+        sc_product_guid,
         sdl_guid,
         num_buttons: stick.num_buttons(),
         num_axes,
@@ -246,20 +379,70 @@ fn device_info(stick: &Joystick, index: u32, hid: &HidTable) -> DeviceInfo {
     }
 }
 
-/// Enumerate connected joysticks with a short-lived SDL context. For the
-/// standalone examples only — the running app reads [`DeviceList`] instead.
+/// Every device SDL currently lists, with its handles kept open. The joystick
+/// handle keeps a device's events flowing; the controller handle is what turns
+/// a pad's raw buttons into named `Controller*` events.
+struct OpenDevices {
+    infos: Vec<DeviceInfo>,
+    sticks: Vec<Joystick>,
+    pads: Vec<GameController>,
+    /// Instance ids of the pads, whose raw `Joy*` events are dropped.
+    pad_instances: HashSet<u32>,
+}
+
+/// Open every connected device and describe it. The first device SDL
+/// recognises as a game controller takes SC's single `gp1` slot.
+fn open_all(joystick: &JoystickSubsystem, controllers: &GameControllerSubsystem, hid: &HidTable) -> Result<OpenDevices, String> {
+    let count = joystick.num_joysticks()?;
+    let mut open = OpenDevices {
+        infos: Vec::with_capacity(count as usize),
+        sticks: Vec::with_capacity(count as usize),
+        pads: Vec::new(),
+        pad_instances: HashSet::new(),
+    };
+    let mut slot_taken = false;
+
+    for index in 0..count {
+        let stick = match joystick.open(index) {
+            Ok(stick) => stick,
+            Err(e) => {
+                warn!("failed to open joystick {index}: {e}");
+                continue;
+            }
+        };
+        // A pad is opened twice: as a joystick for the raw facts below, as a
+        // controller for its named events.
+        let pad = controllers.is_game_controller(index).then(|| controllers.open(index)).transpose();
+        let pad = match pad {
+            Ok(pad) => pad,
+            Err(e) => {
+                warn!("failed to open game controller {index}: {e}");
+                None
+            }
+        };
+        let has_slot = pad.is_some() && !slot_taken;
+        slot_taken |= pad.is_some();
+
+        open.infos.push(device_info(&stick, index, hid, pad.as_ref().map(|c| (c, has_slot))));
+        if let Some(pad) = pad {
+            open.pad_instances.insert(pad.instance_id());
+            open.pads.push(pad);
+        }
+        open.sticks.push(stick);
+    }
+
+    Ok(open)
+}
+
+/// Enumerate connected hardware with a short-lived SDL context. For the
+/// standalone examples only — the running app reads [`DeviceList`] instead,
+/// which also carries the synthetic keyboard.
 pub fn enumerate() -> Result<Vec<DeviceInfo>, String> {
     let sdl = sdl2::init()?;
     let joystick = sdl.joystick()?;
+    let controllers = sdl.game_controller()?;
     let hid = hid_table();
-    let count = joystick.num_joysticks()?;
-    let mut devices = Vec::with_capacity(count as usize);
-    for index in 0..count {
-        if let Ok(stick) = joystick.open(index) {
-            devices.push(device_info(&stick, index, &hid));
-        }
-    }
-    Ok(devices)
+    Ok(open_all(&joystick, &controllers, &hid)?.infos)
 }
 
 /// Spawn the input thread. Returns immediately; the thread runs for the life of
@@ -275,25 +458,38 @@ pub fn spawn(app: AppHandle, devices: DeviceList) {
 fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
     let sdl = sdl2::init()?;
     let joystick = sdl.joystick()?;
+    let controllers = sdl.game_controller()?;
     let mut event_pump = sdl.event_pump()?;
     info!("SDL initialized, input thread started");
 
-    // instance_id -> open handle (kept alive so its events keep being reported)
-    let mut opened: HashMap<u32, Joystick> = HashMap::new();
+    // Open handles, kept alive so their events keep being reported.
+    let mut opened = OpenDevices {
+        infos: Vec::new(),
+        sticks: Vec::new(),
+        pads: Vec::new(),
+        pad_instances: HashSet::new(),
+    };
     // instance_id -> SDL GUID, to tag outgoing events
     let mut guids: HashMap<u32, String> = HashMap::new();
     // (instance_id, axis) -> last forwarded value, for jitter throttling
     let mut last_axis: HashMap<(u32, u8), i16> = HashMap::new();
+    // (instance_id, derived button) -> last emitted state, so a stick held
+    // past the threshold reports one press, not one per axis event
+    let mut derived: HashMap<(u32, &'static str), bool> = HashMap::new();
 
-    reopen_all(&joystick, &mut opened, &mut guids, &app, &devices)?;
+    reopen_all(&joystick, &controllers, &mut opened, &mut guids, &app, &devices)?;
 
     for event in event_pump.wait_iter() {
+        // A pad reports every input twice — raw and named. Only the named one
+        // carries SC's vocabulary, so the raw copy is dropped (the
+        // `!opened.pad_instances.contains(..)` guards below).
         match event {
             Event::JoyDeviceAdded { .. } | Event::JoyDeviceRemoved { .. } => {
                 last_axis.clear();
-                reopen_all(&joystick, &mut opened, &mut guids, &app, &devices)?;
+                derived.clear();
+                reopen_all(&joystick, &controllers, &mut opened, &mut guids, &app, &devices)?;
             }
-            Event::JoyButtonDown { timestamp, which, button_idx, .. } => {
+            Event::JoyButtonDown { timestamp, which, button_idx, .. } if !opened.pad_instances.contains(&which) => {
                 if let Some(guid) = guids.get(&which) {
                     let _ = app.emit(
                         "joy-input",
@@ -301,7 +497,7 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
                     );
                 }
             }
-            Event::JoyButtonUp { timestamp, which, button_idx, .. } => {
+            Event::JoyButtonUp { timestamp, which, button_idx, .. } if !opened.pad_instances.contains(&which) => {
                 if let Some(guid) = guids.get(&which) {
                     let _ = app.emit(
                         "joy-input",
@@ -309,7 +505,7 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
                     );
                 }
             }
-            Event::JoyHatMotion { timestamp, which, hat_idx, state, .. } => {
+            Event::JoyHatMotion { timestamp, which, hat_idx, state, .. } if !opened.pad_instances.contains(&which) => {
                 if let Some(guid) = guids.get(&which) {
                     let _ = app.emit(
                         "joy-input",
@@ -324,7 +520,7 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
                     );
                 }
             }
-            Event::JoyAxisMotion { timestamp, which, axis_idx, value, .. } => {
+            Event::JoyAxisMotion { timestamp, which, axis_idx, value, .. } if !opened.pad_instances.contains(&which) => {
                 let prev = last_axis.get(&(which, axis_idx)).copied().unwrap_or(0);
                 if (value as i32 - prev as i32).abs() > AXIS_EMIT_THRESHOLD {
                     last_axis.insert((which, axis_idx), value);
@@ -336,6 +532,71 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
                     }
                 }
             }
+            Event::ControllerButtonDown { timestamp, which, button } => {
+                if let Some(guid) = guids.get(&which) {
+                    let _ = app.emit(
+                        "joy-input",
+                        InputEvent::PadButton {
+                            guid: guid.clone(),
+                            name: pad_button_name(button).to_string(),
+                            pressed: true,
+                            timestamp,
+                            instance_id: which,
+                        },
+                    );
+                }
+            }
+            Event::ControllerButtonUp { timestamp, which, button } => {
+                if let Some(guid) = guids.get(&which) {
+                    let _ = app.emit(
+                        "joy-input",
+                        InputEvent::PadButton {
+                            guid: guid.clone(),
+                            name: pad_button_name(button).to_string(),
+                            pressed: false,
+                            timestamp,
+                            instance_id: which,
+                        },
+                    );
+                }
+            }
+            Event::ControllerAxisMotion { timestamp, which, axis, value } => {
+                let Some(guid) = guids.get(&which).cloned() else { continue };
+                // SC's trigger/thumb-direction "buttons" have no axis, so they
+                // are derived here and reported only when they change.
+                for (name, pressed) in derived_pad_buttons(axis, value) {
+                    if derived.insert((which, name), pressed) != Some(pressed) {
+                        let _ = app.emit(
+                            "joy-input",
+                            InputEvent::PadButton {
+                                guid: guid.clone(),
+                                name: name.to_string(),
+                                pressed,
+                                timestamp,
+                                instance_id: which,
+                            },
+                        );
+                    }
+                }
+                // The axis itself is throttled like a joystick axis. SDL
+                // controller axes are numbered 0..5, so they share the map
+                // without colliding with the raw axes (which are dropped).
+                let idx = axis as u8;
+                let prev = last_axis.get(&(which, idx)).copied().unwrap_or(0);
+                if (value as i32 - prev as i32).abs() > AXIS_EMIT_THRESHOLD {
+                    last_axis.insert((which, idx), value);
+                    let _ = app.emit(
+                        "joy-input",
+                        InputEvent::PadAxis {
+                            guid,
+                            name: pad_axis_name(axis).to_string(),
+                            value,
+                            timestamp,
+                            instance_id: which,
+                        },
+                    );
+                }
+            }
             Event::Quit { .. } => break,
             _ => {}
         }
@@ -344,34 +605,29 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
     Ok(())
 }
 
-/// Re-enumerate all joysticks: reopen every device, rebuild the GUID map and
-/// the shared device list, and tell the frontend the list changed.
+/// Re-enumerate everything: reopen every device, rebuild the GUID map and the
+/// shared device list (with the synthetic keyboard last), and tell the
+/// frontend the list changed.
 fn reopen_all(
     joystick: &JoystickSubsystem,
-    opened: &mut HashMap<u32, Joystick>,
+    controllers: &GameControllerSubsystem,
+    opened: &mut OpenDevices,
     guids: &mut HashMap<u32, String>,
     app: &AppHandle,
     devices: &DeviceList,
 ) -> Result<(), String> {
-    opened.clear();
     guids.clear();
 
     let hid = hid_table();
-    let count = joystick.num_joysticks()?;
-    let mut list = Vec::with_capacity(count as usize);
-    for index in 0..count {
-        let stick = match joystick.open(index) {
-            Ok(stick) => stick,
-            Err(e) => {
-                warn!("failed to open joystick {index}: {e}");
-                continue;
-            }
-        };
-        let info = device_info(&stick, index, &hid);
-        guids.insert(stick.instance_id(), info.sdl_guid.clone());
-        list.push(info);
-        opened.insert(stick.instance_id(), stick);
+    *opened = open_all(joystick, controllers, &hid)?;
+    for stick in &opened.sticks {
+        if let Some(info) = opened.infos.iter().find(|i| i.sdl_instance_id == stick.instance_id()) {
+            guids.insert(stick.instance_id(), info.sdl_guid.clone());
+        }
     }
+
+    let mut list = opened.infos.clone();
+    list.push(keyboard_device());
 
     // Device details stay out of the app log by design (the Devices mode's
     // device log has them all); only failures are logged above.
@@ -396,4 +652,86 @@ fn hat_direction(state: HatState) -> String {
         HatState::LeftDown => "leftdown",
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derives_trigger_and_thumb_buttons_from_axes() {
+        // Triggers rest at 0 and press past half travel.
+        assert_eq!(derived_pad_buttons(Axis::TriggerLeft, 0), vec![("triggerl_btn", false)]);
+        assert_eq!(derived_pad_buttons(Axis::TriggerLeft, 16383), vec![("triggerl_btn", false)]);
+        assert_eq!(derived_pad_buttons(Axis::TriggerLeft, 16384), vec![("triggerl_btn", true)]);
+        assert_eq!(derived_pad_buttons(Axis::TriggerRight, 32767), vec![("triggerr_btn", true)]);
+
+        // A thumb stick reports both directions of its axis, never both at once.
+        assert_eq!(
+            derived_pad_buttons(Axis::LeftX, 0),
+            vec![("thumbl_left", false), ("thumbl_right", false)]
+        );
+        assert_eq!(
+            derived_pad_buttons(Axis::LeftX, -20000),
+            vec![("thumbl_left", true), ("thumbl_right", false)]
+        );
+        // SDL's Y axis is negative upwards.
+        assert_eq!(
+            derived_pad_buttons(Axis::LeftY, -20000),
+            vec![("thumbl_up", true), ("thumbl_down", false)]
+        );
+        assert_eq!(
+            derived_pad_buttons(Axis::RightY, 20000),
+            vec![("thumbr_up", false), ("thumbr_down", true)]
+        );
+    }
+
+    #[test]
+    fn pad_names_are_scs_own() {
+        assert_eq!(pad_button_name(Button::LeftShoulder), "shoulderl");
+        assert_eq!(pad_button_name(Button::DPadUp), "dpad_up");
+        assert_eq!(pad_button_name(Button::LeftStick), "thumbl");
+        assert_eq!(pad_axis_name(Axis::LeftX), "thumblx");
+        assert_eq!(pad_axis_name(Axis::TriggerRight), "triggerr");
+    }
+
+    #[test]
+    fn synthetic_keyboard_is_a_fixed_entry() {
+        let kb = keyboard_device();
+        assert_eq!(kb.kind, DeviceKind::Keyboard);
+        assert_eq!(kb.hardware_id.as_deref(), Some("keyboard"));
+        assert_eq!(kb.sdl_guid, "keyboard");
+        assert_eq!(kb.sc_name.as_deref(), Some("Keyboard"));
+        assert_eq!(kb.sc_product_guid, None); // cannot be excluded, has no GUID
+        assert_eq!(kb.gamepad_slot, None);
+        assert_eq!((kb.num_buttons, kb.num_axes, kb.num_hats), (0, 0, 0));
+        assert!(kb.axes.is_empty() && kb.hid_interfaces.is_empty());
+    }
+
+    #[test]
+    fn event_payloads_carry_the_contract_tags() {
+        let json = |e: &InputEvent| serde_json::to_string(e).unwrap();
+        let button = InputEvent::PadButton {
+            guid: "g".into(),
+            name: "thumbl_left".into(),
+            pressed: true,
+            timestamp: 7,
+            instance_id: 3,
+        };
+        assert_eq!(
+            json(&button),
+            r#"{"kind":"padbutton","guid":"g","name":"thumbl_left","pressed":true,"timestamp":7,"instance_id":3}"#
+        );
+        let axis = InputEvent::PadAxis {
+            guid: "g".into(),
+            name: "thumblx".into(),
+            value: -900,
+            timestamp: 7,
+            instance_id: 3,
+        };
+        assert_eq!(
+            json(&axis),
+            r#"{"kind":"padaxis","guid":"g","name":"thumblx","value":-900,"timestamp":7,"instance_id":3}"#
+        );
+    }
 }

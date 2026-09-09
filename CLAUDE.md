@@ -30,8 +30,10 @@ See `HANDOFF.md` for the current working state.
   their image-maps, canvas, live input + areas; also hosts the raw device /
   event log with Save) and uses `ConfirmDialog` for the unsaved-changes and
   delete questions; `components/DeviceImage.vue` the plain-SVG viewer;
-  `imagemap.ts` the shared image-map types/helpers, `types.ts` all
-  device/input/binding types. **Tables** (bindings deck, Compare) are built
+  `imagemap.ts` the shared image-map types/helpers (incl. token <-> input
+  key), `keyboard.ts` the webview keyboard capture (`KeyboardEvent.code` ->
+  SC key name, emits `key` inputs into the same handler as `joy-input`),
+  `types.ts` all device/input/binding types. **Tables** (bindings deck, Compare) are built
   on `tableColumns.ts` (`useTableColumns`: sort state, widths, grid
   template, localStorage persistence) + `components/ColumnHead.vue`
   (sortable headers, resize grips): the last column is the `1fr` filler,
@@ -39,7 +41,8 @@ See `HANDOFF.md` for the current working state.
   Design tokens live in `src/styles/tokens.css` (the only place colours are
   defined), fonts are bundled under `src/assets/fonts/` (OFL). GUI text is
   terse: one-word states, no explanatory sentences.
-- **Input**: SDL2 raw joystick API (`sdl2` crate) for buttons/axes/hats;
+- **Input**: SDL2 raw joystick API (`sdl2` crate) for buttons/axes/hats,
+  its GameController API for gamepads, the webview for keyboard keys;
   `hidapi` for the HID product string (SC's device name) and later axis usages.
 - **XML/INI**: `quick-xml` + hand-rolled parsing.
 
@@ -50,10 +53,23 @@ See `HANDOFF.md` for the current working state.
 - `input.rs` — a single background thread owns the one SDL context (rust-sdl2
   allows only one), keeps devices open, emits `joy-input` events, maintains the
   shared device list, emits `devices-changed` on hot-plug. `DeviceInfo` carries
-  `sc_name` (from hidapi) + `sdl_name` (debug).
-- `scdata.rs` — parse `defaultProfile.xml` (action master list), `global.ini`
-  (labels), `keybinding_localization.xml` (input token labels), and the user's
-  `actionmaps.xml` (rebinds + `<options>` device map).
+  `kind` (`joystick` / `gamepad` / `keyboard`), `hardware_id` (the image-map
+  key: SC Product GUID, `gamepad`, or `keyboard`), `sc_name` (from hidapi) +
+  `sdl_name` (debug). A gamepad is what SDL's GameController API recognises;
+  it is opened as controller too and its raw `Joy*` events are dropped in
+  favour of `padbutton` / `padaxis` events carrying SC's names (`a`,
+  `shoulderl`, `thumblx`, …, plus the derived `triggerl_btn` / `thumbl_left`
+  … at 50 %). Only the first pad (SDL index order) holds the slot `gp1`,
+  further pads are listed with `gamepad_slot: None`. The keyboard is one
+  synthetic entry appended last (`sdl_guid` `keyboard`); its keys are captured
+  in the webview (`src/keyboard.ts`), never by SDL (no window).
+- `scdata.rs` — parse `defaultProfile.xml` (action master list with the
+  `joystick=` / `keyboard=` / `gamepad=` defaults, attribute or child-element
+  form, child wins), `global.ini` (labels), `keybinding_localization.xml`
+  (input token labels: `jsN_`, `kb1_`, `gp1_`; mouse skipped), and the user's
+  `actionmaps.xml` (rebinds + `<options>` device map). `DeviceKind` and
+  `parse_rebind` (prefix -> kind, kb/gp tokens keep their `+` modifiers) live
+  here.
 - `scinstall.rs` — the configured install: `validate_install` first
   (`REQUIRED_FILES` = `Data.p4k`, `build_manifest.id`, the live
   `actionmaps.xml`; a missing folder or file aborts the whole load with one
@@ -70,11 +86,14 @@ See `HANDOFF.md` for the current working state.
   an active `global.ini` override the cache is bypassed and the labels come
   from that file): steps via `scdata-progress` (`LOAD_STEPS` = 4), result
   via `scdata-changed`.
-- `bindings.rs` — `BindingIndex` (token -> bound actions), `button_token`/
+- `bindings.rs` — `BindingIndex` (token -> bound actions, all device kinds,
+  defaults per kind with a per-kind "touched" rule), `button_token`/
   `hat_token` (with the +1 offset), `instance_for_guid`, `resolve_bindings`,
   `analyze_clash` (saved `<options>` vs. `Game.log` order — the only order
   source, no SDL-derived fallback), `plan_resort` / `resort_commands`.
-- `gamelog.rs` — parse SC's `Connected joystickN: <Product {GUID}>` lines.
+- `gamelog.rs` — parse SC's `Connected joystickN: <Product {GUID}>` and
+  `Connected xinputN: <name>` lines (the latter only says whether SC saw a
+  gamepad).
 - `hid.rs` — HID report descriptor -> SC axis name per SDL axis index
   (`x y z rotx roty rotz slider1 slider2`); `input.rs` reads the descriptor
   via hidapi per device and stores `DeviceInfo::axes` / `axes_error`.
@@ -130,20 +149,30 @@ See `HANDOFF.md` for the current working state.
 
 ## Image-map data model (`imagemap.json`, format 3)
 
-- Keyed by `hardware_id` = SC Product GUID (vendor/product, platform-stable);
-  several image-maps per id are normal (told apart by `name`).
+- Keyed by `hardware_id` = SC Product GUID (vendor/product, platform-stable)
+  for joysticks, the literal `gamepad` for gamepads (SC treats every pad as
+  the same XInput device) and `keyboard` for the keyboard; several image-maps
+  per id are normal (told apart by `name`).
 - **Exactly one image per image-map** (`image: {file, label}`, mandatory — an
   image-map is created around its image file, areas belong to it implicitly).
   Format 1 (`images[]`, areas tied to an image id) is not read.
-- Areas map an **SDL-level** input key (`button:N`, `hat:N:<dir>`, `axis:N`,
-  no axis sign — SC has none) to a shape on the image: `rect`, `ellipse`,
+- Areas map an input key to a shape on the image. Joysticks use **SDL-level**
+  keys (`button:N`, `hat:N:<dir>`, `axis:N`, no axis sign — SC has none);
+  keyboard and gamepad use SC's own names (`key:lshift`, `key:oem_102`,
+  `pad:a`, `pad:thumblx`, `pad:triggerl_btn`). Shapes: `rect`, `ellipse`,
   `polygon`, or `symbol` (`arrow`, `cw`, `ccw`: the 100x100 path stretched
   into a `w` x `h` box, rotatable). Several areas per input are fine.
 - All coordinates are normalized 0..1 to the image's natural size, rotation
   in degrees around the shape's center. The model is ours, never Konva's JSON —
   the canvas lib is only the editor's interaction layer.
-- Token -> input key undoes the +1 offset (`js2_button5` -> `button:4`); axes
-  have no mapping yet.
+- Token -> input key undoes the +1 offset (`js2_button5` -> `button:4`) and
+  maps axes through `DeviceInfo::axes`; `kb1_lalt+x` -> `key:x`, `gp1_a` ->
+  `pad:a` (a combo pins the part after the last `+`).
+- **Bundled image-maps** (`src-tauri/resources/imagemaps/`): Keyboard US,
+  Keyboard DE, Xbox controller, PlayStation controller — generated, never
+  hand-edited: `scripts/gen-imagemaps.py` holds the geometry once and writes
+  both `image.png` and `imagemap.json` (fixed ids `4b7a2c1e-…-000000000001`
+  to `…0004`).
 
 ## Commands / how to work
 
@@ -219,6 +248,15 @@ file libappindicator-gtk3-devel librsvg2-devel libxdo-devel SDL2-devel`, plus th
 - **SDL order is not SC order** (Windows: reversed, Linux: unrelated). `jsN`
   comes from `Game.log` only; never derive it from SDL's enumeration.
 - **+1 button offset**: SC `js_button1` == SDL button 0 (verified under Wine).
+- **SC knows exactly one keyboard (`kb1`) and one gamepad (`gp1`)**: no
+  `kb2_`/`gp2_` anywhere, no instance logic, no order clash. Key names are
+  DirectInput scancode names (physical, layout independent): on a German
+  keyboard the cap labelled `Y` is `kb1_z`. `KeyboardEvent.code` is physical
+  too, hence the static table in `keyboard.ts`. `kb1_` also carries mouse
+  buttons/wheel (`kb1_mouse1`, `kb1_mwheel_up`); mouse is not supported.
+- **Keyboard capture needs the BindSight window focused** (webview keydown;
+  SDL2 delivers key events only to its own window). Text fields and open
+  dialogs are skipped; PrintScreen / Meta never arrive.
 - **Axes**: SC names axes by HID usage (X->`x` … Rz->`rotz`, Slider/Dial->
   `slider1`/`slider2`); SDL numbers them in canonical usage order (Linux:
   evdev ABS code order, Windows: DirectInput offset order), NOT report order.

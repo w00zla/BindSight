@@ -81,9 +81,10 @@ struct LoadStatus {
     sc: ScStatus,
 }
 
-/// Return the current device list, maintained by the input thread.
+/// Return the current device list, maintained by the input thread (joysticks,
+/// gamepads, and the synthetic keyboard last).
 #[tauri::command]
-fn list_joysticks(devices: State<input::DeviceList>) -> Vec<input::DeviceInfo> {
+fn list_devices(devices: State<input::DeviceList>) -> Vec<input::DeviceInfo> {
     devices.lock().map(|d| d.clone()).unwrap_or_default()
 }
 
@@ -111,7 +112,7 @@ fn get_config(data: State<Mutex<AppData>>) -> config::Config {
     data.lock().unwrap().config.clone()
 }
 
-/// Return the resolved joystick bindings from the currently loaded profile.
+/// Return the resolved bindings (all devices) from the currently loaded profile.
 #[tauri::command]
 fn get_bindings(data: State<Mutex<AppData>>) -> Vec<bindings::ResolvedBinding> {
     current_bindings(&data.lock().unwrap())
@@ -323,6 +324,24 @@ fn resolve_input(
     InputResolution { token, actions }
 }
 
+/// Resolve a live keyboard/gamepad press against a list of candidate SC
+/// tokens, most specific first — the frontend offers every held-modifier combo
+/// (`kb1_lalt+x`) before the bare token (`kb1_x`), because SC stores the combo
+/// in one token. The first candidate with bound actions wins; if none is
+/// bound, the first candidate is reported as the token so the GUI can still
+/// name the input.
+#[tauri::command]
+fn resolve_tokens(candidates: Vec<String>, data: State<Mutex<AppData>>) -> InputResolution {
+    let data = data.lock().unwrap();
+    for candidate in &candidates {
+        let actions = data.index.resolve(candidate);
+        if !actions.is_empty() {
+            return InputResolution { token: Some(candidate.clone()), actions: actions.to_vec() };
+        }
+    }
+    InputResolution { token: candidates.into_iter().next(), actions: Vec::new() }
+}
+
 /// Snapshot the SC install into `data`: parse actionmaps.xml and resolve it
 /// against the current game data (profile + binding index), then read
 /// Game.log. Returns the actionmaps load status. Called at start (once the
@@ -375,7 +394,7 @@ pub(crate) fn reload_profile(data: &mut AppData) -> LoadStatus {
                 .map(|j| format!("js{}={} {}", j.instance, j.product_name, j.product_guid.as_deref().unwrap_or("?")))
                 .collect();
             info!(
-                "profile loaded from {}: {} rebinds, {} resolved joystick bindings, options: [{}]",
+                "profile loaded from {}: {} rebinds, {} resolved bindings, options: [{}]",
                 status.actionmaps_path,
                 profile.rebinds.len(),
                 status.bindings.len(),
@@ -407,10 +426,11 @@ fn read_game_log(base_path: &str) -> Result<gamelog::LogEnumeration, gamelog::Ga
                 .map(|j| format!("js{}={} {}", j.instance, j.product_name, j.product_guid.as_deref().unwrap_or("?")))
                 .collect();
             info!(
-                "Game.log {} (started {}): SC sees [{}]",
+                "Game.log {} (started {}): SC sees [{}], gamepads: [{}]",
                 path.display(),
                 log.timestamp.as_deref().unwrap_or("?"),
-                devices.join(", ")
+                devices.join(", "),
+                log.gamepads.join(", ")
             );
         }
         Err(e) => warn!("Game.log {}: {e:?}", path.display()),
@@ -608,7 +628,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            list_joysticks,
+            list_devices,
             get_actions,
             get_tokens,
             get_sc_status,
@@ -621,6 +641,7 @@ pub fn run() {
             set_environments,
             set_active_env,
             resolve_input,
+            resolve_tokens,
             write_text_file,
             open_log_dir,
             imagemap::list_imagemaps,

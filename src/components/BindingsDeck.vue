@@ -10,7 +10,8 @@ const props = defineProps<{
   currentToken: string | null;
   tokenLabel: (token: string) => string;
   categoryLabel: (actionmap: string) => string;
-  instanceOf: (token: string) => string;
+  // SC's device name for a binding: js1, js2, kb1, gp1.
+  deviceLabel: (b: ResolvedBinding) => string;
   isClash: (token: string) => boolean;
   isConnected: (b: ResolvedBinding) => boolean;
   isMissing: (b: ResolvedBinding) => boolean;
@@ -18,17 +19,26 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ pin: [b: ResolvedBinding] }>();
 
-const instanceFilter = ref<string | "all">("all");
+const deviceFilter = ref<string | "all">("all");
 const search = ref("");
 
-// Distinct joystick instances present in the bindings, in order, with counts.
-const instanceCounts = computed(() => {
-  const counts = new Map<string, number>();
+// SC's own device order: the joysticks by instance, then keyboard, then gamepad.
+const KIND_RANK: Record<ResolvedBinding["device_kind"], number> = { joystick: 0, keyboard: 1, gamepad: 2 };
+
+function deviceRank(b: ResolvedBinding): number {
+  return KIND_RANK[b.device_kind] * 100 + b.instance;
+}
+
+// Distinct devices present in the bindings, in SC's order, with counts.
+const deviceCounts = computed(() => {
+  const counts = new Map<string, { rank: number; count: number }>();
   for (const b of props.bindings) {
-    const n = props.instanceOf(b.token);
-    counts.set(n, (counts.get(n) ?? 0) + 1);
+    const label = props.deviceLabel(b);
+    const hit = counts.get(label);
+    if (hit) hit.count += 1;
+    else counts.set(label, { rank: deviceRank(b), count: 1 });
   }
-  return [...counts.entries()].sort((a, b) => Number(a[0]) - Number(b[0]));
+  return [...counts.entries()].sort((a, b) => a[1].rank - b[1].rank);
 });
 
 function matchesSearch(b: ResolvedBinding, q: string): boolean {
@@ -50,7 +60,7 @@ const cols = useTableColumns("bindsight.columns.bindings", COLUMNS, { key: "inpu
 function cellValue(b: ResolvedBinding, key: string): string | number {
   switch (key) {
     case "device":
-      return Number(props.instanceOf(b.token));
+      return deviceRank(b);
     case "input":
       return inputPart(b.token);
     case "label":
@@ -65,7 +75,7 @@ function cellValue(b: ResolvedBinding, key: string): string | number {
 const filteredBindings = computed(() => {
   const q = search.value.trim().toLowerCase();
   const rows = props.bindings.filter((b) => {
-    if (instanceFilter.value !== "all" && props.instanceOf(b.token) !== instanceFilter.value) return false;
+    if (deviceFilter.value !== "all" && props.deviceLabel(b) !== deviceFilter.value) return false;
     return matchesSearch(b, q);
   });
   return sortRows(rows, cols.sort.value, cellValue, (a, b) => collator.compare(a.token, b.token));
@@ -77,9 +87,9 @@ function labelOf(token: string): string {
   return l === token ? "" : l;
 }
 
-// Input token without its "jsN_" prefix, e.g. "js1_button5" -> "button5".
+// Input token without its device prefix, e.g. "js1_button5" -> "button5".
 function inputPart(token: string): string {
-  return token.replace(/^js\d+_/, "");
+  return token.replace(/^(js\d+|kb1|gp1)_/, "");
 }
 
 function rowTitle(b: ResolvedBinding): string | undefined {
@@ -99,18 +109,18 @@ function deviceTitle(b: ResolvedBinding): string | undefined {
       <div class="panel-title">Bindings</div>
       <div class="divider" />
       <div class="chips">
-          <button type="button" class="chip all" :class="{ active: instanceFilter === 'all' }" @click="instanceFilter = 'all'">
+          <button type="button" class="chip all" :class="{ active: deviceFilter === 'all' }" @click="deviceFilter = 'all'">
             All <span class="count">{{ bindings.length }}</span>
           </button>
           <button
-            v-for="[n, count] in instanceCounts"
-            :key="n"
+            v-for="[label, d] in deviceCounts"
+            :key="label"
             type="button"
             class="chip mono"
-            :class="{ active: instanceFilter === n }"
-            @click="instanceFilter = n"
+            :class="{ active: deviceFilter === label }"
+            @click="deviceFilter = label"
           >
-            js{{ n }} <span class="count">{{ count }}</span>
+            {{ label }} <span class="count">{{ d.count }}</span>
           </button>
         </div>
       <div class="spacer" />
@@ -137,7 +147,7 @@ function deviceTitle(b: ResolvedBinding): string | undefined {
           @click="emit('pin', b)"
         >
           <span class="mono cell-device" :class="{ clash: isClash(b.token), disconnected: !isConnected(b) }" :title="deviceTitle(b)">
-            js{{ instanceOf(b.token) }}
+            {{ deviceLabel(b) }}
           </span>
           <span class="mono cell-input" :title="b.token">{{ inputPart(b.token) }}</span>
           <span class="cell-label">{{ labelOf(b.token) }}</span>
