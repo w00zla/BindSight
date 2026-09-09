@@ -206,9 +206,7 @@ async function requestLeave(): Promise<boolean> {
   return true;
 }
 
-// `selectedGuid` and `confirmOpen` tell App whether to capture keys.
-const confirmOpen = computed(() => confirm.value !== null);
-defineExpose({ requestLeave, selectedGuid, confirmOpen });
+defineExpose({ requestLeave });
 
 // --- loading ---------------------------------------------------------------
 

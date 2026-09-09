@@ -261,8 +261,10 @@ file libappindicator-gtk3-devel librsvg2-devel libxdo-devel SDL2-devel`, plus th
   too, hence the static table in `keyboard.ts`. `kb1_` also carries mouse
   buttons/wheel (`kb1_mouse1`, `kb1_mwheel_up`); mouse is not supported.
 - **Keyboard capture needs the BindSight window focused** (webview keydown;
-  SDL2 delivers key events only to its own window). Text fields and open
-  dialogs are skipped; PrintScreen / Meta never arrive.
+  SDL2 delivers key events only to its own window). It runs in every mode
+  and `preventDefault`s every mapped key (deliberate: a rebind flow must own
+  the keyboard); only text fields and open dialogs (`[role="dialog"]`) are
+  skipped. PrintScreen / Meta never arrive.
 - **Axes**: SC names axes by HID usage (X->`x` … Rz->`rotz`, Slider/Dial->
   `slider1`/`slider2`); SDL numbers them in canonical usage order (Linux:
   evdev ABS code order, Windows: DirectInput offset order), NOT report order.

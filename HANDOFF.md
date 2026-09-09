@@ -94,9 +94,9 @@ The core loop is closed end-to-end:
     `DeviceInfo.kind` / `hardware_id` / `gamepad_slot`; the first SDL game
     controller is `gp1` (further pads: `no slot`), the keyboard is a
     synthetic device whose keys are captured in the webview
-    (`src/keyboard.ts`, `KeyboardEvent.code` -> SC scancode name, Monitor
-    mode or Devices mode with the keyboard selected, never in text fields or
-    over a dialog). Pads emit `padbutton` / `padaxis` with SC names incl. the
+    (`src/keyboard.ts`, `KeyboardEvent.code` -> SC scancode name, in every
+    mode with `preventDefault` on every mapped key — the coming rebind flow
+    relies on that — never in text fields or over a dialog). Pads emit `padbutton` / `padaxis` with SC names incl. the
     derived `triggerl_btn` / `thumbl_left` … buttons (backend, 50 %
     threshold). Defaults come from `keyboard=` / `gamepad=` (attribute or
     child form), token labels from the `keyboard` / `control_pad` sections,
@@ -206,8 +206,8 @@ memory `gui-naming-decisions` and the plan below.
   `Joy*` drop, `padbutton`/`padaxis`, derived buttons, `gp1` tile, the
   PlayStation default by vendor `054C`), the hide toggle, kb/gp chips in
   Deck and Compare, the editor with the keyboard/pad selected. Known
-  rough edges: in Monitor mode the capture `preventDefault`s webview
-  shortcuts (the editor has no key shortcuts any more — polygon by
+  rough edges: the capture `preventDefault`s webview shortcuts in every
+  mode, by design (the editor has no key shortcuts any more — polygon by
   double-click, delete by button — so a keyboard map can be edited without
   side effects; only the top bar's Escape still closes the environment
   dropdown, harmless); the bundled defaults per kind

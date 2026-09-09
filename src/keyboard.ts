@@ -76,6 +76,11 @@ function isTextTarget(target: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
 }
 
+// Any open dialog (Settings, Confirm) owns the keyboard.
+function dialogOpen(): boolean {
+  return document.querySelector('[role="dialog"]') !== null;
+}
+
 function keyEvent(name: string, pressed: boolean): JoyInput {
   return {
     kind: "key",
@@ -102,7 +107,7 @@ export function startKeyboardCapture(handler: (ev: JoyInput) => void, isActive: 
     // Auto-repeat is not a new press.
     if (e.repeat) return;
     const name = KEY_CODES[e.code];
-    if (!name || !isActive() || isTextTarget(e.target)) return;
+    if (!name || !isActive() || isTextTarget(e.target) || dialogOpen()) return;
     e.preventDefault();
     if (held.has(name)) return;
     held.add(name);

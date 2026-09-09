@@ -40,7 +40,7 @@ import {
   type ImageMap,
   type ImageMapSummary,
 } from "./imagemap";
-import { KEYBOARD_GUID, startKeyboardCapture } from "./keyboard";
+import { startKeyboardCapture } from "./keyboard";
 
 const MAX_EVENTS = 500;
 
@@ -797,13 +797,11 @@ function liveState(): "unseen" | "bound" | "none" {
 let unlisten: UnlistenFn[] = [];
 let stopKeyboard: (() => void) | null = null;
 
-// Keys are captured in Monitor mode, and in Devices mode while the editor has
-// the keyboard selected — never over a dialog, where they are typing.
+// Keys are captured in every mode (the webview never gets to act on them;
+// text fields and open dialogs are skipped inside the capture), so a rebind
+// flow can rely on it anywhere.
 function keyboardActive(): boolean {
-  if (showSettings.value) return false;
-  if (mode.value === "live") return true;
-  if (mode.value !== "devices") return false;
-  return !editor.value?.confirmOpen && editor.value?.selectedGuid === KEYBOARD_GUID;
+  return true;
 }
 
 // A pad button held while the window loses focus would stay a modifier.
