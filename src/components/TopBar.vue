@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import Icon from "./Icon.vue";
+import logo from "../assets/logo.png";
 import type { Mode } from "../types";
 
 const props = defineProps<{ mode: Mode; basePath: string; scVersion: string; loading: boolean }>();
@@ -22,7 +23,10 @@ const installSlug = computed(() => {
 
 <template>
   <header class="topbar">
-    <div class="wordmark">BINDSIGHT</div>
+    <div class="brand">
+      <img class="logo" :src="logo" alt="" />
+      <span class="wordmark">BINDSIGHT</span>
+    </div>
     <div class="tabs">
       <button
         v-for="t in TABS"
@@ -59,6 +63,18 @@ const installSlug = computed(() => {
   padding: 0 16px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-dim);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logo {
+  width: 28px;
+  height: 28px;
+  display: block;
 }
 
 .wordmark {

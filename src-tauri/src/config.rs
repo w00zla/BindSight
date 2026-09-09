@@ -79,6 +79,19 @@ pub fn game_log_path(base_path: &str) -> PathBuf {
     PathBuf::from(base_path).join("Game.log")
 }
 
+/// Directory holding SC's exported keybinding layouts (binding profiles,
+/// manually saved via the options menu), *not* the live bindings — those
+/// live under `Profiles/default/` (see [`actionmaps_path`]). This is SC's own
+/// `controls/mappings/` folder.
+pub fn binding_profiles_dir(base_path: &str) -> PathBuf {
+    PathBuf::from(base_path)
+        .join("user")
+        .join("client")
+        .join("0")
+        .join("controls")
+        .join("mappings")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,5 +103,13 @@ mod tests {
         assert_eq!(c.base_path, "/sc/LIVE");
         assert!(c.ignored_devices.is_empty());
         assert!(c.imagemap_choices.is_empty());
+    }
+
+    #[test]
+    fn binding_profiles_dir_is_under_controls_not_profiles() {
+        assert_eq!(
+            binding_profiles_dir("/sc/LIVE"),
+            PathBuf::from("/sc/LIVE/user/client/0/controls/mappings")
+        );
     }
 }

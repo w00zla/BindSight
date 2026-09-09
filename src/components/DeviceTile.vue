@@ -35,11 +35,7 @@ const statusText = computed(() => {
       <span v-if="slot?.clash" class="chip clash-chip mono">js{{ slot.stored_instance }} → js{{ slot.effective_instance }}</span>
       <span v-else-if="slot" class="chip mono">js{{ slot.effective_instance }}</span>
     </div>
-    <div class="row2">
-      {{ statusText }}<template v-if="device.axes_error">
-        · <span class="axes-error" :title="device.axes_error">axes: {{ device.axes_error }}</span>
-      </template>
-    </div>
+    <div class="row2">{{ statusText }}</div>
   </div>
 </template>
 
@@ -116,9 +112,5 @@ const statusText = computed(() => {
 .row2 {
   font-size: 13px;
   color: var(--text-2);
-}
-
-.axes-error {
-  color: var(--warn);
 }
 </style>

@@ -223,7 +223,8 @@ fn read_root(root: &Path) -> Vec<ImageMap> {
     out
 }
 
-/// Bundled + user image-maps, user shadowing bundled by id, sorted by name.
+/// Bundled + user image-maps, user shadowing bundled by id. Bundled first,
+/// then by name — so the first match for a device is the shipped one.
 pub fn list(bundled_root: &Path, user_root: &Path) -> Vec<ImageMapSummary> {
     let mut by_id: HashMap<String, ImageMapSummary> = HashMap::new();
     for p in read_root(bundled_root) {
@@ -233,7 +234,12 @@ pub fn list(bundled_root: &Path, user_root: &Path) -> Vec<ImageMapSummary> {
         by_id.insert(p.id.clone(), ImageMapSummary::of(&p, ImageMapSource::User));
     }
     let mut out: Vec<_> = by_id.into_values().collect();
-    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.id.cmp(&b.id)));
+    out.sort_by(|a, b| {
+        let bundled_first = (a.source == ImageMapSource::User).cmp(&(b.source == ImageMapSource::User));
+        bundled_first
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.id.cmp(&b.id))
+    });
     out
 }
 
@@ -707,8 +713,9 @@ mod tests {
         assert_eq!(shared.name, "User name");
         assert_eq!(shared.area_count, 0);
         assert_eq!(list.iter().find(|s| s.id == "only-bundled").unwrap().source, ImageMapSource::Bundled);
-        // Sorted by name: "User name" < "Zeta".
-        assert_eq!(list[0].id, "shared");
+        // Bundled first ("Zeta"), then user ("User name") — source beats name.
+        assert_eq!(list[0].id, "only-bundled");
+        assert_eq!(list[1].id, "shared");
 
         // get() prefers the user copy; missing user root is fine.
         assert_eq!(get(&bundled, &user, "shared").unwrap().name, "User name");

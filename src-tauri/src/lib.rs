@@ -5,13 +5,16 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 
+pub mod backups;
 pub mod bindings;
 pub mod config;
+pub mod diff;
 pub mod gamelog;
 pub mod guid;
 pub mod hid;
 pub mod imagemap;
 pub mod input;
+pub mod binding_profiles;
 pub mod resort;
 pub mod scdata;
 pub mod scinstall;
@@ -52,13 +55,16 @@ struct ScStatus {
     error: Option<String>,
 }
 
-/// Runtime state that depends on the configured SC install.
-#[derive(Default)]
+/// Runtime state that depends on the configured SC install. `profile`,
+/// `index` and `game_log` are snapshots taken by [`reload_sc`] — at start, on
+/// a base-path change, after a resort, and on every Refresh.
 pub(crate) struct AppData {
     pub(crate) config: config::Config,
     sc: ScState,
     profile: Option<scdata::UserProfile>,
     index: bindings::BindingIndex,
+    /// SC's device enumeration from `Game.log` as of the last reload.
+    game_log: Result<gamelog::LogEnumeration, gamelog::GameLogError>,
 }
 
 /// Result of (re)loading the user's actionmaps.xml.
@@ -105,24 +111,28 @@ fn get_config(data: State<Mutex<AppData>>) -> config::Config {
 /// Return the resolved joystick bindings from the currently loaded profile.
 #[tauri::command]
 fn get_bindings(data: State<Mutex<AppData>>) -> Vec<bindings::ResolvedBinding> {
-    let data = data.lock().unwrap();
+    current_bindings(&data.lock().unwrap())
+}
+
+/// The resolved bindings for the loaded profile ("Current" in `diff.rs`'s
+/// terms), or empty when nothing (or no game data) is loaded.
+pub(crate) fn current_bindings(data: &AppData) -> Vec<bindings::ResolvedBinding> {
     match &data.profile {
         Some(profile) if !data.sc.data.actions.is_empty() => bindings::resolve_bindings(&data.sc.data.actions, profile),
         _ => Vec::new(),
     }
 }
 
-/// The clash report for the loaded profile against SC's enumeration in
-/// `Game.log` (read fresh each time so a game restart is picked up). Devices
-/// the user declared invisible to SC count as unplugged.
+/// The clash report for the loaded profile against the last loaded `Game.log`
+/// enumeration (see [`reload_sc`]). Devices the user declared invisible to SC
+/// count as unplugged.
 fn clash_report(data: &AppData, devices: &input::DeviceList) -> bindings::ClashReport {
     let Some(profile) = &data.profile else {
         return bindings::ClashReport::default();
     };
     let devices = devices.lock().map(|d| d.clone()).unwrap_or_default();
     let devices = bindings::without_ignored(&devices, &data.config.ignored_devices);
-    let log = gamelog::read(&config::game_log_path(&data.config.base_path));
-    bindings::analyze_clash(profile, &devices, log.as_ref().map_err(Clone::clone))
+    bindings::analyze_clash(profile, &devices, data.game_log.as_ref().map_err(Clone::clone))
 }
 
 /// Compare SC's saved device order against SC's actual device order to detect
@@ -138,11 +148,16 @@ fn get_clash_report(
 
 /// Apply the clash report's resort to the live `actionmaps.xml` — the
 /// out-of-game equivalent of the `pp_resortdevices` commands. The game must
-/// not be running (it would overwrite the file on exit). A copy of the
-/// original is kept next to it as `actionmaps.xml.<unix time>.bak`. Reloads
-/// the profile afterwards and returns the load status, like `set_base_path`.
+/// not be running (it would overwrite the file on exit). A backup of the
+/// original is taken first via `backups::create` (reason "before Fix via
+/// config" — the GUI's button label). Reloads the profile afterwards and
+/// returns the load status, like `set_base_path`.
 #[tauri::command]
-fn apply_resort(devices: State<input::DeviceList>, data: State<Mutex<AppData>>) -> Result<LoadStatus, String> {
+fn apply_resort(
+    app: AppHandle,
+    devices: State<input::DeviceList>,
+    data: State<Mutex<AppData>>,
+) -> Result<LoadStatus, String> {
     let mut data = data.lock().unwrap();
     let report = clash_report(&data, devices.inner());
     if let Some(err) = report.log_error {
@@ -156,17 +171,19 @@ fn apply_resort(devices: State<input::DeviceList>, data: State<Mutex<AppData>>) 
     let xml = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let rewritten = resort::rewrite_actionmaps(&xml, &report.resort)?;
 
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let backup = path.with_file_name(format!("actionmaps.xml.{stamp}.bak"));
-    std::fs::copy(&path, &backup).map_err(|e| format!("backup {}: {e}", backup.display()))?;
+    let backup = backups::create(&backups::backups_root(&app)?, &path, "before Fix via config", &data.sc.data.actions)?;
     std::fs::write(&path, rewritten).map_err(|e| format!("write {}: {e}", path.display()))?;
     let moves: Vec<String> = report.resort.iter().map(|m| format!("js{}->js{}", m.from, m.to)).collect();
-    info!("resort applied to {}: {} (backup {})", path.display(), moves.join(" "), backup.display());
+    info!("resort applied to {}: {} (backup {})", path.display(), moves.join(" "), backup.id);
 
     Ok(reload_profile(&mut data))
+}
+
+/// Re-read everything from the SC install (actionmaps.xml and Game.log)
+/// without touching the config — what Refresh does.
+#[tauri::command]
+fn reload(data: State<Mutex<AppData>>) -> LoadStatus {
+    reload_profile(&mut data.lock().unwrap())
 }
 
 /// Persist which connected devices the user declared invisible to SC (by SC
@@ -250,9 +267,12 @@ fn resolve_input(
     InputResolution { token, actions }
 }
 
-/// (Re)load and resolve the user's actionmaps.xml against the current game
-/// data, updating the profile and binding index in place.
-fn reload_profile(data: &mut AppData) -> LoadStatus {
+/// Snapshot the SC install into `data`: parse actionmaps.xml and resolve it
+/// against the current game data (profile + binding index), then read
+/// Game.log. Returns the actionmaps load status. Called at start (once the
+/// game data is in), on a base-path change, after a resort or restore, and
+/// on every Refresh.
+pub(crate) fn reload_profile(data: &mut AppData) -> LoadStatus {
     let am_path = config::actionmaps_path(&data.config.base_path);
 
     let mut status = LoadStatus {
@@ -302,15 +322,16 @@ fn reload_profile(data: &mut AppData) -> LoadStatus {
             data.profile = None;
         }
     }
-    log_game_log(&data.config.base_path);
+    data.game_log = read_game_log(&data.config.base_path);
     status
 }
 
-/// Log what SC's `Game.log` says about the device order — the one thing
-/// remote troubleshooting of a `jsN` clash always needs.
-fn log_game_log(base_path: &str) {
+/// Read SC's `Game.log` and log what it says about the device order — the
+/// one thing remote troubleshooting of a `jsN` clash always needs.
+fn read_game_log(base_path: &str) -> Result<gamelog::LogEnumeration, gamelog::GameLogError> {
     let path = config::game_log_path(base_path);
-    match gamelog::read(&path) {
+    let result = gamelog::read(&path);
+    match &result {
         Ok(log) => {
             let devices: Vec<String> = log
                 .joysticks
@@ -326,6 +347,7 @@ fn log_game_log(base_path: &str) {
         }
         Err(e) => warn!("Game.log {}: {e:?}", path.display()),
     }
+    result
 }
 
 /// Load the configured install's game data in the background (version from
@@ -495,7 +517,18 @@ pub fn run() {
 
             let config = config::load(app.handle());
             log_startup(app.handle(), &config);
-            app.manage(Mutex::new(AppData { config, ..AppData::default() }));
+            // The profile and Game.log are read once the game data is in
+            // (`spawn_sc_load` -> `reload_profile`).
+            app.manage(Mutex::new(AppData {
+                game_log: Err(gamelog::GameLogError::NotFound {
+                    path: config::game_log_path(&config.base_path).display().to_string(),
+                    reason: "not read yet".into(),
+                }),
+                config,
+                sc: ScState::default(),
+                profile: None,
+                index: bindings::BindingIndex::default(),
+            }));
             spawn_sc_load(app.handle().clone());
 
             let devices: input::DeviceList = Arc::new(Mutex::new(Vec::new()));
@@ -510,6 +543,7 @@ pub fn run() {
             get_sc_status,
             get_config,
             get_bindings,
+            reload,
             get_clash_report,
             apply_resort,
             set_ignored_devices,
@@ -526,7 +560,15 @@ pub fn run() {
             imagemap::read_imagemap_image,
             imagemap::export_imagemap,
             imagemap::import_imagemap,
-            imagemap::set_imagemap_choice
+            imagemap::set_imagemap_choice,
+            binding_profiles::list_binding_profiles,
+            binding_profiles::import_binding_profile,
+            binding_profiles::export_binding_profile,
+            backups::list_backups,
+            backups::create_backup,
+            backups::delete_backup,
+            backups::restore_backup,
+            diff::compare_bindings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

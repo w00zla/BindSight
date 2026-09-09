@@ -22,10 +22,12 @@ See `HANDOFF.md` for the current working state.
 - **Frontend**: Vue 3 + TypeScript + Vite (`src/`). `App.vue` is the
   orchestrator (all state, invokes, listeners) and composes presentational
   components: `TopBar`, `DeviceTile`, `StatusPanel`, `ImageStage` (+
-  `Splitter`), `LiveCard`, `BindingsDeck`, `SettingsDialog`, `Toasts`, `Icon`
-  (inline stroke SVGs by name — never emoji). `components/ProfileEditor.vue`
-  is the image-map editor (Konva via `vue-konva`, still the pre-redesign UI;
-  unchanged for now, renamed in a later step),
+  `Splitter`), `LiveCard`, `BindingsDeck`, `ToolsView` (the whole Tools mode:
+  binding profiles, backups, Compare), `SettingsDialog`, `Toasts`, `Icon`
+  (inline stroke SVGs by name — never emoji). `components/ImageMapEditor.vue`
+  is the image-map editor (Konva via `vue-konva`, the three-column Devices
+  mode: devices + their image-maps, canvas, live input + areas) and uses
+  `ConfirmDialog` for the unsaved-changes and delete questions;
   `components/DeviceImage.vue` the plain-SVG viewer; `imagemap.ts` the
   shared image-map types/helpers, `types.ts` all device/input/binding types.
   Design tokens live in `src/styles/tokens.css` (the only place colours are
@@ -75,9 +77,22 @@ See `HANDOFF.md` for the current working state.
   with a fresh id; import assigns a fresh id too). Zip export/import,
   image add/remove/read (data URL), validation. Pure logic takes `&Path`
   roots; the `#[tauri::command]` wrappers only resolve dirs.
+- `binding_profiles.rs` — SC's exported keybinding layouts (binding profiles;
+  `controls/mappings/*.xml`, same content as `actionmaps.xml`, different
+  root): list/import/export only, applying one is not built.
+- `backups.rs` — backups of the live `actionmaps.xml`, one folder per backup
+  (`meta.json` + `actionmaps.xml`) under `<app_data_dir>/backups/<id>/`, id =
+  `YYYYMMDD-HHMMSS` (UTC) with a `-2`, `-3`, … suffix on collision. Taken
+  manually, before a resort (`apply_resort` in `lib.rs`), and before a restore.
+- `diff.rs` — compares the joystick bindings of two sources (live
+  `actionmaps.xml`, a binding profile, or a backup) by SC token: per token, the
+  `(actionmap, action)` set bound to it in A vs B (a label-only difference is
+  not a change); reports added/removed/changed rows, sorted `jsN` then
+  numeric-aware by input.
 - `lib.rs` — Tauri commands, state wiring (`AppData`: config, the install's
-  game data + load status, profile, binding index), the input thread spawn,
-  the SC data loader thread, the Wayland DMABUF workaround, logging setup.
+  game data + load status, profile, binding index, Game.log snapshot), the
+  input thread spawn, the SC data loader thread, the Wayland DMABUF
+  workaround, logging setup.
 - **Logging**: the `log` crate everywhere (never `println!`/`eprintln!`),
   `tauri-plugin-log` writes to stdout and `<app_log_dir>/bindsight.log`
   (2 MB, 3 files kept; Linux `~/.local/share/com.w00zla.bindsight/logs/`).

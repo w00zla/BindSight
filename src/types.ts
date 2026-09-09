@@ -150,6 +150,60 @@ export interface CurrentInput {
   in_imagemap: boolean | null;
 }
 
+// --- Tools mode: binding profiles, backups, compare ------------------------
+
+// One exported SC keybinding layout in the binding profiles folder.
+export interface BindingProfileSummary {
+  file: string;
+  name: string;
+  bindings: number;
+  // File mtime, unix seconds.
+  modified: number;
+}
+
+// One saved copy of actionmaps.xml under the app data dir.
+export interface BackupSummary {
+  id: string;
+  // Unix seconds.
+  created: number;
+  reason: string;
+  bindings: number;
+}
+
+// One side of a comparison.
+export type DiffSource =
+  | { kind: "current" }
+  | { kind: "profile"; file: string }
+  | { kind: "backup"; id: string };
+
+// Bound in A only / in B only / on both sides with different actions.
+export type DiffKind = "added" | "removed" | "changed";
+
+// One action a token is bound to, for a diff row.
+export interface ActionRef {
+  actionmap: string;
+  action: string;
+  label: string | null;
+}
+
+// One SC token whose bound actions differ between A and B.
+export interface DiffRow {
+  token: string;
+  // The N in jsN_..., or null for a token without a js prefix.
+  instance: number | null;
+  kind: DiffKind;
+  a: ActionRef[];
+  b: ActionRef[];
+}
+
+// Result of comparing two binding sets; rows come sorted.
+export interface DiffReport {
+  rows: DiffRow[];
+  added: number;
+  removed: number;
+  changed: number;
+}
+
 // One device with a chosen image-map, shown on the image stage.
 export interface ImageMapView {
   device: DeviceInfo;

@@ -61,21 +61,6 @@ export function inputKey(ev: JoyInput): string | null {
   }
 }
 
-// Short display label for an input key, e.g. "button:5" -> "Button 5".
-export function inputLabel(key: string): string {
-  const [kind, index, dir] = key.split(":");
-  switch (kind) {
-    case "button":
-      return `Button ${index}`;
-    case "axis":
-      return `Axis ${index}`;
-    case "hat":
-      return `Hat ${index} ${dir}`;
-    default:
-      return key;
-  }
-}
-
 // Hardware ids are SC Product GUIDs; compare case-insensitively.
 export function sameHardware(a: string | null | undefined, b: string | null | undefined): boolean {
   return !!a && !!b && a.toLowerCase() === b.toLowerCase();

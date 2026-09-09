@@ -129,7 +129,12 @@ fn device_info(stick: &Joystick, index: u32, hid: &HidTable) -> DeviceInfo {
     let num_axes = stick.num_axes();
     let (axes, axes_error) = match hid.axes(vid_pid, num_axes) {
         Ok(axes) => (axes, None),
-        Err(e) => (Vec::new(), Some(e)),
+        Err(e) => {
+            // Technical detail: the GUI keeps it out of the device tiles and
+            // only shows it in the Log tab, so stderr gets it as well.
+            eprintln!("bindsight: {}: no axis names: {e}", stick.name());
+            (Vec::new(), Some(e))
+        }
     };
     DeviceInfo {
         index,

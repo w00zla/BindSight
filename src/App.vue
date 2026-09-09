@@ -2,13 +2,14 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import ProfileEditor from "./components/ProfileEditor.vue";
+import ImageMapEditor from "./components/ImageMapEditor.vue";
 import TopBar from "./components/TopBar.vue";
 import DeviceTile from "./components/DeviceTile.vue";
 import StatusPanel from "./components/StatusPanel.vue";
 import ImageStage from "./components/ImageStage.vue";
 import LiveCard from "./components/LiveCard.vue";
 import BindingsDeck from "./components/BindingsDeck.vue";
+import ToolsView from "./components/ToolsView.vue";
 import Toasts from "./components/Toasts.vue";
 import Splitter from "./components/Splitter.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
@@ -176,7 +177,13 @@ async function onMapsSaved() {
   await reloadMaps();
 }
 
+// The editor guards its unsaved changes; leaving Devices can be refused.
+const editor = ref<InstanceType<typeof ImageMapEditor> | null>(null);
+
 async function setMode(m: Mode) {
+  if (mode.value === "devices" && m !== "devices") {
+    if ((await editor.value?.requestLeave()) === false) return;
+  }
   mode.value = m;
   // Inputs released while the editor was open were never seen here.
   activeInputs.value = {};
@@ -512,6 +519,17 @@ function notify(message: string, type: "ok" | "error" = "ok") {
   }, TOAST_MS);
 }
 
+// A backup was written back over actionmaps.xml — same follow-up as a reload.
+async function onRestored(s: LoadStatus) {
+  bindings.value = s.bindings;
+  await loadClash();
+  if (s.loaded) {
+    notify("Restored", "ok");
+  } else {
+    notify(s.error ?? "Load failed", "error");
+  }
+}
+
 // Persist the base path; the backend reloads the install's game data and
 // profile in the background and reports via `scdata-changed`.
 async function saveBasePath() {
@@ -543,11 +561,16 @@ async function onScDataChanged(s: LoadStatus) {
   }
 }
 
+// Refresh = everything from scratch: devices, actionmaps.xml, Game.log, then
+// the clash report on top of those.
 async function refresh() {
   loading.value = true;
   error.value = null;
   try {
     devices.value = await invoke<DeviceInfo[]>("list_joysticks");
+    const s = await invoke<LoadStatus>("reload");
+    bindings.value = s.bindings;
+    if (!s.loaded) error.value = s.error;
   } catch (e) {
     error.value = String(e);
   } finally {
@@ -727,9 +750,15 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div v-else-if="mode === 'tools'" class="content" />
+    <ToolsView v-else-if="mode === 'tools'" :bindings="bindings" @notify="notify" @restored="onRestored" />
 
-    <ProfileEditor v-else-if="mode === 'devices'" :devices="devices" @notify="notify" @saved="onMapsSaved" />
+    <ImageMapEditor
+      v-else-if="mode === 'devices'"
+      ref="editor"
+      :devices="devices"
+      @notify="notify"
+      @saved="onMapsSaved"
+    />
 
     <Toasts :toasts="toasts" />
   </main>

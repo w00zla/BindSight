@@ -48,7 +48,8 @@ The core loop is closed end-to-end:
    Copy button) and the out-of-game "Rewrite actionmaps.xml" button
    (`resort.rs`: textual rewrite of joystick `<options>` instances and `jsN_`
    prefixes in `input="..."`, re-emitting the joystick blocks in slot order;
-   backup `actionmaps.xml.<unix time>.bak` next to it; profile reloaded).
+   backed up via `backups.rs` first, reason "before Fix via config"; profile
+   reloaded).
 7. **Exclude**: a per-device "Exclude always" (`ignored_devices` in the per-OS
    `config.json`) declares a device SC never sees (e.g. a keyboard Wine hides);
    it then counts as unplugged.
@@ -72,8 +73,9 @@ The core loop is closed end-to-end:
    handles `kind = "axis"`, so moving an axis shows its binding in the live
    tile (resolved at most every 150 ms per axis) and lights its image-map
    area blue; the bindings list can pin axis areas. Devices whose descriptor
-   cannot be read or placed carry `axes_error` (shown on the tile, e.g. a
-   `/dev/hidraw` without permission) and get no axis tokens.
+   cannot be read or placed carry `axes_error` (Log tab and stderr only, never
+   on the device tiles, e.g. a `/dev/hidraw` without permission) and get no
+   axis tokens.
 
 10. **Logging** (2026-09-09): `tauri-plugin-log` -> stdout + a rotating
     `bindsight.log` in the app log dir (paths in the README). Startup logs
@@ -102,8 +104,15 @@ label + action, columns DEVICE / INPUT / LABEL / ACTION / CATEGORY, held input
 tinted, rows without an image-map area greyed with a tooltip, click to pin;
 Log = device dump + raw events). Settings dialog: install path + Browse, action
 labels (bundled / global.ini stub), excluded devices as chips; nothing applies
-before Save. Tools = empty placeholder. Devices = the old `ProfileEditor`
-(unstyled, "IMAGE-MAPS" title only). Vocabulary and the remaining phases: see
+before Save. Tools = `ToolsView`: binding profiles and backups on the left
+(Import / Export / New, Backup now, restore and delete behind `ConfirmDialog`),
+the Compare panel on the right (A/B source chips, kind and `jsN` filter chips,
+search, one tinted row per differing token). Devices = `ImageMapEditor`, three
+columns (devices + their image-maps with clone / lock / trash / New and
+Import / Export; the Konva canvas with the name, the six shape tools,
+Replace image and zoom; the live SDL-key card with Add area / Delete, the
+areas list with filter, and Discard / Save), unsaved changes guarded by
+`ConfirmDialog`. Vocabulary and the remaining phases: see
 the memory `gui-naming-decisions` and the plan below.
 
 ## Verified facts (this hardware)
@@ -174,17 +183,17 @@ the memory `gui-naming-decisions` and the plan below.
   image pick, Replace image), and the axis path (live tile, blue axis areas,
   pinning axis bindings). `pnpm build`, `cargo test` and the headless
   `enum_joysticks` (prints `SC axes: x y z rotx roty rotz` for both VKBs).
+  The **whole Devices UI is GUI-unverified** — the rebuilt three-column
+  editor (zoom/fit, tool toggles, area list, guards) has only been through
+  `pnpm build`.
 - **First bundled image-map**: once one exists, copy its folder to
   `src-tauri/resources/imagemaps/<id>/`.
-- Mode switch remounts the editor: **unsaved changes are lost without a
-  warning**.
 - The pinned binding highlight is not cleared on device change / image-map
   reload.
 - `validate()` does not check uniqueness of `areas[].id` nor the image file
   extension; import extracts every zip entry, referenced or not
   (path escapes are rejected). Broken image-map folders are logged to stderr
   only.
-- Refresh button also shows in Devices mode (only refreshes devices).
 - Axis areas can be drawn and pulse on movement, but have no SC token mapping
   (see the axis item above), so they never turn blue and are not clickable in
   the bindings list.
@@ -200,23 +209,44 @@ the memory `gui-naming-decisions` and the plan below.
   (2026-09-09)**; editor UI per the canvas (device
   list without state, image-map list with lock / clone / trash, shape-tool
   icon bar, SDL-key input card, areas list, Discard / Save, unsaved-changes
-  guard). Zero SC data in that mode.
-- **Phase 4 — Tools mode**: `mappings.rs` (SC mapping-profile XMLs in
-  `<base>/user/client/0/controls/mappings/`, import/export), `backups.rs`
-  (`<app_data>/backups/<ts>/` + `meta.json` reason; `apply_resort` writes
-  there instead of the `.bak`), `diff.rs` (`diff_bindings`), then the Tools UI
-  (profiles list, backups list with restore, Compare A/B with chips).
-  Needs a real SC-exported mapping XML to verify the parser first.
+  guard) — **done (2026-09-09)** as `ImageMapEditor` (renamed from the old
+  editor) plus a new `ConfirmDialog`. Zero SC data in that mode.
+- **Phase 4 — Tools mode**: `binding_profiles.rs` (SC binding-profile XMLs in
+  `<base>/user/client/0/controls/mappings/`, import/export) — **done
+  (2026-09-09)**: `BindingProfileSummary` (file, name from `profileName` else the
+  file stem, joystick binding count via `resolve_bindings`, mtime), `list`/
+  `import`/`export` as plain file-copy in/out of `controls/mappings/` —
+  applying a layout into the live `actionmaps.xml` is explicitly not this
+  module's job; verified against a real export
+  (`data/extracted/layout_w00z14_exported.xml`, gitignored). `backups.rs` —
+  **done (2026-09-09)**: one folder per backup (`meta.json` + `actionmaps.xml`)
+  under `<app_data>/backups/<id>/`, id = `YYYYMMDD-HHMMSS` (UTC) with a
+  collision suffix; `create`/`list`/`path_of`/`delete`/`restore` (restore
+  takes a safety backup first, reason "before restore") plus the four Tauri
+  commands; `apply_resort` now backs up through it (reason "before Fix via
+  config") instead of the old `actionmaps.xml.<ts>.bak` copy. `diff.rs` —
+  **done (2026-09-09)**: `diff_bindings(a, b)` compares two resolved binding
+  sets by SC token, reporting per token whether it is bound in A only
+  (added), B only (removed), or both with a different `(actionmap, action)`
+  set (changed) — a label-only difference never counts; plus the
+  `compare_bindings` command with a `Source` (Current/Profile/Backup) per
+  side. The Tools UI — **done (2026-09-09)** as `ToolsView`: binding-profile
+  list (Current row + one row per layout, Import / Export, New disabled),
+  backup list (Backup now, restore / delete via `ConfirmDialog`, restore hands
+  the `LoadStatus` back to `App.vue`), and the Compare panel (A/B source
+  selects, kind and `jsN` filter chips, search, tinted diff rows).
 - **Phase 5 — cleanup**: dead code, docs, first bundled image-map.
 - Open: source for the game version chip (`build_manifest.id` next to
   `Data.p4k`?); `labels_source` in `config.rs` for the global.ini stub.
 - **GUI-unverified after the redesign**: splitter dragging and the folder
   dialog under WebKitGTK, image fitting with a real image-map, the Status
-  panel with a real clash / missing device / missing Game.log.
+  panel with a real clash / missing device / missing Game.log, and the whole
+  Tools UI (import/export file dialogs, backup create / restore / delete,
+  Compare against a real layout).
 
 ## Testing
 
-- `cd src-tauri && cargo test --lib` — 49 tests (+1 ignored). The ignored one
+- `cd src-tauri && cargo test --lib` — 72 tests (+1 ignored). The ignored one
   (`converts_real_hardware_guids`) checks the author's real GUIDs; run with
   `cargo test -- --ignored`.
 - Frontend: `pnpm build` (vue-tsc typechecks, `noUnusedLocals` is on).
