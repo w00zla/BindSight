@@ -1,4 +1,4 @@
-// Hardware profile types (mirroring profile.json, format 1) plus the small
+// Hardware profile types (mirroring profile.json, format 2) plus the small
 // helpers both renderers (Konva editor, SVG viewer) share.
 
 import type { JoyInput } from "./types";
@@ -15,7 +15,6 @@ export type SymbolShape = { kind: "symbol"; symbol: SymbolKind; x: number; y: nu
 export type Shape = RectShape | EllipseShape | PolygonShape | SymbolShape;
 
 export interface HwImage {
-  id: string;
   file: string;
   label: string;
 }
@@ -24,8 +23,6 @@ export interface HwArea {
   id: string;
   // SDL-level input key: `button:<n>`, `hat:<n>:<dir>`, `axis:<n>`.
   input: string;
-  // References HwImage.id.
-  image: string;
   shape: Shape;
 }
 
@@ -36,7 +33,7 @@ export interface HwProfile {
   hardware_id: string;
   hardware_name: string;
   variant: string;
-  images: HwImage[];
+  image: HwImage;
   areas: HwArea[];
 }
 
@@ -47,7 +44,6 @@ export interface HwProfileSummary {
   hardware_name: string;
   variant: string;
   source: "bundled" | "user";
-  image_count: number;
   area_count: number;
 }
 

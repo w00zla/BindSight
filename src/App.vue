@@ -77,20 +77,25 @@ type GameLogError =
   | { kind: "not_found"; path: string; reason: string }
   | { kind: "no_device_lines"; path: string };
 
-type OrderSource =
-  | { kind: "game_log"; timestamp: string | null }
-  | { kind: "sdl_derived"; log_error: GameLogError | null };
+// One resort step: the bindings saved under js{from} belong on js{to}.
+interface ResortMove {
+  from: number;
+  to: number;
+  name: string | null;
+}
 
+// Game.log is the only order source: with log_error set, everything else is
+// empty and nothing is said about the order.
 interface ClashReport {
   connected: SlotStatus[];
   missing: MissingSlot[];
   unseen: UnseenDevice[];
-  source: OrderSource;
-  // Whether the SC order is trustworthy (always for Game.log; for the SDL
-  // fallback only where the platform rule is verified). When false,
-  // effective_instance is a guess and no rank clash is asserted.
-  order_verified: boolean;
+  log_timestamp: string | null;
+  log_error: GameLogError | null;
   has_clash: boolean;
+  resort: ResortMove[];
+  // In-game equivalent of `resort`: pp_resortdevices swaps, in order.
+  resort_commands: string[];
 }
 
 const MAX_EVENTS = 50;
@@ -182,7 +187,7 @@ async function loadChosenProfiles() {
     try {
       const p = await invoke<HwProfile>("get_hw_profile", { id });
       loadedProfiles.value[id] = p;
-      for (const im of p.images) await loadProfileImage(p.id, im.file);
+      await loadProfileImage(p.id, p.image.file);
     } catch {
       /* skip a profile that will not load */
     }
@@ -199,7 +204,7 @@ async function reloadProfiles() {
   await loadChosenProfiles();
 }
 
-// A save in the editor can change images and areas — drop the caches.
+// A save in the editor can change the image and areas — drop the caches.
 async function onProfilesSaved() {
   loadedProfiles.value = {};
   profileImages.value = {};
@@ -376,8 +381,8 @@ function slotFor(guid: string | null): SlotStatus | null {
   return guid ? slotByGuid.value.get(guid) ?? null : null;
 }
 
-// The Game.log source, when that is where the order came from.
-const logSource = computed(() => (clash.value?.source.kind === "game_log" ? clash.value.source : null));
+// Whether the report rests on a usable Game.log.
+const hasLog = computed(() => !!clash.value && !clash.value.log_error && !!clash.value.log_timestamp);
 
 // GUIDs SC did not list at its last start (Game.log source only).
 const unseenGuids = computed<Set<string>>(
@@ -432,11 +437,9 @@ const healthyInstances = computed<Set<number>>(() => {
   return s;
 });
 
-// Is this binding's slot misdirected by the current device-order clash? Only
-// asserted when the derived SC order is verified on this platform — a guessed
-// order must not accuse bindings; missing devices still show as "not connected".
+// Is this binding's slot misdirected by the current device-order clash?
 function bindingClash(token: string): boolean {
-  if (!clash.value?.has_clash || !clash.value.order_verified) return false;
+  if (!clash.value?.has_clash) return false;
   const n = Number(instanceOf(token));
   return Number.isFinite(n) && !healthyInstances.value.has(n);
 }
@@ -446,6 +449,33 @@ async function loadClash() {
     clash.value = await invoke<ClashReport>("get_clash_report");
   } catch {
     clash.value = null;
+  }
+}
+
+// Put the pp_resortdevices commands on the clipboard, one per line.
+async function copyResortCommands() {
+  const text = (clash.value?.resort_commands ?? []).join("\n");
+  try {
+    await navigator.clipboard.writeText(text);
+    notify("Commands copied", "ok");
+  } catch (e) {
+    notify(`Copy failed: ${String(e)}`, "error");
+  }
+}
+
+// Rewrite actionmaps.xml with the resort (SC must be closed) and reload.
+async function applyResort() {
+  try {
+    const s = await invoke<LoadStatus>("apply_resort");
+    bindings.value = s.bindings;
+    await loadClash();
+    if (s.loaded) {
+      notify("actionmaps.xml resorted (backup kept next to it)", "ok");
+    } else {
+      notify(s.error ?? "Reload failed", "error");
+    }
+  } catch (e) {
+    notify(String(e), "error");
   }
 }
 
@@ -670,9 +700,6 @@ onUnmounted(() => {
             ⚠ SC → js{{ slotFor(d.sc_product_guid)?.effective_instance }}
             (binds js{{ slotFor(d.sc_product_guid)?.stored_instance }})
           </span>
-          <span v-else-if="slotFor(d.sc_product_guid) && !clash?.order_verified" class="js-unverified">
-            order unknown
-          </span>
           <span v-else-if="slotFor(d.sc_product_guid)?.stored_instance" class="js-mapped">
             ✓ js{{ slotFor(d.sc_product_guid)?.effective_instance }}
           </span>
@@ -702,20 +729,19 @@ onUnmounted(() => {
       </li>
     </ul>
 
-    <p v-if="logSource" class="source-note">
-      <code>Game.log</code> {{ fmtTimestamp(logSource.timestamp) }}
+    <p v-if="hasLog" class="source-note">
+      <code>Game.log</code> {{ fmtTimestamp(clash?.log_timestamp ?? null) }}
       <template v-if="clash?.unseen.length"> · {{ clash?.unseen.length }} not seen by SC</template>
       <template v-if="unpluggedSinceStart.length"> · {{ unpluggedSinceStart.length }} unplugged since</template>
     </p>
-    <p v-else-if="clash && clash.source.kind === 'sdl_derived' && devices.length" class="order-note">
-      <template v-if="clash.source.log_error?.kind === 'not_found'">
-        <code>Game.log</code> not found: <code>{{ clash.source.log_error.path }}</code>
+    <p v-else-if="clash?.log_error" class="order-note">
+      <template v-if="clash.log_error.kind === 'not_found'">
+        <code>Game.log</code> not found: <code>{{ clash.log_error.path }}</code>
       </template>
-      <template v-else-if="clash.source.log_error?.kind === 'no_device_lines'">
-        <code>Game.log</code> lists no joysticks: <code>{{ clash.source.log_error.path }}</code>
+      <template v-else>
+        <code>Game.log</code> lists no joysticks: <code>{{ clash.log_error.path }}</code>
       </template>
-      <template v-else><code>Game.log</code> not consulted</template>
-      <template v-if="!clash.order_verified"> · order unknown</template>
+      · no device order without it
     </p>
 
     <section v-if="clash?.has_clash" class="clash-banner">
@@ -731,6 +757,22 @@ onUnmounted(() => {
           device list (slots after it shift down)
         </li>
       </ul>
+      <div v-if="clash.resort.length" class="resort">
+        <div class="resort-title">Resort</div>
+        <ul class="resort-moves">
+          <li v-for="m in clash.resort" :key="m.from">
+            <strong>js{{ m.from }} → js{{ m.to }}</strong>
+            <template v-if="m.name"> {{ m.name }}</template>
+            <template v-else> (no saved device)</template>
+          </li>
+        </ul>
+        <div class="resort-row">
+          <pre class="resort-cmds">{{ clash.resort_commands.join("\n") }}</pre>
+          <button @click="copyResortCommands">Copy</button>
+        </div>
+        <p class="resort-hint">In-game: paste into the console. Out of game: rewrite <code>actionmaps.xml</code> (SC must be closed; a backup is kept).</p>
+        <button class="resort-apply" @click="applyResort">Rewrite actionmaps.xml</button>
+      </div>
     </section>
 
     <section class="current" :class="'state-' + liveState()" v-if="currentInput">
@@ -768,15 +810,12 @@ onUnmounted(() => {
           </select>
           <span v-else class="hp-name">{{ v.profile.name }}</span>
         </div>
-        <template v-for="im in v.profile.images" :key="im.id">
-          <DeviceImage
-            v-if="imgSrc(v.profile.id, im.file)"
-            :profile="v.profile"
-            :image="im"
-            :src="imgSrc(v.profile.id, im.file)"
-            :active="activeFor(v.device.sdl_guid)"
-          />
-        </template>
+        <DeviceImage
+          v-if="imgSrc(v.profile.id, v.profile.image.file)"
+          :profile="v.profile"
+          :src="imgSrc(v.profile.id, v.profile.image.file)"
+          :active="activeFor(v.device.sdl_guid)"
+        />
       </div>
     </section>
 
@@ -1096,6 +1135,49 @@ h2 {
   margin: 0.5rem 0 0;
   padding-left: 1.1rem;
   font-size: 0.85rem;
+}
+
+.resort {
+  margin-top: 0.75rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid rgba(192, 57, 43, 0.3);
+  font-size: 0.85rem;
+}
+
+.resort-title {
+  font-weight: 700;
+  margin-bottom: 0.3rem;
+}
+
+.resort-moves {
+  margin: 0 0 0.5rem;
+  padding-left: 1.1rem;
+}
+
+.resort-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.resort-cmds {
+  flex: 1;
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  background: rgba(128, 128, 128, 0.14);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  overflow-x: auto;
+}
+
+.resort-hint {
+  margin: 0.5rem 0;
+  opacity: 0.8;
+}
+
+.resort-hint code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .binding-clash {

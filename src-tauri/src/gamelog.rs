@@ -14,7 +14,7 @@
 //! last game start, so a device plugged in afterwards is not in it.
 //!
 //! The format is SC-internal and may change with a patch; parsing fails soft
-//! (returns `None`) so callers fall back to deriving the order elsewhere.
+//! (returns `None`) and callers report that — there is no other order source.
 
 use std::path::Path;
 

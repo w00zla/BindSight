@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { SYMBOL_PATHS, polygonPx, symbolPx, type HighlightClass, type HwArea, type HwImage, type HwProfile } from "../hwprofile";
+import { SYMBOL_PATHS, polygonPx, symbolPx, type HighlightClass, type HwArea, type HwProfile } from "../hwprofile";
 
 const props = defineProps<{
   profile: HwProfile;
-  image: HwImage;
   src: string;
   // input key -> highlight class for the currently active inputs
   active: Map<string, HighlightClass>;
@@ -21,7 +20,7 @@ function onLoad(e: Event) {
   H.value = img.naturalHeight;
 }
 
-const areas = computed<HwArea[]>(() => props.profile.areas.filter((a) => a.image === props.image.id));
+const areas = computed<HwArea[]>(() => props.profile.areas);
 
 function cls(a: HwArea): string {
   const c = props.active.get(a.input);
@@ -45,7 +44,7 @@ function symbolTransform(a: HwArea): string {
 
 <template>
   <div class="device-image">
-    <img :src="src" :alt="image.label" @load="onLoad" />
+    <img :src="src" :alt="profile.image.label" @load="onLoad" />
     <svg v-if="W && H" :viewBox="`0 0 ${W} ${H}`" preserveAspectRatio="none">
       <template v-for="a in areas" :key="a.id">
         <rect

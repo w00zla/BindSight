@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Hardware profile editor: pick a device, pick/create a profile, add images,
+// Hardware profile editor: pick a device, pick/create a profile (around its image),
 // press a physical input and draw the areas that belong to it. Konva does the
 // canvas work; everything is stored normalized (0..1) in the profile.
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
@@ -56,11 +56,8 @@ const busy = ref(false);
 
 // --- canvas state ----------------------------------------------------------
 
-const currentImageId = ref("");
-const currentImage = computed(() => profile.value?.images.find((i) => i.id === currentImageId.value) ?? null);
-const imageAreas = computed<HwArea[]>(() =>
-  (profile.value?.areas ?? []).filter((a) => a.image === currentImageId.value),
-);
+const currentImage = computed(() => profile.value?.image ?? null);
+const imageAreas = computed<HwArea[]>(() => profile.value?.areas ?? []);
 
 const imgEl = ref<HTMLImageElement | null>(null);
 const natW = ref(0);
@@ -113,7 +110,6 @@ async function loadProfile(id: string) {
     profile.value = p;
     savedJson.value = JSON.stringify(p);
     selectedId.value = null;
-    currentImageId.value = p.images[0]?.id ?? "";
   } catch (e) {
     profile.value = null;
     emit("notify", String(e), "error");
@@ -183,11 +179,10 @@ watch(profileId, (id) => {
   else {
     profile.value = null;
     savedJson.value = "";
-    currentImageId.value = "";
   }
 });
 
-watch([currentImageId, () => profile.value?.id], () => {
+watch([() => currentImage.value?.file, () => profile.value?.id], () => {
   selectedId.value = null;
   cancelDraw();
   loadCanvasImage();
@@ -195,17 +190,50 @@ watch([currentImageId, () => profile.value?.id], () => {
 
 // --- profile actions -------------------------------------------------------
 
-async function newProfile() {
+// Pick an image file, or null when the dialog was cancelled.
+async function pickImage(): Promise<string | null> {
+  const src = await open({
+    multiple: false,
+    filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp"] }],
+  });
+  return src ?? null;
+}
+
+// "New" opens an inline form: name, variant and — required — the image the
+// areas will be drawn on. Only then is the profile created.
+const draftNew = ref<{ name: string; variant: string; imagePath: string } | null>(null);
+const draftImageName = computed(() => draftNew.value?.imagePath.split(/[\\/]/).pop() ?? "");
+
+function startNew() {
   const d = device.value;
   if (!d?.sc_product_guid) return;
+  draftNew.value = { name: d.sc_name ?? d.sdl_name, variant: "", imagePath: "" };
+}
+
+async function pickDraftImage() {
+  if (!draftNew.value) return;
+  try {
+    const src = await pickImage();
+    if (src) draftNew.value.imagePath = src;
+  } catch (e) {
+    emit("notify", String(e), "error");
+  }
+}
+
+async function createProfile() {
+  const d = device.value;
+  const draft = draftNew.value;
+  if (!d?.sc_product_guid || !draft?.imagePath) return;
   busy.value = true;
   try {
     const p = await invoke<HwProfile>("create_hw_profile", {
-      name: d.sc_name ?? d.sdl_name,
+      name: draft.name.trim() || (d.sc_name ?? d.sdl_name),
       hardwareId: d.sc_product_guid,
       hardwareName: d.sc_name ?? "",
-      variant: "",
+      variant: draft.variant.trim(),
+      imagePath: draft.imagePath,
     });
+    draftNew.value = null;
     await loadSummaries();
     profileId.value = p.id;
     emit("notify", "HW profile created", "ok");
@@ -282,41 +310,27 @@ async function importProfile() {
   }
 }
 
-// --- images ----------------------------------------------------------------
+// --- image -----------------------------------------------------------------
 
-async function addImage() {
+// Replace the profile's image. The areas stay (a re-shot of the same view
+// keeps them useful); the old file is removed once the new one is in.
+async function replaceImage() {
   const p = profile.value;
   if (!p) return;
   try {
-    const src = await open({
-      multiple: false,
-      filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp"] }],
-    });
+    const src = await pickImage();
     if (!src) return;
-    const img = await invoke<{ id: string; file: string; label: string }>("add_hw_profile_image", {
+    const old = p.image.file;
+    const img = await invoke<{ file: string; label: string }>("add_hw_profile_image", {
       id: p.id,
       sourcePath: src,
     });
-    p.images.push(img);
-    currentImageId.value = img.id;
+    p.image = img;
+    if (old !== img.file) {
+      await invoke("remove_hw_profile_image", { id: p.id, file: old });
+      imgCache.delete(`${p.id}/${old}`);
+    }
     // The file is on disk already — keep profile.json in step with it.
-    await saveProfile();
-  } catch (e) {
-    emit("notify", String(e), "error");
-  }
-}
-
-async function removeImage() {
-  const p = profile.value;
-  const im = currentImage.value;
-  if (!p || !im) return;
-  const file = im.file;
-  p.areas = p.areas.filter((a) => a.image !== im.id);
-  p.images = p.images.filter((i) => i.id !== im.id);
-  currentImageId.value = p.images[0]?.id ?? "";
-  try {
-    await invoke("remove_hw_profile_image", { id: p.id, file });
-    imgCache.delete(`${p.id}/${file}`);
     await saveProfile();
   } catch (e) {
     emit("notify", String(e), "error");
@@ -365,11 +379,20 @@ function onKeyDown(e: KeyboardEvent) {
 
 function addArea(shape: HwArea["shape"]) {
   const p = profile.value;
-  if (!p || !currentInput.value || !currentImageId.value) return;
-  const area: HwArea = { id: newId(), input: currentInput.value, image: currentImageId.value, shape };
+  if (!p || !currentInput.value) return;
+  const area: HwArea = { id: newId(), input: currentInput.value, shape };
   p.areas.push(area);
   selectedId.value = area.id;
   tool.value = "select";
+}
+
+// Drop every area of the profile (unsaved until Save, like any edit).
+function removeAllAreas() {
+  const p = profile.value;
+  if (!p) return;
+  p.areas = [];
+  selectedId.value = null;
+  cancelDraw();
 }
 
 function setTool(t: Tool) {
@@ -668,7 +691,7 @@ watch(
   { deep: true },
 );
 
-// Inputs used on the current image, with their area counts.
+// Inputs with areas, with their counts.
 const imageInputs = computed(() => {
   const m = new Map<string, number>();
   for (const a of imageAreas.value) m.set(a.input, (m.get(a.input) ?? 0) + 1);
@@ -710,13 +733,32 @@ const polyPreview = computed(() => {
         </option>
       </select>
       <span v-if="isBundled" class="tag">bundled</span>
-      <button :disabled="!device || busy" @click="newProfile">New</button>
+      <button :disabled="!device || busy || !!draftNew" @click="startNew">New</button>
       <button :disabled="currentSummary?.source !== 'user' || busy" @click="deleteProfile">Delete</button>
       <button :disabled="!profile" @click="exportProfile">Export…</button>
       <button @click="importProfile">Import…</button>
     </div>
 
-    <template v-if="profile">
+    <div v-if="draftNew" class="newbox">
+      <div class="row">
+        <span class="cur">New HW profile for {{ device?.sc_name ?? device?.sdl_name }}</span>
+      </div>
+      <div class="row">
+        <input v-model="draftNew.name" class="txt" placeholder="Name" />
+        <input v-model="draftNew.variant" class="txt short" placeholder="Variant (stock, addon…)" />
+      </div>
+      <div class="row">
+        <button @click="pickDraftImage">{{ draftNew.imagePath ? "Change image…" : "Choose image…" }}</button>
+        <span v-if="draftNew.imagePath" class="file">{{ draftImageName }}</span>
+        <span v-else class="hint">Photo or drawing of the device (png/jpg/webp); the input areas are drawn on it.</span>
+      </div>
+      <div class="row">
+        <button :disabled="!draftNew.imagePath || busy" @click="createProfile">Create</button>
+        <button :disabled="busy" @click="draftNew = null">Cancel</button>
+      </div>
+    </div>
+
+    <template v-if="profile && !draftNew">
       <div class="row">
         <input v-model="profile.name" class="txt" placeholder="Name" />
         <input v-model="profile.variant" class="txt short" placeholder="Variant" />
@@ -725,16 +767,7 @@ const polyPreview = computed(() => {
       </div>
 
       <div class="row tabs">
-        <button
-          v-for="im in profile.images"
-          :key="im.id"
-          :class="{ on: im.id === currentImageId }"
-          @click="currentImageId = im.id"
-        >
-          {{ im.label || im.file }}
-        </button>
-        <button @click="addImage">Add image…</button>
-        <button v-if="currentImage" @click="removeImage">Remove image</button>
+        <button @click="replaceImage">Replace image…</button>
       </div>
 
       <div v-if="currentImage" class="row">
@@ -751,6 +784,7 @@ const polyPreview = computed(() => {
       <div class="row tools">
         <button v-for="t in TOOLS" :key="t" :class="{ on: tool === t }" @click="setTool(t)">{{ t }}</button>
         <button :disabled="!selectedId" @click="deleteSelected">Delete area</button>
+        <button :disabled="!imageAreas.length" @click="removeAllAreas">Remove all areas</button>
       </div>
 
       <div ref="wrap" class="canvas">
@@ -844,7 +878,7 @@ const polyPreview = computed(() => {
             </v-label>
           </v-layer>
         </v-stage>
-        <p v-else class="empty">No image. Add one to start drawing.</p>
+        <p v-else class="empty">Loading image…</p>
       </div>
 
       <ul v-if="imageInputs.length" class="inputs">
@@ -856,7 +890,7 @@ const polyPreview = computed(() => {
       </ul>
     </template>
 
-    <p v-else class="empty">
+    <p v-else-if="!draftNew" class="empty">
       {{ usableDevices.length ? "No HW profile selected." : "No device with an SC product GUID." }}
     </p>
   </section>
@@ -981,6 +1015,21 @@ const polyPreview = computed(() => {
 }
 
 .empty {
+  opacity: 0.7;
+}
+
+.newbox {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 10px;
+  background: rgba(128, 128, 128, 0.06);
+}
+
+.hint {
+  font-size: 0.8rem;
   opacity: 0.7;
 }
 </style>

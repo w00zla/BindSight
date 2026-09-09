@@ -10,6 +10,7 @@ pub mod gamelog;
 pub mod guid;
 pub mod hwprofile;
 pub mod input;
+pub mod resort;
 pub mod scdata;
 
 /// Display labels for input tokens (e.g. `"button9"` -> `"Button 9"`).
@@ -70,6 +71,19 @@ fn get_bindings(
     }
 }
 
+/// The clash report for the loaded profile against SC's enumeration in
+/// `Game.log` (read fresh each time so a game restart is picked up). Devices
+/// the user declared invisible to SC count as unplugged.
+fn clash_report(data: &AppData, devices: &input::DeviceList) -> bindings::ClashReport {
+    let Some(profile) = &data.profile else {
+        return bindings::ClashReport::default();
+    };
+    let devices = devices.lock().map(|d| d.clone()).unwrap_or_default();
+    let devices = bindings::without_ignored(&devices, &data.config.ignored_devices);
+    let log = gamelog::read(&config::game_log_path(&data.config.base_path));
+    bindings::analyze_clash(profile, &devices, log.as_ref().map_err(Clone::clone))
+}
+
 /// Compare SC's saved device order against SC's actual device order to detect
 /// the `jsN` switch clash (SC assigns `jsN` by start-time device order, ignoring
 /// name/GUID). Empty when no profile is loaded.
@@ -78,17 +92,48 @@ fn get_clash_report(
     devices: State<input::DeviceList>,
     data: State<Mutex<AppData>>,
 ) -> bindings::ClashReport {
-    let data = data.lock().unwrap();
-    let Some(profile) = &data.profile else {
-        return bindings::ClashReport::default();
+    clash_report(&data.lock().unwrap(), devices.inner())
+}
+
+/// Apply the clash report's resort to the live `actionmaps.xml` — the
+/// out-of-game equivalent of the `pp_resortdevices` commands. The game must
+/// not be running (it would overwrite the file on exit). A copy of the
+/// original is kept next to it as `actionmaps.xml.<unix time>.bak`. Reloads
+/// the profile afterwards and returns the load status, like `set_base_path`.
+#[tauri::command]
+fn apply_resort(
+    devices: State<input::DeviceList>,
+    actions: State<Vec<scdata::ActionMap>>,
+    data: State<Mutex<AppData>>,
+) -> Result<LoadStatus, String> {
+    let mut data = data.lock().unwrap();
+    let report = clash_report(&data, devices.inner());
+    if let Some(err) = report.log_error {
+        return Err(format!("no device order from Game.log: {err:?}"));
+    }
+    if report.resort.is_empty() {
+        return Err("nothing to resort".into());
+    }
+
+    let path = config::actionmaps_path(&data.config.base_path);
+    let xml = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let rewritten = resort::rewrite_actionmaps(&xml, &report.resort)?;
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let backup = path.with_file_name(format!("actionmaps.xml.{stamp}.bak"));
+    std::fs::copy(&path, &backup).map_err(|e| format!("backup {}: {e}", backup.display()))?;
+    std::fs::write(&path, rewritten).map_err(|e| format!("write {}: {e}", path.display()))?;
+
+    let (profile, status) = load_profile(&data.config.base_path, actions.inner());
+    data.index = match &profile {
+        Some(profile) => bindings::BindingIndex::build(actions.inner(), profile),
+        None => bindings::BindingIndex::default(),
     };
-    let devices = devices.lock().map(|d| d.clone()).unwrap_or_default();
-    // Devices the user declared invisible to SC count as unplugged.
-    let devices = bindings::without_ignored(&devices, &data.config.ignored_devices);
-    // SC's own enumeration from the last game start is the primary order
-    // source; read fresh each time so a game restart is picked up.
-    let log = gamelog::read(&config::game_log_path(&data.config.base_path));
-    bindings::analyze_clash(profile, &devices, log.as_ref().map_err(Clone::clone))
+    data.profile = profile;
+    Ok(status)
 }
 
 /// Persist which connected devices the user declared invisible to SC (by SC
@@ -275,6 +320,7 @@ pub fn run() {
             get_config,
             get_bindings,
             get_clash_report,
+            apply_resort,
             set_ignored_devices,
             set_base_path,
             resolve_input,

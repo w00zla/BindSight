@@ -39,7 +39,13 @@ See `HANDOFF.md` for the current working state.
   (labels), `keybinding_localization.xml` (input token labels), and the user's
   `actionmaps.xml` (rebinds + `<options>` device map).
 - `bindings.rs` — `BindingIndex` (token -> bound actions), `button_token`/
-  `hat_token` (with the +1 offset), `instance_for_guid`, `resolve_bindings`.
+  `hat_token` (with the +1 offset), `instance_for_guid`, `resolve_bindings`,
+  `analyze_clash` (saved `<options>` vs. `Game.log` order — the only order
+  source, no SDL-derived fallback), `plan_resort` / `resort_commands`.
+- `gamelog.rs` — parse SC's `Connected joystickN: <Product {GUID}>` lines.
+- `resort.rs` — textual `actionmaps.xml` rewrite applying a resort (joystick
+  `<options>` instances + `jsN_` prefixes in `input="..."`), out-of-game
+  counterpart of `pp_resortdevices`.
 - `config.rs` — persist the SC base path, the ignore list and the HW profile
   choice per device as JSON in the app config dir.
 - `hwprofile.rs` — HW profiles: one folder per profile (`profile.json` +
@@ -50,12 +56,15 @@ See `HANDOFF.md` for the current working state.
 - `lib.rs` — Tauri commands, state wiring, the input thread spawn, the Wayland
   DMABUF workaround.
 
-## HW profile data model (`profile.json`, format 1)
+## HW profile data model (`profile.json`, format 2)
 
 - Keyed by `hardware_id` = SC Product GUID (vendor/product, platform-stable);
   several profiles per id are normal (`variant`: stock / addon builds).
+- **Exactly one image per profile** (`image: {file, label}`, mandatory — a
+  profile is created around its image file, areas belong to it implicitly).
+  Format 1 (`images[]`, areas tied to an image id) is not read.
 - Areas map an **SDL-level** input key (`button:N`, `hat:N:<dir>`, `axis:N`,
-  no axis sign — SC has none) to a shape on an image: `rect`, `ellipse`,
+  no axis sign — SC has none) to a shape on the image: `rect`, `ellipse`,
   `polygon`, or `symbol` (`arrow` rotatable, `cw`, `ccw`). Several areas per
   input are fine.
 - All coordinates are normalized 0..1 to the image's natural size, rotation
@@ -127,6 +136,8 @@ file libappindicator-gtk3-devel librsvg2-devel libxdo-devel SDL2-devel`, plus th
   parent of `Data.p4k` (e.g. `.../StarCitizen/LIVE`).
 - **Device identity is GUID, never name**: SDL's name (evdev) differs from SC's
   (HID product string). Match devices by vendor/product GUID only.
+- **SDL order is not SC order** (Windows: reversed, Linux: unrelated). `jsN`
+  comes from `Game.log` only; never derive it from SDL's enumeration.
 - **+1 button offset**: SC `js_button1` == SDL button 0 (verified under Wine).
 - **Wayland**: `run()` sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` on Linux (fixes
   WebKitGTK "Error 71"), unless the user overrode it.

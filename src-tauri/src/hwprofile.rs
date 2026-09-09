@@ -1,8 +1,8 @@
-//! Hardware profiles: images of a physical joystick plus drawn areas that map
-//! an SDL-level input (`button:5`, `hat:0:up`, `axis:2`) to a region of an
-//! image, so the live view can light up the physical control.
+//! Hardware profiles: one image of a physical joystick plus drawn areas that
+//! map an SDL-level input (`button:5`, `hat:0:up`, `axis:2`) to a region of
+//! it, so the live view can light up the physical control.
 //!
-//! On disk a profile is one folder — `profile.json` plus the image files it
+//! On disk a profile is one folder — `profile.json` plus the image file it
 //! references by bare file name. Two roots are searched:
 //!
 //! - bundled: `resources/profiles/<id>/` (shipped with the app, read-only),
@@ -12,7 +12,7 @@
 //! bundled profile forks it into the user root first (folder copy), so the
 //! bundled copy is never touched and deleting the user copy reveals it again.
 //!
-//! Export/import is a plain zip with `profile.json` and the images at the
+//! Export/import is a plain zip with `profile.json` and the image at the
 //! root. Import refuses entries with path separators, so a zip can never
 //! write outside its profile folder.
 //!
@@ -32,15 +32,15 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::{config, AppData};
 
-/// The only profile.json format version so far.
-pub const FORMAT: u32 = 1;
+/// Current profile.json format. Format 1 (several `images`, areas tied to
+/// one by id) is not read — nothing shipped with it.
+pub const FORMAT: u32 = 2;
 
 const PROFILE_FILE: &str = "profile.json";
 
-/// One image of the device, e.g. the top view.
+/// The image of the device — mandatory, a profile is nothing without it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HwImage {
-    pub id: String,
     /// Bare file name inside the profile folder.
     pub file: String,
     #[serde(default)]
@@ -83,14 +83,12 @@ pub enum Shape {
     },
 }
 
-/// A drawn region of one image, tied to one SDL-level input key.
+/// A drawn region of the image, tied to one SDL-level input key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HwArea {
     pub id: String,
     /// `button:<n>`, `hat:<n>:<dir>` or `axis:<n>`.
     pub input: String,
-    /// References `HwImage::id`.
-    pub image: String,
     pub shape: Shape,
 }
 
@@ -106,8 +104,7 @@ pub struct HwProfile {
     pub hardware_name: String,
     #[serde(default)]
     pub variant: String,
-    #[serde(default)]
-    pub images: Vec<HwImage>,
+    pub image: HwImage,
     #[serde(default)]
     pub areas: Vec<HwArea>,
 }
@@ -121,7 +118,7 @@ pub enum ProfileSource {
 }
 
 /// Listing entry — everything the UI needs to pick a profile without
-/// loading its images.
+/// loading its image.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HwProfileSummary {
     pub id: String,
@@ -130,7 +127,6 @@ pub struct HwProfileSummary {
     pub hardware_name: String,
     pub variant: String,
     pub source: ProfileSource,
-    pub image_count: usize,
     pub area_count: usize,
 }
 
@@ -143,7 +139,6 @@ impl HwProfileSummary {
             hardware_name: p.hardware_name.clone(),
             variant: p.variant.clone(),
             source,
-            image_count: p.images.len(),
             area_count: p.areas.len(),
         }
     }
@@ -181,25 +176,16 @@ pub fn validate(p: &HwProfile) -> Result<(), String> {
     if p.hardware_id.trim().is_empty() {
         return Err("hardware id is empty".into());
     }
-    for img in &p.images {
-        if !is_bare_name(&img.file) {
-            return Err(format!("invalid image file name {:?}", img.file));
-        }
-    }
-    for area in &p.areas {
-        if !p.images.iter().any(|i| i.id == area.image) {
-            return Err(format!("area {:?} references unknown image {:?}", area.id, area.image));
-        }
+    if !is_bare_name(&p.image.file) {
+        return Err(format!("invalid image file name {:?}", p.image.file));
     }
     Ok(())
 }
 
-/// Check that every referenced image file exists in `dir`.
+/// Check that the referenced image file exists in `dir`.
 fn validate_files(p: &HwProfile, dir: &Path) -> Result<(), String> {
-    for img in &p.images {
-        if !dir.join(&img.file).is_file() {
-            return Err(format!("image file {:?} is missing", img.file));
-        }
+    if !dir.join(&p.image.file).is_file() {
+        return Err(format!("image file {:?} is missing", p.image.file));
     }
     Ok(())
 }
@@ -267,7 +253,7 @@ fn find_dir(bundled_root: &Path, user_root: &Path, id: &str) -> Result<(PathBuf,
 }
 
 /// The writable folder for a profile. Forks a bundled profile (folder copy,
-/// images included) into the user root on first write; creates an empty
+/// image included) into the user root on first write; creates an empty
 /// folder for an id that exists nowhere yet.
 fn user_dir(bundled_root: &Path, user_root: &Path, id: &str) -> Result<PathBuf, String> {
     if !is_bare_name(id) {
@@ -295,19 +281,31 @@ pub fn get(bundled_root: &Path, user_root: &Path, id: &str) -> Result<HwProfile,
     read_profile(&dir)
 }
 
-pub fn create(user_root: &Path, name: &str, hardware_id: &str, hardware_name: &str, variant: &str) -> Result<HwProfile, String> {
+/// Create a user profile around `image_source` (copied into the new folder).
+pub fn create(
+    user_root: &Path,
+    name: &str,
+    hardware_id: &str,
+    hardware_name: &str,
+    variant: &str,
+    image_source: &Path,
+) -> Result<HwProfile, String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let dir = user_root.join(&id);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let image = copy_image_into(&dir, image_source)?;
     let profile = HwProfile {
         format: FORMAT,
-        id: uuid::Uuid::new_v4().to_string(),
+        id,
         name: name.to_string(),
         hardware_id: hardware_id.to_string(),
         hardware_name: hardware_name.to_string(),
         variant: variant.to_string(),
-        images: Vec::new(),
+        image,
         areas: Vec::new(),
     };
     validate(&profile)?;
-    write_profile(&user_root.join(&profile.id), &profile)?;
+    write_profile(&dir, &profile)?;
     Ok(profile)
 }
 
@@ -341,25 +339,6 @@ fn mime_for(file: &str) -> Option<&'static str> {
     }
 }
 
-/// Lowercase slug of a file stem: `[a-z0-9]` kept, runs of anything else
-/// collapsed to one `-`.
-fn slug(stem: &str) -> String {
-    let mut out = String::new();
-    for c in stem.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-        } else if !out.ends_with('-') {
-            out.push('-');
-        }
-    }
-    let out = out.trim_matches('-').to_string();
-    if out.is_empty() {
-        "image".to_string()
-    } else {
-        out
-    }
-}
-
 /// `base`, or `base-2`, `base-3`, … until `taken` says no.
 fn unique(base: &str, mut taken: impl FnMut(&str) -> bool) -> String {
     if !taken(base) {
@@ -371,8 +350,15 @@ fn unique(base: &str, mut taken: impl FnMut(&str) -> bool) -> String {
         .expect("unbounded counter")
 }
 
-/// Copy an image file into the profile folder. Does not touch profile.json.
+/// Copy a replacement image into the profile folder. Does not touch
+/// profile.json — the caller swaps it in and removes the old file.
 pub fn add_image(bundled_root: &Path, user_root: &Path, id: &str, source: &Path) -> Result<HwImage, String> {
+    let dir = user_dir(bundled_root, user_root, id)?;
+    copy_image_into(&dir, source)
+}
+
+/// Copy `source` into `dir` under its own (de-duplicated) file name.
+fn copy_image_into(dir: &Path, source: &Path) -> Result<HwImage, String> {
     let file_name = source
         .file_name()
         .and_then(|n| n.to_str())
@@ -383,17 +369,14 @@ pub fn add_image(bundled_root: &Path, user_root: &Path, id: &str, source: &Path)
     if !source.is_file() {
         return Err(format!("{}: not a file", source.display()));
     }
-    let dir = user_dir(bundled_root, user_root, id)?;
-    let profile = read_profile(&dir)?;
 
     let stem = Path::new(file_name).file_stem().and_then(|s| s.to_str()).unwrap_or(file_name);
     let ext = Path::new(file_name).extension().and_then(|s| s.to_str()).unwrap_or("");
     let file = unique(stem, |s| dir.join(format!("{s}.{ext}")).exists());
     let file = format!("{file}.{ext}");
-    let image_id = unique(&slug(stem), |s| profile.images.iter().any(|i| i.id == s));
 
     fs::copy(source, dir.join(&file)).map_err(|e| e.to_string())?;
-    Ok(HwImage { id: image_id, file, label: stem.to_string() })
+    Ok(HwImage { file, label: stem.to_string() })
 }
 
 /// Delete an image file from the user folder; missing file is a no-op.
@@ -419,7 +402,7 @@ pub fn read_image(bundled_root: &Path, user_root: &Path, id: &str, file: &str) -
     Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
 }
 
-/// Zip `profile.json` + referenced images (flat, deflate) to `dest`.
+/// Zip `profile.json` + the referenced image (flat, deflate) to `dest`.
 pub fn export(bundled_root: &Path, user_root: &Path, id: &str, dest: &Path) -> Result<(), String> {
     let (dir, _) = find_dir(bundled_root, user_root, id)?;
     let profile = read_profile(&dir)?;
@@ -428,15 +411,7 @@ pub fn export(bundled_root: &Path, user_root: &Path, id: &str, dest: &Path) -> R
 
     let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     let mut zip = zip::ZipWriter::new(File::create(dest).map_err(|e| format!("{}: {e}", dest.display()))?);
-    // Two image entries may legitimately point at the same file; a zip entry
-    // must still appear only once.
-    let mut names = vec![PROFILE_FILE.to_string()];
-    for img in &profile.images {
-        if !names.contains(&img.file) {
-            names.push(img.file.clone());
-        }
-    }
-    for name in names {
+    for name in [PROFILE_FILE.to_string(), profile.image.file.clone()] {
         zip.start_file(&name, opts).map_err(|e| e.to_string())?;
         let bytes = fs::read(dir.join(&name)).map_err(|e| format!("{name}: {e}"))?;
         zip.write_all(&bytes).map_err(|e| e.to_string())?;
@@ -476,10 +451,8 @@ pub fn import(user_root: &Path, source: &Path) -> Result<HwProfileSummary, Strin
         .map_err(|e| e.to_string())?;
     let profile: HwProfile = serde_json::from_str(&text).map_err(|e| format!("profile.json: {e}"))?;
     validate(&profile)?;
-    for img in &profile.images {
-        if !entries.iter().any(|(_, n)| *n == img.file) {
-            return Err(format!("image file {:?} is missing from the zip", img.file));
-        }
+    if !entries.iter().any(|(_, n)| *n == profile.image.file) {
+        return Err(format!("image file {:?} is missing from the zip", profile.image.file));
     }
 
     // Pass 2: extract.
@@ -539,9 +512,17 @@ pub(crate) fn create_hw_profile(
     hardware_id: String,
     hardware_name: Option<String>,
     variant: String,
+    image_path: String,
     app: AppHandle,
 ) -> Result<HwProfile, String> {
-    create(&user_root(&app)?, &name, &hardware_id, hardware_name.as_deref().unwrap_or(""), &variant)
+    create(
+        &user_root(&app)?,
+        &name,
+        &hardware_id,
+        hardware_name.as_deref().unwrap_or(""),
+        &variant,
+        Path::new(&image_path),
+    )
 }
 
 #[tauri::command]
@@ -639,11 +620,10 @@ mod tests {
             hardware_id: "{0200231D-0000-0000-0000-504944564944}".into(),
             hardware_name: "Test Stick".into(),
             variant: "stock".into(),
-            images: vec![HwImage { id: "top".into(), file: "top.png".into(), label: "Top".into() }],
+            image: HwImage { file: "top.png".into(), label: "Top".into() },
             areas: vec![HwArea {
                 id: "a1".into(),
                 input: "button:5".into(),
-                image: "top".into(),
                 shape: Shape::Rect { x: 0.1, y: 0.2, w: 0.05, h: 0.04, rotation: 0.0 },
             }],
         }
@@ -653,9 +633,7 @@ mod tests {
     fn put(root: &Path, p: &HwProfile) {
         let dir = root.join(&p.id);
         write_profile(&dir, p).unwrap();
-        for img in &p.images {
-            fs::write(dir.join(&img.file), PNG).unwrap();
-        }
+        fs::write(dir.join(&p.image.file), PNG).unwrap();
     }
 
     #[test]
@@ -675,7 +653,7 @@ mod tests {
         assert!(validate(&sample("p1", "ok")).is_ok());
 
         let mut p = sample("p1", "ok");
-        p.format = 2;
+        p.format = 1;
         assert!(validate(&p).unwrap_err().contains("format"));
 
         let mut p = sample("p1", "ok");
@@ -691,13 +669,9 @@ mod tests {
         p.id = "a/b".into();
         assert!(validate(&p).is_err());
 
-        let mut p = sample("p1", "ok");
-        p.areas[0].image = "side".into();
-        assert!(validate(&p).unwrap_err().contains("unknown image"));
-
         for bad in ["../x.png", "sub/x.png", "sub\\x.png", "..", ""] {
             let mut p = sample("p1", "ok");
-            p.images[0].file = bad.into();
+            p.image.file = bad.into();
             assert!(validate(&p).is_err(), "{bad:?} should be rejected");
         }
     }
@@ -748,7 +722,7 @@ mod tests {
 
         // Saving with a missing image file fails.
         let mut p = sample("b1", "X");
-        p.images.push(HwImage { id: "side".into(), file: "side.png".into(), label: String::new() });
+        p.image = HwImage { file: "side.png".into(), label: String::new() };
         assert!(save(&bundled, &user, p).unwrap_err().contains("side.png"));
     }
 
@@ -756,17 +730,17 @@ mod tests {
     fn create_and_add_image() {
         let t = Tmp::new();
         let (bundled, user) = (t.path("bundled"), t.path("user"));
-        let p = create(&user, "New", "{GUID}", "Stick", "stock").unwrap();
-        assert_eq!(p.id.len(), 36);
-        assert!(p.images.is_empty());
-        assert!(user.join(&p.id).join(PROFILE_FILE).is_file());
-
         let src = t.path("My Stick Top.PNG");
         fs::write(&src, PNG).unwrap();
-        let img = add_image(&bundled, &user, &p.id, &src).unwrap();
-        assert_eq!(img.file, "My Stick Top.PNG");
-        assert_eq!(img.id, "my-stick-top");
-        assert_eq!(img.label, "My Stick Top");
+        let p = create(&user, "New", "{GUID}", "Stick", "stock", &src).unwrap();
+        assert_eq!(p.id.len(), 36);
+        assert_eq!(p.image.file, "My Stick Top.PNG");
+        assert_eq!(p.image.label, "My Stick Top");
+        assert!(user.join(&p.id).join(PROFILE_FILE).is_file());
+        assert!(user.join(&p.id).join("My Stick Top.PNG").is_file());
+        // No image, no profile.
+        assert!(create(&user, "No", "{GUID}", "Stick", "", &t.path("missing.png")).is_err());
+
         // Same source again: file name de-duplicated.
         let img2 = add_image(&bundled, &user, &p.id, &src).unwrap();
         assert_eq!(img2.file, "My Stick Top-2.PNG");
@@ -787,12 +761,13 @@ mod tests {
         let t = Tmp::new();
         let (bundled, user) = (t.path("bundled"), t.path("user"));
         let mut p = sample("p1", "P");
-        p.images = ["a.png", "b.JPG", "c.jpeg", "d.webp"]
-            .iter()
-            .map(|f| HwImage { id: f.to_string(), file: f.to_string(), label: String::new() })
-            .collect();
+        p.image = HwImage { file: "a.png".into(), label: String::new() };
         p.areas.clear();
         put(&user, &p);
+        // read_image serves any bare file in the folder, referenced or not.
+        for f in ["b.JPG", "c.jpeg", "d.webp"] {
+            fs::write(user.join("p1").join(f), PNG).unwrap();
+        }
 
         let expect = |file: &str, mime: &str| {
             let url = read_image(&bundled, &user, "p1", file).unwrap();
@@ -821,7 +796,6 @@ mod tests {
         let summary = import(&user2, &zip_path).unwrap();
         assert_eq!(summary.id, "rt");
         assert_eq!(summary.source, ProfileSource::User);
-        assert_eq!(summary.image_count, 1);
         let imported = get(&bundled, &user2, "rt").unwrap();
         assert_eq!(imported.name, "Round trip");
         assert_eq!(imported.areas[0].input, "button:5");
@@ -872,10 +846,7 @@ mod tests {
     }
 
     #[test]
-    fn slug_and_unique() {
-        assert_eq!(slug("My Stick Top"), "my-stick-top");
-        assert_eq!(slug("  Ünïcode__x "), "n-code-x");
-        assert_eq!(slug("!!!"), "image");
+    fn unique_counts_up() {
         assert_eq!(unique("top", |_| false), "top");
         assert_eq!(unique("top", |s| s == "top" || s == "top-2"), "top-3");
     }

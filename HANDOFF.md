@@ -21,22 +21,36 @@ The core loop is closed end-to-end:
    — blue = bound, grey = nothing bound, yellow = SC doesn't see the device.
    Without an SC token the SDL input name (`button 5`, `hat 0 up`) is shown.
 5. **Device order / clash**: `Game.log` (`Connected joystickN: <Product {GUID}>`,
-   written by SC at every start) is the primary source for SC's `jsN` order and
+   written by SC at every start) is the **only** source for SC's `jsN` order and
    for which devices SC sees at all. It is compared against the saved
    `<options>`: rank mismatch = clash, saved device not in SC's list = missing
    (the cause of the shift), SDL device not in SC's list = unseen (hidden by
-   Wine, or plugged in after SC started). Without a usable log the order is
-   derived from SDL (Windows: reversed; Linux: unknown, no rank clash asserted)
-   and the GUI says why (`Game.log not found: <path>` / `lists no joysticks`).
-6. **Exclude**: a per-device "Exclude always" (`ignored_devices` in the per-OS
+   Wine, or plugged in after SC started). Without a usable log there is no
+   order at all (2026-09-09: the SDL-derived fallback was removed — no guessed
+   `jsN`, no "order unknown"); the GUI says why (`Game.log not found: <path>` /
+   `lists no joysticks`) and shows nothing else.
+6. **Resort** (2026-09-09): the clash report carries the slot permutation
+   that puts every listed device's bindings on the `jsN` SC now assigns it
+   (`plan_resort`: saved slot -> SC slot per device; leftover slots — saved
+   ones of devices SC does not list, SC ones holding unsaved devices — are
+   paired off ascending, so dangling bindings are renumbered, never dropped).
+   Two ways to apply it, both in the clash banner: the in-game
+   `pp_resortdevices joystick A B` commands (one per swap, cycle-decomposed,
+   Copy button) and the out-of-game "Rewrite actionmaps.xml" button
+   (`resort.rs`: textual rewrite of joystick `<options>` instances and `jsN_`
+   prefixes in `input="..."`, re-emitting the joystick blocks in slot order;
+   backup `actionmaps.xml.<unix time>.bak` next to it; profile reloaded).
+7. **Exclude**: a per-device "Exclude always" (`ignored_devices` in the per-OS
    `config.json`) declares a device SC never sees (e.g. a keyboard Wine hides);
    it then counts as unplugged.
-7. **HW profiles** (2026-09-09): a "HW profiles" mode with an editor — pick a
-   device, create/pick a profile, add images, press an input, draw areas
-   (rect / ellipse / polygon / arrow / cw / ccw), save; zip export/import;
-   bundled profiles from `resources/profiles/` (none shipped yet). The Live
-   view shows the chosen profile's images per connected device (select when
-   several match the hardware id) and lights the active inputs: buttons while
+8. **HW profiles** (2026-09-09): a "HW profiles" mode with an editor — pick a
+   device, create a profile via an inline form (name, variant, and the
+   mandatory image the areas are drawn on; Replace image later keeps the
+   areas) or pick one, press an input, draw areas
+   (rect / ellipse / polygon / arrow / cw / ccw), save; zip export/import; bundled profiles from
+   `resources/profiles/` (none shipped yet). The Live view shows one image
+   block per connected device that has a profile (select when several match
+   the hardware id) and lights the active inputs: buttons while
    held, hats until centered, axes as a 400 ms pulse; blue when SC has a
    binding, grey otherwise. A bound input the profile lacks raises a toast and
    a `not in HW profile` tag in the bindings list; clicking a binding row pins
@@ -45,7 +59,8 @@ The core loop is closed end-to-end:
 
 GUI: mode switch (Live / HW profiles), config (SC base path), device tiles
 (name, `✓ jsN` / clash / `not seen by SC` / `excluded`, counts, Exclude
-toggle), Game.log line with local timestamp, clash banner, live tile, HW
+toggle), Game.log line with local timestamp, clash banner (missing slots,
+resort moves, commands + Copy, Rewrite button), live tile, HW
 profile images, bindings list (with `default` / `not in HW profile` tags,
 click to pin), actions list, live event log, toasts.
 
@@ -72,12 +87,18 @@ click to pin), actions list, live event log, toasts.
 
 ## Open items / next steps
 
-- **Stufe 2 — the remap fix**: compute the permutation from Game.log order vs.
-  the saved `<options>` and show the ready-made `pp_resortdevices` command.
-  No write to actionmaps.xml (live game config — the user applies it in-game).
-- **Windows reverse rule is n=1** and unproven across boots; only a fallback
-  behind Game.log, but a second sample is cheap (`enum_joysticks` +
-  `i_DumpDeviceInformation` after a replug).
+- **Resort is GUI-untested** (2026-09-09): backend covered by tests plus a
+  round-trip smoke test on the real `temp/joyenumtest/actionmaps_live.xml`
+  (swap 1<->2 and back = byte-identical). The banner, the Copy button
+  (`navigator.clipboard` under WebKitGTK/WebView2 — may need the Tauri
+  clipboard plugin) and the Rewrite button are unverified in the app.
+- **`pp_resortdevices` semantics beyond a 2-swap are unverified**: the user
+  states it moves all bindings of `jsA` to `jsB`; the command list assumes
+  B's bindings come back to A (a swap, as NOMAN's guide says), so a 3+-cycle
+  is emitted as a chain of swaps anchored on the cycle's first slot. Test
+  in-game with 3 devices before trusting a multi-command list.
+- **After an in-game resort** SC rewrites `actionmaps.xml`; the app reloads
+  the profile only via Load (base path) or its own Rewrite — hit Load.
 - **Game.log staleness**: it reflects the last game start; an SDL device not in
   it is either hidden or plugged in later — Exclude disambiguates by hand.
 - **Axis highlight**: `resolve_input` handles buttons + hats only. Axes need a
@@ -94,15 +115,16 @@ click to pin), actions list, live event log, toasts.
 
 - **Untested in the GUI** as of the 2026-09-09 commits: Konva transform math
   (rect rotation most likely to bite), file dialogs, zip import/export, live
-  highlighting. `pnpm build` and `cargo test` only.
+  highlighting, and the single-image switch (format 2: the New form with
+  its image pick, Replace image). `pnpm build` and `cargo test` only.
 - **First bundled profile**: once one exists, copy its folder to
   `src-tauri/resources/profiles/<id>/`.
 - Mode switch remounts the editor: **unsaved changes are lost without a
   warning**.
 - The pinned binding highlight is not cleared on device change / profile
   reload.
-- `validate()` does not check uniqueness of `images[].id` / `areas[].id` nor
-  the image file extension; import extracts every zip entry, referenced or not
+- `validate()` does not check uniqueness of `areas[].id` nor the image file
+  extension; import extracts every zip entry, referenced or not
   (path escapes are rejected). Broken profile folders are logged to stderr
   only.
 - Refresh button also shows in HW profiles mode (only refreshes devices).
@@ -116,7 +138,7 @@ click to pin), actions list, live event log, toasts.
 
 ## Testing
 
-- `cd src-tauri && cargo test --lib` — 39 tests (+1 ignored). The ignored one
+- `cd src-tauri && cargo test --lib` — 44 tests (+1 ignored). The ignored one
   (`converts_real_hardware_guids`) checks the author's real GUIDs; run with
   `cargo test -- --ignored`.
 - Frontend: `pnpm build` (vue-tsc typechecks).
