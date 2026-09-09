@@ -43,6 +43,9 @@ See `HANDOFF.md` for the current working state.
   `analyze_clash` (saved `<options>` vs. `Game.log` order — the only order
   source, no SDL-derived fallback), `plan_resort` / `resort_commands`.
 - `gamelog.rs` — parse SC's `Connected joystickN: <Product {GUID}>` lines.
+- `hid.rs` — HID report descriptor -> SC axis name per SDL axis index
+  (`x y z rotx roty rotz slider1 slider2`); `input.rs` reads the descriptor
+  via hidapi per device and stores `DeviceInfo::axes` / `axes_error`.
 - `resort.rs` — textual `actionmaps.xml` rewrite applying a resort (joystick
   `<options>` instances + `jsN_` prefixes in `input="..."`), out-of-game
   counterpart of `pp_resortdevices`.
@@ -89,6 +92,7 @@ cd src-tauri && cargo test --lib
 cd src-tauri && cargo run --example enum_joysticks       # list devices + GUIDs
 cargo run --example log_joystick_events                  # live event log
 cargo run --example hid_names                            # HID product strings
+cargo run --example hid_axes [-- --hex]                  # HID axis usages + derived SC axes
 
 # Regenerate the bundled SC data (after an SC patch / re-extract)
 cd src-tauri
@@ -139,6 +143,12 @@ file libappindicator-gtk3-devel librsvg2-devel libxdo-devel SDL2-devel`, plus th
 - **SDL order is not SC order** (Windows: reversed, Linux: unrelated). `jsN`
   comes from `Game.log` only; never derive it from SDL's enumeration.
 - **+1 button offset**: SC `js_button1` == SDL button 0 (verified under Wine).
+- **Axes**: SC names axes by HID usage (X->`x` … Rz->`rotz`, Slider/Dial->
+  `slider1`/`slider2`); SDL numbers them in canonical usage order (Linux:
+  evdev ABS code order, Windows: DirectInput offset order), NOT report order.
+  Verified on a VKB EVO whose report order is X Y Rz Z Rx Ry: SDL 5 = twist =
+  `rotz`, SDL 2 = `z`. `hid.rs` derives it and cross-checks the count against
+  SDL; anything it cannot place is an `axes_error`, never a guess.
 - **Wayland**: `run()` sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` on Linux (fixes
   WebKitGTK "Error 71"), unless the user overrode it.
 - **Dark mode + native controls**: `:root { color-scheme: dark }` in the dark

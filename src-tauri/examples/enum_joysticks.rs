@@ -23,6 +23,10 @@ fn main() -> Result<(), String> {
         println!("    buttons:    {}", d.num_buttons);
         println!("    axes:       {}", d.num_axes);
         println!("    hats:       {}", d.num_hats);
+        match &d.axes_error {
+            Some(e) => println!("    SC axes:    unavailable ({e})"),
+            None => println!("    SC axes:    {}", d.axes.join(" ")),
+        }
     }
 
     Ok(())

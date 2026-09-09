@@ -44,6 +44,11 @@ pub struct DeviceInfo {
     pub num_buttons: u32,
     pub num_axes: u32,
     pub num_hats: u32,
+    /// SC axis name per SDL axis index (`x`, `rotz`, `slider1`, …), derived
+    /// from the HID report descriptor (see `hid.rs`). Empty when that failed;
+    /// `axes_error` then says why.
+    pub axes: Vec<String>,
+    pub axes_error: Option<String>,
 }
 
 /// Shared, hot-pluggable device list, maintained by the input thread and read
@@ -60,25 +65,65 @@ pub enum InputEvent {
     Hat { guid: String, index: u8, direction: String },
 }
 
-/// Map of USB `(vendor, product)` -> HID product string, i.e. the name SC uses.
-/// Built from a short-lived hidapi context; independent of SDL.
-fn hid_name_map() -> HashMap<(u16, u16), String> {
-    let mut map = HashMap::new();
-    if let Ok(api) = hidapi::HidApi::new() {
+/// What hidapi knows about a USB `(vendor, product)`: the HID product string
+/// (the name SC uses) and, for its joystick-class interface, the axis names.
+struct HidInfo {
+    name: Option<String>,
+    /// Deferred: the descriptor is only read for devices SDL actually lists,
+    /// and needs SDL's axis count to cross-check.
+    joystick_path: Option<std::ffi::CString>,
+}
+
+/// Short-lived hidapi context plus its device table; independent of SDL.
+struct HidTable {
+    api: Option<hidapi::HidApi>,
+    map: HashMap<(u16, u16), HidInfo>,
+}
+
+fn hid_table() -> HidTable {
+    let mut map: HashMap<(u16, u16), HidInfo> = HashMap::new();
+    let api = hidapi::HidApi::new().ok();
+    if let Some(api) = &api {
         for dev in api.device_list() {
-            if let Some(name) = dev.product_string() {
-                map.entry((dev.vendor_id(), dev.product_id()))
-                    .or_insert_with(|| name.to_string());
+            let entry = map
+                .entry((dev.vendor_id(), dev.product_id()))
+                .or_insert(HidInfo { name: None, joystick_path: None });
+            if entry.name.is_none() {
+                entry.name = dev.product_string().map(str::to_string);
+            }
+            // Generic Desktop joystick (4), gamepad (5) or multi-axis (8).
+            if entry.joystick_path.is_none() && dev.usage_page() == 0x01 && matches!(dev.usage(), 4 | 5 | 8) {
+                entry.joystick_path = Some(dev.path().to_owned());
             }
         }
     }
-    map
+    HidTable { api, map }
 }
 
-fn device_info(stick: &Joystick, index: u32, hid_names: &HashMap<(u16, u16), String>) -> DeviceInfo {
+impl HidTable {
+    fn get(&self, vid_pid: (u16, u16)) -> Option<&HidInfo> {
+        self.map.get(&vid_pid)
+    }
+
+    /// SC axis names by SDL index for a device, or why they are unavailable.
+    fn axes(&self, vid_pid: Option<(u16, u16)>, sdl_axes: u32) -> Result<Vec<String>, String> {
+        let api = self.api.as_ref().ok_or("hidapi unavailable")?;
+        let info = vid_pid.and_then(|k| self.get(k)).ok_or("no HID device for this vendor/product")?;
+        let path = info.joystick_path.as_ref().ok_or("no HID joystick interface")?;
+        let dev = api.open_path(path).map_err(|e| format!("{}: {e}", path.to_string_lossy()))?;
+        crate::hid::sc_axes_for(&dev, sdl_axes)
+    }
+}
+
+fn device_info(stick: &Joystick, index: u32, hid: &HidTable) -> DeviceInfo {
     let sdl_guid = stick.guid().string();
-    let sc_name = crate::guid::sdl_guid_vendor_product(&sdl_guid)
-        .and_then(|vid_pid| hid_names.get(&vid_pid).cloned());
+    let vid_pid = crate::guid::sdl_guid_vendor_product(&sdl_guid);
+    let sc_name = vid_pid.and_then(|k| hid.get(k)).and_then(|i| i.name.clone());
+    let num_axes = stick.num_axes();
+    let (axes, axes_error) = match hid.axes(vid_pid, num_axes) {
+        Ok(axes) => (axes, None),
+        Err(e) => (Vec::new(), Some(e)),
+    };
     DeviceInfo {
         index,
         sc_name,
@@ -86,8 +131,10 @@ fn device_info(stick: &Joystick, index: u32, hid_names: &HashMap<(u16, u16), Str
         sc_product_guid: sdl_guid_to_sc_product(&sdl_guid),
         sdl_guid,
         num_buttons: stick.num_buttons(),
-        num_axes: stick.num_axes(),
+        num_axes,
         num_hats: stick.num_hats(),
+        axes,
+        axes_error,
     }
 }
 
@@ -96,12 +143,12 @@ fn device_info(stick: &Joystick, index: u32, hid_names: &HashMap<(u16, u16), Str
 pub fn enumerate() -> Result<Vec<DeviceInfo>, String> {
     let sdl = sdl2::init()?;
     let joystick = sdl.joystick()?;
-    let hid_names = hid_name_map();
+    let hid = hid_table();
     let count = joystick.num_joysticks()?;
     let mut devices = Vec::with_capacity(count as usize);
     for index in 0..count {
         if let Ok(stick) = joystick.open(index) {
-            devices.push(device_info(&stick, index, &hid_names));
+            devices.push(device_info(&stick, index, &hid));
         }
     }
     Ok(devices)
@@ -193,14 +240,14 @@ fn reopen_all(
     opened.clear();
     guids.clear();
 
-    let hid_names = hid_name_map();
+    let hid = hid_table();
     let count = joystick.num_joysticks()?;
     let mut list = Vec::with_capacity(count as usize);
     for index in 0..count {
         let Ok(stick) = joystick.open(index) else {
             continue;
         };
-        let info = device_info(&stick, index, &hid_names);
+        let info = device_info(&stick, index, &hid);
         guids.insert(stick.instance_id(), info.sdl_guid.clone());
         list.push(info);
         opened.insert(stick.instance_id(), stick);

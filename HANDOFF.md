@@ -57,9 +57,18 @@ The core loop is closed end-to-end:
    its area(s), or a toast says why it cannot. While the editor is open the
    Live view ignores joystick input. See `CLAUDE.md` for the data model.
 
+9. **Axes** (2026-09-09): `DeviceInfo::axes` holds the SC axis name per SDL
+   axis index, derived from the HID report descriptor (`hid.rs`, read via
+   hidapi in `input.rs`, count cross-checked against SDL). `resolve_input`
+   handles `kind = "axis"`, so moving an axis shows its binding in the live
+   tile (resolved at most every 150 ms per axis) and lights its HW profile
+   area blue; the bindings list can pin axis areas. Devices whose descriptor
+   cannot be read or placed carry `axes_error` (shown on the tile, e.g. a
+   `/dev/hidraw` without permission) and get no axis tokens.
+
 GUI: mode switch (Live / HW profiles), config (SC base path), device tiles
-(name, `✓ jsN` / clash / `not seen by SC` / `excluded`, counts, Exclude
-toggle), Game.log line with local timestamp, clash banner (missing slots,
+(name, `✓ jsN` / clash / `not seen by SC` / `excluded`, counts, SC axis names
+or the axes error, Exclude toggle), Game.log line with local timestamp, clash banner (missing slots,
 resort moves, commands + Copy, Rewrite button), live tile, HW
 profile images, bindings list (with `default` / `not in HW profile` tags,
 click to pin), actions list, live event log, toasts.
@@ -83,6 +92,11 @@ click to pin), actions list, live event log, toasts.
 - `defaultProfile.xml` joystick defaults are unnumbered (`button1`, `x`, …) and
   apply to `js1`.
 - SC device name == HID product string (same on Win10 and Wine).
+- Axis mapping (2026-09-09, VKB Gladiator EVO R, Linux): HID report order is
+  X Y Rz Z Rx Ry; SDL reported stick X = 0, Y = 1, slider = 2, twist = 5 —
+  canonical usage order, not report order. SC's `deviceoptions` for the same
+  device list x y z rotx roty rotz. Rx/Ry exist in the descriptor but have no
+  physical control on this grip.
 - The live event pump works on a background thread on Linux.
 
 ## Open items / next steps
@@ -101,9 +115,17 @@ click to pin), actions list, live event log, toasts.
   the profile only via Load (base path) or its own Rewrite — hit Load.
 - **Game.log staleness**: it reflects the last game start; an SDL device not in
   it is either hidden or plugged in later — Exclude disambiguates by hand.
-- **Axis highlight**: `resolve_input` handles buttons + hats only. Axes need a
-  token mapping from HID usages (X->js_x, Rz->js_rotz, Slider->js_slider1) — the
-  planned `hidapi` usage work.
+- **Axes: Windows unverified.** The SDL-index rule is verified on Linux
+  only; on Windows it rests on SDL's DirectInput backend sorting objects by
+  offset. Check with `enum_joysticks` + moving the twist there.
+- **Axes: hidraw permissions.** Reading the descriptor opens the hidraw
+  node; the VKBs open fine, the Keychron Link is `Permission denied` on this
+  box (udev). Such devices show `axes: …denied` and get no axis tokens.
+- **Axes: Slider/Dial edge cases** are refused, not guessed: more than two
+  sliders, or a Dial before a Slider (Linux and DirectInput would order them
+  differently). No device with either has been seen.
+- The Keychron Link's joystick interface (evdev `js1`, 6 ABS axes) is not
+  enumerated by SDL at all today — unexplained, not investigated.
 - **`onMounted` fragility (frontend)**: the startup `invoke` chain in `App.vue`
   aborts all following calls on the first failure. Consider a per-call
   try/catch.
@@ -115,8 +137,10 @@ click to pin), actions list, live event log, toasts.
 
 - **Untested in the GUI** as of the 2026-09-09 commits: Konva transform math
   (rect rotation most likely to bite), file dialogs, zip import/export, live
-  highlighting, and the single-image switch (format 2: the New form with
-  its image pick, Replace image). `pnpm build` and `cargo test` only.
+  highlighting, the single-image switch (format 2: the New form with its
+  image pick, Replace image), and the axis path (live tile, blue axis areas,
+  pinning axis bindings). `pnpm build`, `cargo test` and the headless
+  `enum_joysticks` (prints `SC axes: x y z rotx roty rotz` for both VKBs).
 - **First bundled profile**: once one exists, copy its folder to
   `src-tauri/resources/profiles/<id>/`.
 - Mode switch remounts the editor: **unsaved changes are lost without a
@@ -138,7 +162,7 @@ click to pin), actions list, live event log, toasts.
 
 ## Testing
 
-- `cd src-tauri && cargo test --lib` — 44 tests (+1 ignored). The ignored one
+- `cd src-tauri && cargo test --lib` — 47 tests (+1 ignored). The ignored one
   (`converts_real_hardware_guids`) checks the author's real GUIDs; run with
   `cargo test -- --ignored`.
 - Frontend: `pnpm build` (vue-tsc typechecks).

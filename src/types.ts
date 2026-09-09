@@ -9,6 +9,10 @@ export interface DeviceInfo {
   num_buttons: number;
   num_axes: number;
   num_hats: number;
+  // SC axis name per SDL axis index (from the HID descriptor); empty with
+  // axes_error set when it could not be derived.
+  axes: string[];
+  axes_error: string | null;
 }
 
 export type JoyInput =

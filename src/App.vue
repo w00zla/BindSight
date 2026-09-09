@@ -255,13 +255,19 @@ function activeFor(guid: string): Map<string, HighlightClass> {
   return m;
 }
 
-// Hardware-profile input key for an SC token (buttons and hats only — axes
-// have no SDL mapping yet). Undoes the +1 offset of button/hat numbering.
-function inputKeyForToken(token: string): string | null {
+// Hardware-profile input key for an SC token on a device. Undoes the +1
+// offset of button/hat numbering; axes go through the device's HID-derived
+// axis names (`js2_rotz` -> the SDL index whose name is `rotz`).
+function inputKeyForToken(token: string, d: DeviceInfo): string | null {
   const b = token.match(/^js\d+_button(\d+)$/);
   if (b) return `button:${Number(b[1]) - 1}`;
   const h = token.match(/^js\d+_hat(\d+)_(up|down|left|right)$/);
   if (h) return `hat:${Number(h[1]) - 1}:${h[2]}`;
+  const a = token.match(/^js\d+_([a-z0-9]+)$/);
+  if (a) {
+    const i = d.axes.indexOf(a[1]);
+    if (i >= 0) return `axis:${i}`;
+  }
   return null;
 }
 
@@ -286,8 +292,8 @@ function pinTarget(b: ResolvedBinding): { guid: string; key: string } | null {
 function resolvePin(b: ResolvedBinding): { guid: string; key: string } | { reason: string } {
   const d = devices.value.find((dev) => !!b.device_guid && sameHardware(dev.sc_product_guid, b.device_guid));
   if (!d) return { reason: `${b.device ?? "Device"} not connected` };
-  const key = inputKeyForToken(b.token);
-  if (!key) return { reason: `${tokenLabel(b.token)}: axes have no HW profile mapping yet` };
+  const key = inputKeyForToken(b.token, d);
+  if (!key) return { reason: `${tokenLabel(b.token)}: no SDL axis for it (${d.axes_error ?? "not in HID descriptor"})` };
   const has = inProfile(d.sdl_guid, key);
   if (has === null) return { reason: `${d.sc_name ?? d.sdl_name} has no HW profile` };
   if (!has) return { reason: `${tokenLabel(b.token)} not in HW profile` };
@@ -480,9 +486,20 @@ async function applyResort() {
 }
 
 // Resolve a live button/hat input to its token and bound action(s) and show it.
+// Axes stream events; resolve one per axis at most every AXIS_RESOLVE_MS.
+const AXIS_RESOLVE_MS = 150;
+const lastAxisResolve = new Map<string, number>();
+function axisDue(guid: string, index: number): boolean {
+  const k = `${guid}#${index}`;
+  const now = Date.now();
+  if (now - (lastAxisResolve.get(k) ?? 0) < AXIS_RESOLVE_MS) return false;
+  lastAxisResolve.set(k, now);
+  return true;
+}
+
 async function showBinding(
   guid: string,
-  kind: "button" | "hat",
+  kind: "button" | "hat" | "axis",
   index: number,
   direction: string | null,
 ) {
@@ -493,7 +510,7 @@ async function showBinding(
       index,
       direction,
     });
-    const key = kind === "button" ? `button:${index}` : `hat:${index}:${direction}`;
+    const key = kind === "button" ? `button:${index}` : kind === "axis" ? `axis:${index}` : `hat:${index}:${direction}`;
     currentInput.value = {
       device: nameFor(guid),
       sc_guid: devices.value.find((d) => d.sdl_guid === guid)?.sc_product_guid ?? null,
@@ -583,9 +600,10 @@ function nameFor(guid: string): string {
   return d?.sc_name ?? guid;
 }
 
-// SDL-side name of a live input, e.g. "button 5" or "hat 0 up".
-function sdlInputName(kind: "button" | "hat", index: number, direction: string | null): string {
-  return kind === "button" ? `button ${index}` : `hat ${index} ${direction ?? ""}`.trim();
+// SDL-side name of a live input, e.g. "button 5", "axis 2" or "hat 0 up".
+function sdlInputName(kind: "button" | "hat" | "axis", index: number, direction: string | null): string {
+  if (kind === "hat") return `hat ${index} ${direction ?? ""}`.trim();
+  return `${kind} ${index}`;
 }
 
 // Live tile colour: yellow when SC doesn't see the device (unseen or excluded —
@@ -625,6 +643,8 @@ onMounted(async () => {
         showBinding(p.guid, "button", p.index, null);
       } else if (p.kind === "hat" && p.direction !== "centered") {
         showBinding(p.guid, "hat", p.index, p.direction);
+      } else if (p.kind === "axis" && axisDue(p.guid, p.index)) {
+        showBinding(p.guid, "axis", p.index, null);
       }
     }),
   );
@@ -717,6 +737,8 @@ onUnmounted(() => {
           <span v-if="bindingCountFor(d.sc_product_guid)" class="bound-count">
             {{ bindingCountFor(d.sc_product_guid) }} bindings
           </span>
+          <span v-if="d.axes.length" class="axes-map mono" title="SC axis name per SDL axis index">{{ d.axes.join(" ") }}</span>
+          <span v-else-if="d.axes_error" class="axes-error" :title="d.axes_error">axes: {{ d.axes_error }}</span>
           <button
             class="ignore-toggle"
             :disabled="!d.sc_product_guid"
@@ -1233,10 +1255,20 @@ h2 {
 
 .counts {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.75rem;
   font-size: 0.85rem;
   opacity: 0.8;
   margin-top: 0.35rem;
+}
+
+.axes-map {
+  font-size: 0.8rem;
+}
+
+.axes-error {
+  font-size: 0.8rem;
+  color: #b9770e;
 }
 
 .events {

@@ -115,6 +115,12 @@ pub fn button_token(instance: u32, sdl_button_index: u8) -> String {
     format!("js{instance}_button{}", sdl_button_index as u32 + 1)
 }
 
+/// The SC token for an axis by its SC axis name (`x`, `rotz`, `slider1`, …
+/// from the HID descriptor, see `hid.rs`): `js2_rotz`.
+pub fn axis_token(instance: u32, axis: &str) -> String {
+    format!("js{instance}_{axis}")
+}
+
 /// SC token for a hat direction, or `None` for a diagonal/centered state that
 /// has no single SC cardinal token. SDL hat index `h` maps to SC `hat(h+1)`.
 pub fn hat_token(instance: u32, sdl_hat_index: u8, direction: &str) -> Option<String> {
@@ -460,6 +466,8 @@ mod tests {
             num_buttons: 0,
             num_axes: 0,
             num_hats: 0,
+            axes: Vec::new(),
+            axes_error: None,
         }
     }
 

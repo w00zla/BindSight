@@ -8,6 +8,7 @@ pub mod bindings;
 pub mod config;
 pub mod gamelog;
 pub mod guid;
+pub mod hid;
 pub mod hwprofile;
 pub mod input;
 pub mod resort;
@@ -188,15 +189,17 @@ struct InputResolution {
     actions: Vec<bindings::BoundAction>,
 }
 
-/// Resolve a live input to its SC token and bound action(s). `kind` is "button"
-/// or "hat"; `direction` is required for hats. Empty for axes (no token mapping
-/// yet), unknown devices, or unbound inputs.
+/// Resolve a live input to its SC token and bound action(s). `kind` is
+/// "button", "hat" or "axis"; `direction` is required for hats. Empty for
+/// unknown devices, unbound inputs, or axes whose SC name is unknown (no
+/// usable HID descriptor — see `DeviceInfo::axes_error`).
 #[tauri::command]
 fn resolve_input(
     guid: String,
     kind: String,
     index: u8,
     direction: Option<String>,
+    devices: State<input::DeviceList>,
     data: State<Mutex<AppData>>,
 ) -> InputResolution {
     let data = data.lock().unwrap();
@@ -209,9 +212,15 @@ fn resolve_input(
     let Some(instance) = bindings::instance_for_guid(profile, &sc_guid) else {
         return InputResolution::default();
     };
+    let axis_name = || {
+        let list = devices.lock().ok()?;
+        let dev = list.iter().find(|d| d.sdl_guid == guid)?;
+        dev.axes.get(index as usize).cloned()
+    };
     let token = match kind.as_str() {
         "button" => Some(bindings::button_token(instance, index)),
         "hat" => direction.as_deref().and_then(|d| bindings::hat_token(instance, index, d)),
+        "axis" => axis_name().map(|a| bindings::axis_token(instance, &a)),
         _ => None,
     };
     let actions = token.as_deref().map(|t| data.index.resolve(t).to_vec()).unwrap_or_default();
