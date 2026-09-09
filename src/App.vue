@@ -24,6 +24,7 @@ import type {
   ImageMapView,
   JoyInput,
   LoadStatus,
+  LoggedInput,
   Mode,
   ResolvedBinding,
   ScStatus,
@@ -34,7 +35,7 @@ import { sameHardware, type HighlightClass, type ImageMap, type ImageMapSummary 
 const MAX_EVENTS = 500;
 
 const devices = ref<DeviceInfo[]>([]);
-const events = ref<JoyInput[]>([]);
+const events = ref<LoggedInput[]>([]);
 const actionMaps = ref<ActionMap[]>([]);
 // SC environments (Settings) and the one being read (top-bar chip).
 const environments = ref<Record<string, Environment>>({});
@@ -645,7 +646,7 @@ onMounted(async () => {
     await listen<JoyInput>("joy-input", (e) => {
       const p = e.payload;
       // The raw log collects in every mode (shown in Devices).
-      events.value.unshift(p);
+      events.value.unshift({ ...p, at: Date.now() });
       if (events.value.length > MAX_EVENTS) events.value.pop();
       // The editor owns the input while an image-map is being edited.
       if (mode.value !== "live") return;

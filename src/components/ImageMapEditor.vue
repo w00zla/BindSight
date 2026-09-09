@@ -13,7 +13,7 @@ import type { Transformer } from "konva/lib/shapes/Transformer";
 import type { VueKonvaRef } from "vue-konva";
 import Icon, { type IconName } from "./Icon.vue";
 import ConfirmDialog, { type ConfirmButton } from "./ConfirmDialog.vue";
-import type { DeviceInfo, JoyInput } from "../types";
+import type { DeviceInfo, JoyInput, LoggedInput } from "../types";
 import {
   SYMBOL_PATHS,
   symbolPx,
@@ -26,7 +26,7 @@ import {
   type SymbolKind,
 } from "../imagemap";
 
-const props = defineProps<{ devices: DeviceInfo[]; events: JoyInput[] }>();
+const props = defineProps<{ devices: DeviceInfo[]; events: LoggedInput[] }>();
 const emit = defineEmits<{ notify: [message: string, type: "ok" | "error"]; saved: []; clearLog: [] }>();
 
 // No active tool == select/move mode.
@@ -924,31 +924,100 @@ function nameOfGuid(guid: string): string {
   return d?.sc_name ?? d?.sdl_name ?? guid;
 }
 
+function deviceOfGuid(guid: string): DeviceInfo | undefined {
+  return props.devices.find((dev) => dev.sdl_guid === guid);
+}
+
+// Event as one line: the SC axis name comes from the device's derived axes.
 function eventText(ev: JoyInput): string {
   switch (ev.kind) {
     case "button":
       return `button ${ev.index} ${ev.pressed ? "down" : "up"}`;
-    case "axis":
-      return `axis ${ev.index} = ${ev.value}`;
+    case "axis": {
+      const sc = deviceOfGuid(ev.guid)?.axes[ev.index];
+      return `axis ${ev.index}${sc ? ` (${sc})` : ""} = ${ev.value} (${(ev.value / 32767).toFixed(3)})`;
+    }
     default:
-      return `hat ${ev.index} ${ev.direction}`;
+      return `hat ${ev.index} ${ev.direction} (raw ${ev.raw})`;
   }
+}
+
+// Wall-clock time of a logged event, HH:MM:SS.mmm.
+function clock(at: number): string {
+  const d = new Date(at);
+  const p = (n: number, w = 2) => String(n).padStart(w, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
 }
 
 function axesText(d: DeviceInfo): string {
   return d.axes.length ? d.axes.join(" ") : (d.axes_error ?? "—");
 }
 
-function logText(): string {
-  const lines = [`BindSight devices log ${new Date().toISOString()}`, "", "Devices"];
-  for (const d of props.devices) {
-    lines.push(
-      `#${d.index} ${d.sc_name ?? "—"} | sdl ${d.sdl_name} | guid ${d.sdl_guid} | sc ${d.sc_product_guid ?? "—"}` +
-        ` | ${d.num_buttons} btn ${d.num_axes} axes ${d.num_hats} hats | axes ${axesText(d)}`,
-    );
+const hex4 = (n: number) => n.toString(16).padStart(4, "0");
+
+// Collapse runs of consecutive buttons: "Btn1 Btn2 … Btn128" -> "Btn1-128".
+function compactUsages(usages: string[]): string {
+  const out: string[] = [];
+  let i = 0;
+  while (i < usages.length) {
+    const m = /^Btn(\d+)$/.exec(usages[i]);
+    if (!m) {
+      out.push(usages[i++]);
+      continue;
+    }
+    const first = Number(m[1]);
+    let last = first;
+    let j = i + 1;
+    while (j < usages.length && usages[j] === `Btn${last + 1}`) {
+      last++;
+      j++;
+    }
+    out.push(last > first ? `Btn${first}-${last}` : `Btn${first}`);
+    i = j;
   }
+  return out.join(" ");
+}
+
+// Key/value rows of everything known about a device.
+function deviceRows(d: DeviceInfo): [string, string][] {
+  return [
+    ["sdl name", d.sdl_name],
+    ["sdl guid", d.sdl_guid],
+    ["sc product", d.sc_product_guid ?? "—"],
+    ["sdl", `index ${d.index} · instance ${d.sdl_instance_id} · type ${d.sdl_type} · path ${d.sdl_path ?? "—"}`],
+    ["usb", `vid ${hex4(d.sdl_vendor)} · pid ${hex4(d.sdl_product)} · version ${hex4(d.sdl_product_version)} · power ${d.power_level}`],
+    [
+      "io",
+      `${d.num_buttons} buttons · ${d.num_axes} axes · ${d.num_hats} hats · ${d.num_balls} balls · rumble ${d.has_rumble ? "yes" : "no"} · led ${d.has_led ? "yes" : "no"}`,
+    ],
+    ["sc axes", axesText(d)],
+    ["hid usages", d.hid_usages.length ? compactUsages(d.hid_usages) : "—"],
+    ...d.hid_interfaces.map(
+      (h, i): [string, string] => [
+        `hid #${i}`,
+        `if ${h.interface_number} · usage ${h.usage_page}/${h.usage} · ${h.bus_type} · release ${hex4(h.release)}` +
+          ` · mfr ${h.manufacturer ?? "—"} · product ${h.product ?? "—"} · serial ${h.serial ?? "—"} · ${h.path}`,
+      ],
+    ),
+    ["hid descriptor", d.hid_descriptor ?? "—"],
+  ];
+}
+
+function eventLine(ev: LoggedInput): string {
+  const d = deviceOfGuid(ev.guid);
+  return `${clock(ev.at)}  sdl+${ev.timestamp}ms  #${d?.index ?? "?"} ${shortGuid(ev.guid)} ${nameOfGuid(ev.guid)}  ${eventText(ev)}`;
+}
+
+function logText(): string {
+  const lines = [`BindSight device log ${new Date().toISOString()}`, "", "Devices"];
+  for (const d of props.devices) {
+    lines.push(`#${d.index} ${d.sc_name ?? "—"}`);
+    for (const [k, v] of deviceRows(d)) lines.push(`    ${k.padEnd(15)} ${v}`);
+  }
+  if (!props.devices.length) lines.push("    none");
   lines.push("", "Events (newest first)");
-  for (const ev of props.events) lines.push(`${shortGuid(ev.guid)} ${nameOfGuid(ev.guid)} ${eventText(ev)}`);
+  for (const ev of props.events) lines.push(eventLine(ev));
+  if (!props.events.length) lines.push("    none");
   return lines.join("\n") + "\n";
 }
 
@@ -1073,19 +1142,22 @@ function deviceLine(d: DeviceInfo): string {
         </div>
         <div class="log mono">
           <div class="log-section">Devices</div>
-          <div v-for="d in props.devices" :key="d.index" class="log-line">
-            <span class="log-key">#{{ d.index }}</span>
-            <span>{{ d.sc_name ?? "—" }}</span>
-            <span class="log-dim">sdl</span><span>{{ d.sdl_name }}</span>
-            <span class="log-dim">guid</span><span>{{ d.sdl_guid }}</span>
-            <span class="log-dim">sc</span><span>{{ d.sc_product_guid ?? "—" }}</span>
-            <span class="log-dim">io</span><span>{{ d.num_buttons }} btn {{ d.num_axes }} axes {{ d.num_hats }} hats</span>
-            <span class="log-dim">axes</span><span>{{ axesText(d) }}</span>
+          <div v-for="d in props.devices" :key="d.index" class="log-dev">
+            <div class="log-line">
+              <span class="log-key">#{{ d.index }}</span>
+              <span class="log-name">{{ d.sc_name ?? "—" }}</span>
+            </div>
+            <div v-for="[k, v] in deviceRows(d)" :key="k" class="log-kv">
+              <span class="log-dim">{{ k }}</span>
+              <span class="log-val">{{ v }}</span>
+            </div>
           </div>
           <div v-if="!props.devices.length" class="log-line log-dim">None</div>
           <div class="log-section log-events">Events</div>
           <div v-for="(ev, i) in props.events" :key="i" class="log-line">
-            <span class="log-key">{{ shortGuid(ev.guid) }}</span>
+            <span class="log-time">{{ clock(ev.at) }}</span>
+            <span class="log-dim">sdl+{{ ev.timestamp }}ms</span>
+            <span class="log-key">#{{ deviceOfGuid(ev.guid)?.index ?? "?" }} {{ shortGuid(ev.guid) }}</span>
             <span class="log-device">{{ nameOfGuid(ev.guid) }}</span>
             <span>{{ eventText(ev) }}</span>
           </div>
@@ -1694,6 +1766,29 @@ function deviceLine(d: DeviceInfo): string {
 .log-key {
   color: var(--live);
   min-width: 5rem;
+}
+
+.log-dev {
+  margin-bottom: 10px;
+}
+
+.log-name {
+  font-weight: 600;
+}
+
+.log-kv {
+  display: grid;
+  grid-template-columns: 8rem minmax(0, 1fr);
+  gap: 10px;
+  padding: 1px 0 1px 1rem;
+}
+
+.log-val {
+  overflow-wrap: anywhere;
+}
+
+.log-time {
+  color: var(--text-2);
 }
 
 .log-dim {

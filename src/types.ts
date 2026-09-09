@@ -15,12 +15,52 @@ export interface DeviceInfo {
   // axes_error set when it could not be derived.
   axes: string[];
   axes_error: string | null;
+  // Troubleshooting detail for the device log (input.rs `DeviceInfo`).
+  sdl_instance_id: number;
+  sdl_vendor: number;
+  sdl_product: number;
+  sdl_product_version: number;
+  sdl_type: string;
+  sdl_path: string | null;
+  power_level: string;
+  num_balls: number;
+  has_rumble: boolean;
+  has_led: boolean;
+  hid_interfaces: HidInterface[];
+  // The joystick interface's report descriptor as hex, and its input fields
+  // in report order.
+  hid_descriptor: string | null;
+  hid_usages: string[];
 }
 
+// One hidapi interface behind a device's vendor/product.
+export interface HidInterface {
+  path: string;
+  interface_number: number;
+  usage_page: number;
+  usage: number;
+  manufacturer: string | null;
+  product: string | null;
+  serial: string | null;
+  release: number;
+  bus_type: string;
+}
+
+// `timestamp` = SDL's event time in ms since SDL init, `instance_id` = the
+// SDL joystick instance.
+interface JoyInputBase {
+  guid: string;
+  index: number;
+  timestamp: number;
+  instance_id: number;
+}
 export type JoyInput =
-  | { kind: "button"; guid: string; index: number; pressed: boolean }
-  | { kind: "axis"; guid: string; index: number; value: number }
-  | { kind: "hat"; guid: string; index: number; direction: string };
+  | (JoyInputBase & { kind: "button"; pressed: boolean })
+  | (JoyInputBase & { kind: "axis"; value: number })
+  | (JoyInputBase & { kind: "hat"; direction: string; raw: number });
+
+// A JoyInput as kept in the device log, with the wall-clock time it arrived.
+export type LoggedInput = JoyInput & { at: number };
 
 // Top-level GUI mode.
 export type Mode = "live" | "tools" | "devices";

@@ -244,11 +244,6 @@ section {
   outline: none;
 }
 
-.hint {
-  font-size: 12px;
-  color: var(--text-3);
-}
-
 .check {
   display: flex;
   align-items: center;

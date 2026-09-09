@@ -1,7 +1,7 @@
 # Handoff — BindSight
 
-Snapshot of where the project stands, for the next session. Pair with `CLAUDE.md`
-(project guide).
+Snapshot of where the project stands, for whoever picks it up next. Pair
+with `CLAUDE.md` (project guide).
 
 ## What works today
 
@@ -82,21 +82,21 @@ The core loop is closed end-to-end:
 10. **Logging** (2026-09-09): `tauri-plugin-log` -> stdout + a rotating
     `bindsight.log` in the app log dir (paths in the README). Startup logs
     OS/app/tauri/webview/SDL versions, all app dirs, the session env and the
-    config; then SC version + extraction/cache, device enumeration (per
-    device incl. GUIDs and derived axes, only when the list changed), the
-    profile's `<options>` and what `Game.log` says, plus user actions (base
-    path, exclusions, resort). The webview console and uncaught frontend
-    errors are forwarded too (`src/logging.ts`, target `webview`). Per-input
-    events are never logged. Severity rules in `CLAUDE.md`.
+    config; then SC version + extraction/cache, the profile's `<options>`
+    and what `Game.log` says, plus user actions (environments, exclusions,
+    resort). Device runtime detail is deliberately absent (only hidapi /
+    joystick-open failures): the Devices mode's device log has it all. The
+    webview console and uncaught frontend errors are forwarded too
+    (`src/logging.ts`, target `webview`). Severity rules in `CLAUDE.md`.
 
 GUI (redesigned 2026-09-09, phases 0-2 of the plan in the design session;
 look = RSI Pledge-Store palette + cyan live accent, Bai Jamjuree / Share Tech
 Mono bundled locally, tokens in `src/styles/tokens.css`, icons in
 `components/Icon.vue`): top bar with modes **Monitor / Bindings / Devices**
 (renamed 2026-09-09 from Live / Tools; code ids `live` / `tools` unchanged),
-install slug chip, version chip, Refresh, gear (Settings dialog). Monitor =
-"Connected devices" panel
-(status dot, name, `jsN` chip, counts; a `None` tile when empty) next to a
+environment chip (active slug, dropdown to switch), version chip, Refresh,
+gear (Settings dialog). Monitor = "Connected devices" panel (status dot,
+name, `jsN` chip, counts; a `None` tile when empty) next to a
 "Status" panel (`No issues`, or one tile per issue: load error, `No device order
 found`, `<name> jsN missing`, `Order clash` with `Fix via config` /
 `Fix via console` and slot chips); an image stage with one tile per device
@@ -123,9 +123,15 @@ foot — and the "System" panel with the "Device log" toggle; the Konva
 canvas with the name, the six shape tools, Replace image and zoom; the
 live SDL-key card with Add area / Delete, the areas list with filter, and
 Discard / Save), unsaved changes guarded by `ConfirmDialog`. The Device log
-toggle swaps the canvas for the raw log
-(device dump + the last 500 input events, collected in every mode) with
-Clear and Save (text file via the `write_text_file` command).
+toggle swaps the canvas (and the right column) for the raw log with Clear
+and Save (text file via the `write_text_file` command): per device every
+SDL fact (names, GUIDs, index / instance / type / path, vendor / product /
+version, power, counts, rumble / led), the derived SC axes or the error,
+the HID input fields in report order, every hidapi interface of the
+vendor/product (usage, bus, release, strings, path) and the raw report
+descriptor; then the last 500 input events from every mode with wall-clock
+time, SDL timestamp, device, SC axis name, raw and normalised axis value,
+raw hat state.
 
 **Tables** (2026-09-09): the bindings deck and Compare share
 `tableColumns.ts` + `ColumnHead.vue` — click a header to sort (default
@@ -137,7 +143,7 @@ narrow panel scrolls horizontally under a sticky header; every cell
 truncates with an ellipsis. Vocabulary and the remaining phases: see the
 memory `gui-naming-decisions` and the plan below.
 
-## Verified facts (this hardware)
+## Verified facts (VKB Gladiator EVO L/R + Keychron K2 HE, Linux/Wine and Windows)
 
 - SDL button `i` == SC `button(i+1)` (the +1 offset holds for buttons).
 - SC assigns `jsN` purely by enumeration position and ignores name/GUID — the
@@ -165,13 +171,22 @@ memory `gui-naming-decisions` and the plan below.
 
 ## Open items / next steps
 
+- **Session 2026-09-09 (evening), all GUI-unverified**: sortable/resizable
+  tables, the Monitor / Bindings rename, the Devices log with Save, the Game
+  bindings panel, "Open log folder", the environments (Settings blocks,
+  chip dropdown, a real global.ini override load), install validation
+  (folder / missing-files messages, Refresh staying quiet afterwards), the
+  Image-maps / System panels in Devices, and the Current row vanishing
+  without an actionmaps.xml. `write_text_file` writes to any path the
+  frontend hands it — deliberately without a path check (only the save
+  dialog feeds it).
 - **Resort is GUI-untested** (2026-09-09): backend covered by tests plus a
   round-trip smoke test on the real `temp/joyenumtest/actionmaps_live.xml`
   (swap 1<->2 and back = byte-identical). The banner, the Copy button
   (`navigator.clipboard` under WebKitGTK/WebView2 — may need the Tauri
   clipboard plugin) and the Rewrite button are unverified in the app.
-- **`pp_resortdevices` semantics beyond a 2-swap are unverified**: the user
-  states it moves all bindings of `jsA` to `jsB`; the command list assumes
+- **`pp_resortdevices` semantics beyond a 2-swap are unverified**: in-game
+  experience says it moves all bindings of `jsA` to `jsB`; the command list assumes
   B's bindings come back to A (a swap, as NOMAN's guide says), so a 3+-cycle
   is emitted as a chain of swaps anchored on the cycle's first slot. Test
   in-game with 3 devices before trusting a multi-command list.
@@ -211,7 +226,7 @@ memory `gui-naming-decisions` and the plan below.
   known limitation, falls back to order/manual.
 - `bindingCountFor` on the device tiles counts shipped defaults too.
 
-### Image-maps — open items (found while building, not built; user decides)
+### Image-maps — open items (found while building, not built)
 
 - **Untested in the GUI** as of the 2026-09-09 commits: Konva transform math
   (rect rotation most likely to bite), file dialogs, zip import/export, live
@@ -285,8 +300,8 @@ memory `gui-naming-decisions` and the plan below.
 
 ## Testing
 
-- `cd src-tauri && cargo test --lib` — 78 tests (+1 ignored). The ignored one
-  (`converts_real_hardware_guids`) checks the author's real GUIDs; run with
+- `cd src-tauri && cargo test --lib` — 80 tests (+1 ignored). The ignored one
+  (`converts_real_hardware_guids`) checks GUIDs of one specific setup; run with
   `cargo test -- --ignored`.
 - Frontend: `pnpm build` (vue-tsc typechecks, `noUnusedLocals` is on).
 - The real GUI test is `pnpm tauri dev` with a configured SC environment.

@@ -458,16 +458,10 @@ mod tests {
     /// A minimal connected device for clash tests; only GUID/name/order matter.
     fn dev(guid: &str, name: &str) -> DeviceInfo {
         DeviceInfo {
-            index: 0,
             sc_name: Some(name.to_string()),
             sdl_name: name.to_string(),
-            sdl_guid: String::new(),
             sc_product_guid: Some(guid.to_string()),
-            num_buttons: 0,
-            num_axes: 0,
-            num_hats: 0,
-            axes: Vec::new(),
-            axes_error: None,
+            ..DeviceInfo::default()
         }
     }
 

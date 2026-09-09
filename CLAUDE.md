@@ -6,10 +6,9 @@ See `HANDOFF.md` for the current working state.
 
 ## Conventions
 
-- **English only** — all code, comments, commit messages and GUI text. (Chat with
-  the user is German; the code is not.)
-- **Commits**: imperative subject, body explaining the why. Commit only when the
-  user asks.
+- **English only** — all code, comments, commit messages and GUI text.
+- **Commits**: imperative subject, body explaining the why; one commit per
+  logical change.
 - **Repo content policy**: no SC game data in the repo — the app extracts what
   it needs from the user's install at runtime (see `scinstall.rs`). The
   StarBreaker sidecar binaries (MIT) are not committed either:
@@ -120,10 +119,14 @@ See `HANDOFF.md` for the current working state.
   cannot match), so frontend messages land in the same file. Severities: ERROR =
   a feature is broken (config not saved, SC data failed, input thread died,
   panic), WARN = degraded but running (profile not loaded, Game.log missing,
-  axes unknown, unreadable cache), INFO = state changes and facts (startup
-  environment, device enumeration, SC version, extraction, profile/Game.log
-  contents, user actions), DEBUG = detail (command lines, load steps,
-  unchanged re-enumerations). Never log per-input events.
+  unreadable cache), INFO = state changes and facts (startup environment, SC
+  version, extraction, profile/Game.log contents, user actions), DEBUG =
+  detail (command lines, load steps). **Device runtime detail never goes to
+  the app log**: no enumeration lines, no axis
+  derivation results, no input events — only real failures (hidapi init,
+  joystick open, thread death). All of it lives in the Devices mode's
+  device log instead (`DeviceInfo` carries every SDL/HID fact, events carry
+  SDL timestamp + instance id).
 
 ## Image-map data model (`imagemap.json`, format 3)
 

@@ -8,27 +8,6 @@
 //! order and names from these usages (see `hid.rs`). Pass `--hex` to also
 //! print the raw descriptor bytes (for test fixtures).
 
-fn page_usage_name(page: u16, usage: u16) -> String {
-    match (page, usage) {
-        (0x01, 0x30) => "X".into(),
-        (0x01, 0x31) => "Y".into(),
-        (0x01, 0x32) => "Z".into(),
-        (0x01, 0x33) => "Rx".into(),
-        (0x01, 0x34) => "Ry".into(),
-        (0x01, 0x35) => "Rz".into(),
-        (0x01, 0x36) => "Slider".into(),
-        (0x01, 0x37) => "Dial".into(),
-        (0x01, 0x38) => "Wheel".into(),
-        (0x01, 0x39) => "Hat".into(),
-        (0x02, 0xBA) => "Sim.Rudder".into(),
-        (0x02, 0xBB) => "Sim.Throttle".into(),
-        (0x02, 0xC4) => "Sim.Accelerator".into(),
-        (0x02, 0xC5) => "Sim.Brake".into(),
-        (0x09, b) => format!("Btn{b}"),
-        (p, u) => format!("{p:#x}/{u:#x}"),
-    }
-}
-
 /// Walk the descriptor and print every non-constant Input item with its
 /// usages (ranges expanded, arrays collapsed).
 fn dump(desc: &[u8]) {
@@ -76,7 +55,7 @@ fn dump(desc: &[u8]) {
                 let offset = bit_offset.entry(report_id * 4 + tag as u32).or_insert(0);
                 let constant = data & 1 != 0;
                 if tag == 0x8 && !constant {
-                    let names: Vec<String> = usages.iter().map(|&(p, u)| page_usage_name(p, u)).collect();
+                    let names: Vec<String> = usages.iter().map(|&(p, u)| bindsight_lib::hid::usage_name(p, u)).collect();
                     let shown = if names.len() > 8 { format!("{}..{} ({} usages)", names[0], names[names.len() - 1], names.len()) } else { names.join(" ") };
                     println!("    {kind} id={report_id} bit {offset:>3}: {report_count} x {report_size} bit  {shown}");
                 }

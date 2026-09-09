@@ -135,16 +135,46 @@ pub fn sc_axis_names(usages: &[(u16, u16)]) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-/// Read a device's report descriptor and derive its SC axis names; `sdl_axes`
-/// is SDL's axis count for the same device, which must match.
-pub fn sc_axes_for(device: &hidapi::HidDevice, sdl_axes: u32) -> Result<Vec<String>, String> {
+/// Read a device's report descriptor (raw bytes).
+pub fn read_descriptor(device: &hidapi::HidDevice) -> Result<Vec<u8>, String> {
     let mut buf = vec![0u8; 4096];
     let n = device.get_report_descriptor(&mut buf).map_err(|e| format!("HID descriptor: {e}"))?;
-    let names = sc_axis_names(&axis_usages(&buf[..n]))?;
+    buf.truncate(n);
+    Ok(buf)
+}
+
+/// Derive the SC axis names from a report descriptor; `sdl_axes` is SDL's
+/// axis count for the same device, which must match.
+pub fn sc_axes_from(desc: &[u8], sdl_axes: u32) -> Result<Vec<String>, String> {
+    let names = sc_axis_names(&axis_usages(desc))?;
     if names.len() as u32 != sdl_axes {
         return Err(format!("HID descriptor yields {} axes, SDL has {sdl_axes}", names.len()));
     }
     Ok(names)
+}
+
+/// Human name of a `(usage page, usage)` pair as it appears in the device
+/// log: the Generic Desktop axes and hat, the Simulation Controls SC cares
+/// about, buttons, else `page/usage` in hex.
+pub fn usage_name(page: u16, usage: u16) -> String {
+    match (page, usage) {
+        (0x01, 0x30) => "X".into(),
+        (0x01, 0x31) => "Y".into(),
+        (0x01, 0x32) => "Z".into(),
+        (0x01, 0x33) => "Rx".into(),
+        (0x01, 0x34) => "Ry".into(),
+        (0x01, 0x35) => "Rz".into(),
+        (0x01, 0x36) => "Slider".into(),
+        (0x01, 0x37) => "Dial".into(),
+        (0x01, 0x38) => "Wheel".into(),
+        (0x01, 0x39) => "Hat".into(),
+        (0x02, 0xBA) => "Sim.Rudder".into(),
+        (0x02, 0xBB) => "Sim.Throttle".into(),
+        (0x02, 0xC4) => "Sim.Accelerator".into(),
+        (0x02, 0xC5) => "Sim.Brake".into(),
+        (0x09, b) => format!("Btn{b}"),
+        (p, u) => format!("{p:#x}/{u:#x}"),
+    }
 }
 
 #[cfg(test)]

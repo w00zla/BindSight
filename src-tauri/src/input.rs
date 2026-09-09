@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 use sdl2::event::Event;
 use sdl2::joystick::{HatState, Joystick};
 use sdl2::JoystickSubsystem;
@@ -27,8 +27,25 @@ use crate::guid::sdl_guid_to_sc_product;
 /// forwarded value, so continuous jitter does not flood the frontend.
 const AXIS_EMIT_THRESHOLD: i32 = 3000;
 
-/// A connected joystick as BindSight sees it.
-#[derive(Debug, Clone, Serialize)]
+/// One hidapi interface behind the device's USB vendor/product (a device can
+/// expose several: joystick, keyboard, vendor-specific …). Device-log only.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct HidInterface {
+    pub path: String,
+    pub interface_number: i32,
+    pub usage_page: u16,
+    pub usage: u16,
+    pub manufacturer: Option<String>,
+    pub product: Option<String>,
+    pub serial: Option<String>,
+    /// `bcdDevice`, the device release number.
+    pub release: u16,
+    pub bus_type: String,
+}
+
+/// A connected joystick as BindSight sees it. Everything below `axes_error`
+/// is troubleshooting detail for the device log.
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct DeviceInfo {
     /// SDL enumeration index (NOT SC's `jsN` instance number — the two differ).
     pub index: u32,
@@ -50,6 +67,25 @@ pub struct DeviceInfo {
     /// `axes_error` then says why.
     pub axes: Vec<String>,
     pub axes_error: Option<String>,
+    /// SDL's per-session instance id (the `which` of its events).
+    pub sdl_instance_id: u32,
+    pub sdl_vendor: u16,
+    pub sdl_product: u16,
+    pub sdl_product_version: u16,
+    /// SDL's device type guess (`flight_stick`, `throttle`, `unknown`, …).
+    pub sdl_type: String,
+    /// The OS device path SDL opened (evdev node / DirectInput path).
+    pub sdl_path: Option<String>,
+    pub power_level: String,
+    pub num_balls: u32,
+    pub has_rumble: bool,
+    pub has_led: bool,
+    /// Every hidapi interface with the same vendor/product.
+    pub hid_interfaces: Vec<HidInterface>,
+    /// The joystick interface's report descriptor, hex.
+    pub hid_descriptor: Option<String>,
+    /// Its input fields in report order (`X Y Rz Z Btn1 … Hat`).
+    pub hid_usages: Vec<String>,
 }
 
 /// Shared, hot-pluggable device list, maintained by the input thread and read
@@ -58,12 +94,14 @@ pub type DeviceList = Arc<Mutex<Vec<DeviceInfo>>>;
 
 /// A single live input change, forwarded to the frontend as a `joy-input`
 /// event. `guid` is the device's SDL GUID, the join key to [`DeviceInfo`].
+/// `timestamp` is SDL's event time (ms since SDL init), `instance_id` the
+/// SDL joystick instance the event came from.
 #[derive(Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum InputEvent {
-    Button { guid: String, index: u8, pressed: bool },
-    Axis { guid: String, index: u8, value: i16 },
-    Hat { guid: String, index: u8, direction: String },
+    Button { guid: String, index: u8, pressed: bool, timestamp: u32, instance_id: u32 },
+    Axis { guid: String, index: u8, value: i16, timestamp: u32, instance_id: u32 },
+    Hat { guid: String, index: u8, direction: String, raw: u8, timestamp: u32, instance_id: u32 },
 }
 
 /// What hidapi knows about a USB `(vendor, product)`: the HID product string
@@ -73,6 +111,7 @@ struct HidInfo {
     /// Deferred: the descriptor is only read for devices SDL actually lists,
     /// and needs SDL's axis count to cross-check.
     joystick_path: Option<std::ffi::CString>,
+    interfaces: Vec<HidInterface>,
 }
 
 /// Short-lived hidapi context plus its device table; independent of SDL.
@@ -94,7 +133,7 @@ fn hid_table() -> HidTable {
         for dev in api.device_list() {
             let entry = map
                 .entry((dev.vendor_id(), dev.product_id()))
-                .or_insert(HidInfo { name: None, joystick_path: None });
+                .or_insert(HidInfo { name: None, joystick_path: None, interfaces: Vec::new() });
             if entry.name.is_none() {
                 entry.name = dev.product_string().map(str::to_string);
             }
@@ -102,6 +141,17 @@ fn hid_table() -> HidTable {
             if entry.joystick_path.is_none() && dev.usage_page() == 0x01 && matches!(dev.usage(), 4 | 5 | 8) {
                 entry.joystick_path = Some(dev.path().to_owned());
             }
+            entry.interfaces.push(HidInterface {
+                path: dev.path().to_string_lossy().into_owned(),
+                interface_number: dev.interface_number(),
+                usage_page: dev.usage_page(),
+                usage: dev.usage(),
+                manufacturer: dev.manufacturer_string().map(str::to_string),
+                product: dev.product_string().map(str::to_string),
+                serial: dev.serial_number().map(str::to_string),
+                release: dev.release_number(),
+                bus_type: format!("{:?}", dev.bus_type()).to_lowercase(),
+            });
         }
     }
     HidTable { api, map }
@@ -112,29 +162,59 @@ impl HidTable {
         self.map.get(&vid_pid)
     }
 
-    /// SC axis names by SDL index for a device, or why they are unavailable.
-    fn axes(&self, vid_pid: Option<(u16, u16)>, sdl_axes: u32) -> Result<Vec<String>, String> {
+    /// The joystick interface's report descriptor, or why it is unavailable.
+    fn descriptor(&self, vid_pid: Option<(u16, u16)>) -> Result<Vec<u8>, String> {
         let api = self.api.as_ref().ok_or("hidapi unavailable")?;
         let info = vid_pid.and_then(|k| self.get(k)).ok_or("no HID device for this vendor/product")?;
         let path = info.joystick_path.as_ref().ok_or("no HID joystick interface")?;
         let dev = api.open_path(path).map_err(|e| format!("{}: {e}", path.to_string_lossy()))?;
-        crate::hid::sc_axes_for(&dev, sdl_axes)
+        crate::hid::read_descriptor(&dev)
+    }
+}
+
+fn sdl_type_name(t: sdl2::sys::SDL_JoystickType) -> &'static str {
+    use sdl2::sys::SDL_JoystickType::*;
+    match t {
+        SDL_JOYSTICK_TYPE_UNKNOWN => "unknown",
+        SDL_JOYSTICK_TYPE_GAMECONTROLLER => "gamecontroller",
+        SDL_JOYSTICK_TYPE_WHEEL => "wheel",
+        SDL_JOYSTICK_TYPE_ARCADE_STICK => "arcade_stick",
+        SDL_JOYSTICK_TYPE_FLIGHT_STICK => "flight_stick",
+        SDL_JOYSTICK_TYPE_DANCE_PAD => "dance_pad",
+        SDL_JOYSTICK_TYPE_GUITAR => "guitar",
+        SDL_JOYSTICK_TYPE_DRUM_KIT => "drum_kit",
+        SDL_JOYSTICK_TYPE_ARCADE_PAD => "arcade_pad",
+        SDL_JOYSTICK_TYPE_THROTTLE => "throttle",
     }
 }
 
 fn device_info(stick: &Joystick, index: u32, hid: &HidTable) -> DeviceInfo {
     let sdl_guid = stick.guid().string();
     let vid_pid = crate::guid::sdl_guid_vendor_product(&sdl_guid);
-    let sc_name = vid_pid.and_then(|k| hid.get(k)).and_then(|i| i.name.clone());
+    let hid_info = vid_pid.and_then(|k| hid.get(k));
+    let sc_name = hid_info.and_then(|i| i.name.clone());
     let num_axes = stick.num_axes();
-    let (axes, axes_error) = match hid.axes(vid_pid, num_axes) {
+    let descriptor = hid.descriptor(vid_pid);
+    let (axes, axes_error) = match descriptor.as_ref().map_err(Clone::clone).and_then(|d| crate::hid::sc_axes_from(d, num_axes)) {
         Ok(axes) => (axes, None),
-        Err(e) => {
-            // Technical detail: the GUI keeps it out of the device tiles and
-            // only shows it in the Log tab, so stderr gets it as well.
-            eprintln!("bindsight: {}: no axis names: {e}", stick.name());
-            (Vec::new(), Some(e))
-        }
+        Err(e) => (Vec::new(), Some(e)),
+    };
+    let hid_usages = descriptor
+        .as_ref()
+        .map(|d| crate::hid::axis_usages(d).iter().map(|&(p, u)| crate::hid::usage_name(p, u)).collect())
+        .unwrap_or_default();
+    let hid_descriptor = descriptor.ok().map(|d| d.iter().map(|b| format!("{b:02x}")).collect());
+    // Index-based SDL queries the safe wrapper does not expose.
+    let i = index as std::os::raw::c_int;
+    let (sdl_vendor, sdl_product, sdl_product_version, sdl_type, sdl_path) = unsafe {
+        let path = sdl2::sys::SDL_JoystickPathForIndex(i);
+        (
+            sdl2::sys::SDL_JoystickGetDeviceVendor(i),
+            sdl2::sys::SDL_JoystickGetDeviceProduct(i),
+            sdl2::sys::SDL_JoystickGetDeviceProductVersion(i),
+            sdl_type_name(sdl2::sys::SDL_JoystickGetDeviceType(i)).to_string(),
+            (!path.is_null()).then(|| std::ffi::CStr::from_ptr(path).to_string_lossy().into_owned()),
+        )
     };
     DeviceInfo {
         index,
@@ -147,6 +227,22 @@ fn device_info(stick: &Joystick, index: u32, hid: &HidTable) -> DeviceInfo {
         num_hats: stick.num_hats(),
         axes,
         axes_error,
+        sdl_instance_id: stick.instance_id(),
+        sdl_vendor,
+        sdl_product,
+        sdl_product_version,
+        sdl_type,
+        sdl_path,
+        power_level: stick
+            .power_level()
+            .map(|p| format!("{p:?}").to_lowercase())
+            .unwrap_or_else(|e| format!("<{e}>")),
+        num_balls: stick.num_balls(),
+        has_rumble: stick.has_rumble(),
+        has_led: stick.has_led(),
+        hid_interfaces: hid_info.map(|i| i.interfaces.clone()).unwrap_or_default(),
+        hid_descriptor,
+        hid_usages,
     }
 }
 
@@ -197,38 +293,45 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
                 last_axis.clear();
                 reopen_all(&joystick, &mut opened, &mut guids, &app, &devices)?;
             }
-            Event::JoyButtonDown { which, button_idx, .. } => {
+            Event::JoyButtonDown { timestamp, which, button_idx, .. } => {
                 if let Some(guid) = guids.get(&which) {
                     let _ = app.emit(
                         "joy-input",
-                        InputEvent::Button { guid: guid.clone(), index: button_idx, pressed: true },
+                        InputEvent::Button { guid: guid.clone(), index: button_idx, pressed: true, timestamp, instance_id: which },
                     );
                 }
             }
-            Event::JoyButtonUp { which, button_idx, .. } => {
+            Event::JoyButtonUp { timestamp, which, button_idx, .. } => {
                 if let Some(guid) = guids.get(&which) {
                     let _ = app.emit(
                         "joy-input",
-                        InputEvent::Button { guid: guid.clone(), index: button_idx, pressed: false },
+                        InputEvent::Button { guid: guid.clone(), index: button_idx, pressed: false, timestamp, instance_id: which },
                     );
                 }
             }
-            Event::JoyHatMotion { which, hat_idx, state, .. } => {
+            Event::JoyHatMotion { timestamp, which, hat_idx, state, .. } => {
                 if let Some(guid) = guids.get(&which) {
                     let _ = app.emit(
                         "joy-input",
-                        InputEvent::Hat { guid: guid.clone(), index: hat_idx, direction: hat_direction(state) },
+                        InputEvent::Hat {
+                            guid: guid.clone(),
+                            index: hat_idx,
+                            direction: hat_direction(state),
+                            raw: state.to_raw(),
+                            timestamp,
+                            instance_id: which,
+                        },
                     );
                 }
             }
-            Event::JoyAxisMotion { which, axis_idx, value, .. } => {
+            Event::JoyAxisMotion { timestamp, which, axis_idx, value, .. } => {
                 let prev = last_axis.get(&(which, axis_idx)).copied().unwrap_or(0);
                 if (value as i32 - prev as i32).abs() > AXIS_EMIT_THRESHOLD {
                     last_axis.insert((which, axis_idx), value);
                     if let Some(guid) = guids.get(&which) {
                         let _ = app.emit(
                             "joy-input",
-                            InputEvent::Axis { guid: guid.clone(), index: axis_idx, value },
+                            InputEvent::Axis { guid: guid.clone(), index: axis_idx, value, timestamp, instance_id: which },
                         );
                     }
                 }
@@ -270,33 +373,8 @@ fn reopen_all(
         opened.insert(stick.instance_id(), stick);
     }
 
-    // SDL raises one JoyDeviceAdded per device at startup, each of which
-    // lands here; only log the list when it actually differs.
-    let changed = devices
-        .lock()
-        .map(|shared| shared.iter().map(|d| &d.sdl_guid).ne(list.iter().map(|d| &d.sdl_guid)))
-        .unwrap_or(true);
-    if changed {
-        info!("enumerating joysticks: {count} found");
-        for info in &list {
-            let name = info.sc_name.as_deref().unwrap_or(&info.sdl_name);
-            info!(
-                "device {}: {name} sdl_guid={} sc_guid={} buttons={} axes={} hats={} sc_axes={:?}",
-                info.index,
-                info.sdl_guid,
-                info.sc_product_guid.as_deref().unwrap_or("-"),
-                info.num_buttons,
-                info.num_axes,
-                info.num_hats,
-                info.axes
-            );
-            if let Some(err) = &info.axes_error {
-                warn!("device {}: {name}: axes unavailable: {err}", info.index);
-            }
-        }
-    } else {
-        debug!("enumerating joysticks: {count} found, unchanged");
-    }
+    // Device details stay out of the app log by design (the Devices mode's
+    // device log has them all); only failures are logged above.
 
     if let Ok(mut shared) = devices.lock() {
         *shared = list;
