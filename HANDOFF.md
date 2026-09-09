@@ -31,11 +31,23 @@ The core loop is closed end-to-end:
 6. **Exclude**: a per-device "Exclude always" (`ignored_devices` in the per-OS
    `config.json`) declares a device SC never sees (e.g. a keyboard Wine hides);
    it then counts as unplugged.
+7. **HW profiles** (2026-09-09): a "HW profiles" mode with an editor — pick a
+   device, create/pick a profile, add images, press an input, draw areas
+   (rect / ellipse / polygon / arrow / cw / ccw), save; zip export/import;
+   bundled profiles from `resources/profiles/` (none shipped yet). The Live
+   view shows the chosen profile's images per connected device (select when
+   several match the hardware id) and lights the active inputs: buttons while
+   held, hats until centered, axes as a 400 ms pulse; blue when SC has a
+   binding, grey otherwise. A bound input the profile lacks raises a toast and
+   a `not in HW profile` tag in the bindings list; clicking a binding row pins
+   its area(s), or a toast says why it cannot. While the editor is open the
+   Live view ignores joystick input. See `CLAUDE.md` for the data model.
 
-GUI: config (SC base path), device tiles (name, `✓ jsN` / clash / `not seen by
-SC` / `excluded`, counts, Exclude toggle), Game.log line with local timestamp,
-clash banner, live tile, bindings list (with `default` tags), actions list,
-live event log, toasts.
+GUI: mode switch (Live / HW profiles), config (SC base path), device tiles
+(name, `✓ jsN` / clash / `not seen by SC` / `excluded`, counts, Exclude
+toggle), Game.log line with local timestamp, clash banner, live tile, HW
+profile images, bindings list (with `default` / `not in HW profile` tags,
+click to pin), actions list, live event log, toasts.
 
 ## Verified facts (this hardware)
 
@@ -78,9 +90,33 @@ live event log, toasts.
   known limitation, falls back to order/manual.
 - `bindingCountFor` on the device tiles counts shipped defaults too.
 
+### HW profiles — open items (found while building, not built; user decides)
+
+- **Untested in the GUI** as of the 2026-09-09 commits: Konva transform math
+  (rect rotation most likely to bite), file dialogs, zip import/export, live
+  highlighting. `pnpm build` and `cargo test` only.
+- **First bundled profile**: once one exists, copy its folder to
+  `src-tauri/resources/profiles/<id>/`.
+- Mode switch remounts the editor: **unsaved changes are lost without a
+  warning**.
+- The pinned binding highlight is not cleared on device change / profile
+  reload.
+- `validate()` does not check uniqueness of `images[].id` / `areas[].id` nor
+  the image file extension; import extracts every zip entry, referenced or not
+  (path escapes are rejected). Broken profile folders are logged to stderr
+  only.
+- Refresh button also shows in HW profiles mode (only refreshes devices).
+- The device tile's `not in profile` means SC's binding profile
+  (`actionmaps.xml`) — consider `not in actionmaps` to keep it apart from HW
+  profiles.
+- Symbol transformer keeps symbols square (x scale wins).
+- Axis areas can be drawn and pulse on movement, but have no SC token mapping
+  (see the axis item above), so they never turn blue and are not clickable in
+  the bindings list.
+
 ## Testing
 
-- `cd src-tauri && cargo test --lib` — 30 tests (+1 ignored). The ignored one
+- `cd src-tauri && cargo test --lib` — 39 tests (+1 ignored). The ignored one
   (`converts_real_hardware_guids`) checks the author's real GUIDs; run with
   `cargo test -- --ignored`.
 - Frontend: `pnpm build` (vue-tsc typechecks).

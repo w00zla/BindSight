@@ -2,6 +2,7 @@
 //! `Data.p4k`), stored as JSON in the app config dir. Everything the app needs
 //! from the SC install is derived from this one path.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -21,11 +22,19 @@ pub struct Config {
     /// hidden under Wine. Older config files without the field still load.
     #[serde(default)]
     pub ignored_devices: Vec<String>,
+    /// Which hardware profile to show per device: lowercase SC Product GUID
+    /// -> profile id. Only needed when several profiles exist for one device.
+    #[serde(default)]
+    pub profile_choices: HashMap<String, String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { base_path: DEFAULT_BASE_PATH.to_string(), ignored_devices: Vec::new() }
+        Self {
+            base_path: DEFAULT_BASE_PATH.to_string(),
+            ignored_devices: Vec::new(),
+            profile_choices: HashMap::new(),
+        }
     }
 }
 
@@ -80,5 +89,6 @@ mod tests {
         let c: Config = serde_json::from_str(r#"{"base_path":"/sc/LIVE"}"#).unwrap();
         assert_eq!(c.base_path, "/sc/LIVE");
         assert!(c.ignored_devices.is_empty());
+        assert!(c.profile_choices.is_empty());
     }
 }

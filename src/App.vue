@@ -2,22 +2,10 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-
-interface DeviceInfo {
-  index: number;
-  sc_name: string | null;
-  sdl_name: string;
-  sdl_guid: string;
-  sc_product_guid: string | null;
-  num_buttons: number;
-  num_axes: number;
-  num_hats: number;
-}
-
-type JoyInput =
-  | { kind: "button"; guid: string; index: number; pressed: boolean }
-  | { kind: "axis"; guid: string; index: number; value: number }
-  | { kind: "hat"; guid: string; index: number; direction: string };
+import DeviceImage from "./components/DeviceImage.vue";
+import ProfileEditor from "./components/ProfileEditor.vue";
+import type { DeviceInfo, JoyInput } from "./types";
+import { sameHardware, type HighlightClass, type HwProfile, type HwProfileSummary } from "./hwprofile";
 
 interface Action {
   name: string;
@@ -121,12 +109,231 @@ const currentInput = ref<{
   token: string | null;
   sdl: string;
   actions: BoundAction[];
+  // Whether the device's hardware profile has an area for this input; `null`
+  // when the device has no profile at all.
+  in_profile: boolean | null;
 } | null>(null);
 const clash = ref<ClashReport | null>(null);
 // SC Product GUIDs the user marked "SC doesn't see this device" (persisted per OS).
 const ignoredDevices = ref<string[]>([]);
 const error = ref<string | null>(null);
 const loading = ref(false);
+
+// --- hardware profiles -----------------------------------------------------
+
+// How long an axis stays highlighted after its last event (axes never rest).
+const AXIS_PULSE_MS = 400;
+
+const mode = ref<"live" | "profiles">("live");
+const profileSummaries = ref<HwProfileSummary[]>([]);
+// Profile id -> full profile, and `<profile id>/<file>` -> image data URL.
+const loadedProfiles = ref<Record<string, HwProfile>>({});
+const profileImages = ref<Record<string, string>>({});
+// Lowercase hardware id -> chosen profile id (from config.json).
+const profileChoices = ref<Record<string, string>>({});
+// SDL GUID -> input key -> highlight class, for the currently active inputs.
+const activeInputs = ref<Record<string, Record<string, HighlightClass>>>({});
+const axisTimers = new Map<string, number>();
+
+function profilesFor(guid: string | null): HwProfileSummary[] {
+  return profileSummaries.value.filter((s) => sameHardware(s.hardware_id, guid));
+}
+
+// The user's pick for this device, else the single/first matching profile.
+function chosenProfileId(guid: string | null): string | null {
+  const list = profilesFor(guid);
+  if (!list.length) return null;
+  const pick = guid ? profileChoices.value[guid.toLowerCase()] : undefined;
+  return list.find((s) => s.id === pick)?.id ?? list[0].id;
+}
+
+function imgSrc(id: string, file: string): string {
+  return profileImages.value[`${id}/${file}`] ?? "";
+}
+
+interface ProfileView {
+  device: DeviceInfo;
+  profile: HwProfile;
+  options: HwProfileSummary[];
+}
+
+const profileViews = computed<ProfileView[]>(() =>
+  devices.value.flatMap((d) => {
+    const id = chosenProfileId(d.sc_product_guid);
+    const p = id ? loadedProfiles.value[id] : null;
+    return p ? [{ device: d, profile: p, options: profilesFor(d.sc_product_guid) }] : [];
+  }),
+);
+
+async function loadProfileImage(id: string, file: string) {
+  const key = `${id}/${file}`;
+  if (profileImages.value[key]) return;
+  try {
+    profileImages.value[key] = await invoke<string>("read_hw_profile_image", { id, file });
+  } catch {
+    /* a missing image just stays blank */
+  }
+}
+
+async function loadChosenProfiles() {
+  for (const d of devices.value) {
+    const id = chosenProfileId(d.sc_product_guid);
+    if (!id || loadedProfiles.value[id]) continue;
+    try {
+      const p = await invoke<HwProfile>("get_hw_profile", { id });
+      loadedProfiles.value[id] = p;
+      for (const im of p.images) await loadProfileImage(p.id, im.file);
+    } catch {
+      /* skip a profile that will not load */
+    }
+  }
+}
+
+async function reloadProfiles() {
+  try {
+    profileSummaries.value = await invoke<HwProfileSummary[]>("list_hw_profiles");
+  } catch (e) {
+    error.value = String(e);
+    return;
+  }
+  await loadChosenProfiles();
+}
+
+// A save in the editor can change images and areas — drop the caches.
+async function onProfilesSaved() {
+  loadedProfiles.value = {};
+  profileImages.value = {};
+  await reloadProfiles();
+}
+
+async function setMode(m: "live" | "profiles") {
+  mode.value = m;
+  // Inputs released while the editor was open were never seen here.
+  activeInputs.value = {};
+  if (m === "live") await reloadProfiles();
+}
+
+async function setProfileChoice(guid: string | null, id: string) {
+  if (!guid) return;
+  try {
+    const cfg = await invoke<{ profile_choices: Record<string, string> }>("set_hw_profile_choice", {
+      hardwareId: guid,
+      profileId: id || null,
+    });
+    profileChoices.value = cfg.profile_choices;
+    await loadChosenProfiles();
+  } catch (e) {
+    notify(String(e), "error");
+  }
+}
+
+function setActive(guid: string, key: string, cls: HighlightClass) {
+  const cur = activeInputs.value[guid] ?? {};
+  activeInputs.value = { ...activeInputs.value, [guid]: { ...cur, [key]: cls } };
+}
+
+function clearActive(guid: string, drop: (key: string) => boolean) {
+  const cur = activeInputs.value[guid];
+  if (!cur) return;
+  const next: Record<string, HighlightClass> = {};
+  for (const [k, v] of Object.entries(cur)) if (!drop(k)) next[k] = v;
+  activeInputs.value = { ...activeInputs.value, [guid]: next };
+}
+
+// A binding clicked in the list, kept lit on the profile image until clicked
+// again or another one is picked.
+const pinned = ref<{ guid: string; key: string } | null>(null);
+
+function activeFor(guid: string): Map<string, HighlightClass> {
+  const m = new Map<string, HighlightClass>(Object.entries(activeInputs.value[guid] ?? {}));
+  if (pinned.value?.guid === guid) m.set(pinned.value.key, "bound");
+  return m;
+}
+
+// Hardware-profile input key for an SC token (buttons and hats only — axes
+// have no SDL mapping yet). Undoes the +1 offset of button/hat numbering.
+function inputKeyForToken(token: string): string | null {
+  const b = token.match(/^js\d+_button(\d+)$/);
+  if (b) return `button:${Number(b[1]) - 1}`;
+  const h = token.match(/^js\d+_hat(\d+)_(up|down|left|right)$/);
+  if (h) return `hat:${Number(h[1]) - 1}:${h[2]}`;
+  return null;
+}
+
+// Does the profile shown for this device (by SDL GUID) have an area for the
+// input? `null` when the device has no profile.
+function inProfile(sdlGuid: string, key: string): boolean | null {
+  const d = devices.value.find((dev) => dev.sdl_guid === sdlGuid);
+  const id = chosenProfileId(d?.sc_product_guid ?? null);
+  const p = id ? loadedProfiles.value[id] : null;
+  if (!p) return null;
+  return p.areas.some((a) => a.input === key);
+}
+
+// Can a binding in the list be lit on a profile image? Needs a connected
+// device with a profile and a mappable token.
+function pinTarget(b: ResolvedBinding): { guid: string; key: string } | null {
+  const r = resolvePin(b);
+  return "reason" in r ? null : r;
+}
+
+// Where a binding would light up, or why it cannot.
+function resolvePin(b: ResolvedBinding): { guid: string; key: string } | { reason: string } {
+  const d = devices.value.find((dev) => !!b.device_guid && sameHardware(dev.sc_product_guid, b.device_guid));
+  if (!d) return { reason: `${b.device ?? "Device"} not connected` };
+  const key = inputKeyForToken(b.token);
+  if (!key) return { reason: `${tokenLabel(b.token)}: axes have no HW profile mapping yet` };
+  const has = inProfile(d.sdl_guid, key);
+  if (has === null) return { reason: `${d.sc_name ?? d.sdl_name} has no HW profile` };
+  if (!has) return { reason: `${tokenLabel(b.token)} not in HW profile` };
+  return { guid: d.sdl_guid, key };
+}
+
+// The device has a profile, but no area for this binding's input.
+function missingInProfile(b: ResolvedBinding): boolean {
+  const t = pinTarget(b);
+  return !!t && inProfile(t.guid, t.key) === false;
+}
+
+function isPinned(b: ResolvedBinding): boolean {
+  const t = pinTarget(b);
+  return !!t && pinned.value?.guid === t.guid && pinned.value.key === t.key;
+}
+
+function togglePin(b: ResolvedBinding) {
+  const r = resolvePin(b);
+  if ("reason" in r) {
+    notify(r.reason, "error");
+    return;
+  }
+  pinned.value = isPinned(b) ? null : r;
+}
+
+// Buttons stay lit while held, hats until centered, axes pulse.
+function trackActive(p: JoyInput) {
+  if (p.kind === "button") {
+    if (p.pressed) setActive(p.guid, `button:${p.index}`, "none");
+    else clearActive(p.guid, (k) => k === `button:${p.index}`);
+    return;
+  }
+  if (p.kind === "hat") {
+    clearActive(p.guid, (k) => k.startsWith(`hat:${p.index}:`));
+    if (p.direction !== "centered") setActive(p.guid, `hat:${p.index}:${p.direction}`, "none");
+    return;
+  }
+  const key = `axis:${p.index}`;
+  setActive(p.guid, key, "none");
+  const tk = `${p.guid}#${key}`;
+  const prev = axisTimers.get(tk);
+  if (prev) clearTimeout(prev);
+  axisTimers.set(
+    tk,
+    window.setTimeout(() => {
+      clearActive(p.guid, (k) => k === key);
+      axisTimers.delete(tk);
+    }, AXIS_PULSE_MS),
+  );
+}
 
 // SC's own display label for a full token, e.g. "js2_button1" -> "Button 1
 // (Input 2)". Falls back to the raw token if SC has no label for it.
@@ -256,13 +463,30 @@ async function showBinding(
       index,
       direction,
     });
+    const key = kind === "button" ? `button:${index}` : `hat:${index}:${direction}`;
     currentInput.value = {
       device: nameFor(guid),
       sc_guid: devices.value.find((d) => d.sdl_guid === guid)?.sc_product_guid ?? null,
       token: res.token,
       sdl: sdlInputName(kind, index, direction),
       actions: res.actions,
+      in_profile: inProfile(guid, key),
     };
+    if (res.actions.length && currentInput.value.in_profile === false) {
+      // One toast per input while it is on screen — hammering a button
+      // must not stack them.
+      const tk = `${guid}#${key}`;
+      const now = Date.now();
+      if (lastMissingToast.key !== tk || now - lastMissingToast.at > TOAST_MS) {
+        lastMissingToast = { key: tk, at: now };
+        notify(`${res.token ? tokenLabel(res.token) : currentInput.value.sdl} not in HW profile`, "error");
+      }
+    }
+    // Upgrade the profile highlight to blue when SC has a binding — but only
+    // while the input is still held (the resolve is async).
+    if (activeInputs.value[guid]?.[key] !== undefined) {
+      setActive(guid, key, res.actions.length ? "bound" : "none");
+    }
   } catch {
     /* ignore transient resolve errors */
   }
@@ -274,7 +498,11 @@ interface Toast {
   type: "ok" | "error";
 }
 
+// How long a toast stays on screen.
+const TOAST_MS = 4000;
 const toasts = ref<Toast[]>([]);
+// The last "not in profile" toast for a live input, to avoid stacking.
+let lastMissingToast = { key: "", at: 0 };
 let toastSeq = 0;
 
 // Show a transient toast that dismisses itself after a few seconds.
@@ -283,7 +511,7 @@ function notify(message: string, type: "ok" | "error" = "ok") {
   toasts.value.push({ id, message, type });
   setTimeout(() => {
     toasts.value = toasts.value.filter((t) => t.id !== id);
-  }, 4000);
+  }, TOAST_MS);
 }
 
 async function saveBasePath() {
@@ -356,9 +584,12 @@ let unlisten: UnlistenFn[] = [];
 onMounted(async () => {
   unlisten.push(
     await listen<JoyInput>("joy-input", (e) => {
+      // The editor owns the input while a HW profile is being edited.
+      if (mode.value !== "live") return;
       const p = e.payload;
       events.value.unshift(p);
       if (events.value.length > MAX_EVENTS) events.value.pop();
+      trackActive(p);
 
       if (p.kind === "button" && p.pressed) {
         showBinding(p.guid, "button", p.index, null);
@@ -367,24 +598,37 @@ onMounted(async () => {
       }
     }),
   );
-  unlisten.push(await listen("devices-changed", () => refresh()));
+  unlisten.push(
+    await listen("devices-changed", async () => {
+      await refresh();
+      await reloadProfiles();
+    }),
+  );
   await refresh();
 
   try {
     actionMaps.value = await invoke<ActionMap[]>("get_actions");
     tokens.value = await invoke<Record<string, string>>("get_tokens");
-    const cfg = await invoke<{ base_path: string; ignored_devices: string[] }>("get_config");
+    const cfg = await invoke<{
+      base_path: string;
+      ignored_devices: string[];
+      profile_choices: Record<string, string>;
+    }>("get_config");
     basePath.value = cfg.base_path;
     ignoredDevices.value = cfg.ignored_devices;
+    profileChoices.value = cfg.profile_choices ?? {};
     bindings.value = await invoke<ResolvedBinding[]>("get_bindings");
   } catch (e) {
     error.value = String(e);
   }
+  await reloadProfiles();
 });
 
 onUnmounted(() => {
   unlisten.forEach((fn) => fn());
   unlisten = [];
+  axisTimers.forEach((t) => clearTimeout(t));
+  axisTimers.clear();
 });
 </script>
 
@@ -392,11 +636,16 @@ onUnmounted(() => {
   <main class="container">
     <header class="topbar">
       <h1>BindSight</h1>
+      <div class="modes">
+        <button :class="{ on: mode === 'live' }" @click="setMode('live')">Live</button>
+        <button :class="{ on: mode === 'profiles' }" @click="setMode('profiles')">HW profiles</button>
+      </div>
       <button @click="refresh" :disabled="loading">
         {{ loading ? "Scanning…" : "Refresh" }}
       </button>
     </header>
 
+    <template v-if="mode === 'live'">
     <section class="config">
       <label class="cfg-row">
         <span>SC base path</span>
@@ -502,14 +751,49 @@ onUnmounted(() => {
       <div v-else class="cur-none">— not bound —</div>
     </section>
 
+    <section v-if="profileViews.length" class="hwprofiles">
+      <h2>HW profiles</h2>
+      <div v-for="v in profileViews" :key="v.device.index" class="hwprofile">
+        <div class="hp-head">
+          <span class="hp-dev">{{ v.device.sc_name ?? v.device.sdl_name }}</span>
+          <select
+            v-if="v.options.length > 1"
+            class="hp-pick"
+            :value="v.profile.id"
+            @change="setProfileChoice(v.device.sc_product_guid, ($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="s in v.options" :key="s.id" :value="s.id">
+              {{ s.name }}{{ s.variant ? ` · ${s.variant}` : "" }}
+            </option>
+          </select>
+          <span v-else class="hp-name">{{ v.profile.name }}</span>
+        </div>
+        <template v-for="im in v.profile.images" :key="im.id">
+          <DeviceImage
+            v-if="imgSrc(v.profile.id, im.file)"
+            :profile="v.profile"
+            :image="im"
+            :src="imgSrc(v.profile.id, im.file)"
+            :active="activeFor(v.device.sdl_guid)"
+          />
+        </template>
+      </div>
+    </section>
+
     <section class="bindings" v-if="bindings.length">
       <h2>Joystick bindings ({{ bindings.length }})</h2>
       <ul class="binding-list">
-        <li v-for="(b, i) in bindings" :key="i" :class="{ 'binding-clash': bindingClash(b.token) }">
+        <li
+          v-for="(b, i) in bindings"
+          :key="i"
+          :class="{ 'binding-clash': bindingClash(b.token), 'binding-pinned': isPinned(b) }"
+          @click="togglePin(b)"
+        >
           <span class="tok">{{ tokenLabel(b.token) }}</span>
           <span class="blabel">
             {{ b.label ?? b.action }}
             <span v-if="b.is_default" class="default-tag">default</span>
+            <span v-if="missingInProfile(b)" class="js-unverified">not in HW profile</span>
           </span>
           <span
             class="bctrl"
@@ -547,6 +831,9 @@ onUnmounted(() => {
         </div>
       </div>
     </section>
+    </template>
+
+    <ProfileEditor v-else :devices="devices" @notify="notify" @saved="onProfilesSaved" />
 
     <div class="toasts">
       <div v-for="t in toasts" :key="t.id" :class="['toast', t.type]">
@@ -578,6 +865,68 @@ h1 {
 h2 {
   font-size: 1.1rem;
   margin: 1.5rem 0 0.5rem;
+}
+
+.modes {
+  display: flex;
+  gap: 0.35rem;
+  margin-right: auto;
+  margin-left: 1rem;
+}
+
+.modes button {
+  padding: 0.25em 0.8em;
+  font-size: 0.85rem;
+  box-shadow: none;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  background: transparent;
+  color: inherit;
+}
+
+.modes button.on {
+  border-color: #396cd8;
+  background: rgba(57, 108, 216, 0.14);
+}
+
+.hwprofiles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.hwprofile {
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  background: rgba(128, 128, 128, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.hp-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.hp-dev {
+  font-weight: 600;
+}
+
+.hp-name {
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
+
+.hp-pick {
+  padding: 0.25em 0.5em;
+  border-radius: 6px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 0.85rem;
 }
 
 .hint {
@@ -751,6 +1100,16 @@ h2 {
 
 .binding-clash {
   background: rgba(192, 57, 43, 0.08);
+  border-radius: 4px;
+}
+
+/* Clickable: lights the input on the device's profile image. */
+.binding-list li {
+  cursor: pointer;
+}
+
+.binding-pinned {
+  background: rgba(57, 108, 216, 0.14);
   border-radius: 4px;
 }
 
@@ -1062,6 +1421,8 @@ body {
 
 @media (prefers-color-scheme: dark) {
   :root {
+    /* Native controls (select popups, checkboxes) follow the dark theme. */
+    color-scheme: dark;
     color: #f6f6f6;
     background-color: #2f2f2f;
   }

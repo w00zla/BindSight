@@ -8,6 +8,7 @@ pub mod bindings;
 pub mod config;
 pub mod gamelog;
 pub mod guid;
+pub mod hwprofile;
 pub mod input;
 pub mod scdata;
 
@@ -16,8 +17,8 @@ type TokenLabels = std::collections::HashMap<String, String>;
 
 /// Runtime state that depends on the configured SC install.
 #[derive(Default)]
-struct AppData {
-    config: config::Config,
+pub(crate) struct AppData {
+    pub(crate) config: config::Config,
     profile: Option<scdata::UserProfile>,
     index: bindings::BindingIndex,
 }
@@ -115,9 +116,9 @@ fn set_base_path(
     actions: State<Vec<scdata::ActionMap>>,
     data: State<Mutex<AppData>>,
 ) -> LoadStatus {
-    // Keep the rest of the config (the ignore list) when only the path changes.
-    let ignored_devices = data.lock().unwrap().config.ignored_devices.clone();
-    let config = config::Config { base_path: path.clone(), ignored_devices };
+    // Keep the rest of the config (ignore list, profile choices) when only the
+    // path changes.
+    let config = config::Config { base_path: path.clone(), ..data.lock().unwrap().config.clone() };
     if let Err(e) = config::save(&app, &config) {
         eprintln!("bindsight: failed to save config: {e}");
     }
@@ -249,6 +250,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let actions = load_actions(app.handle());
             let config = config::load(app.handle());
@@ -275,7 +277,18 @@ pub fn run() {
             get_clash_report,
             set_ignored_devices,
             set_base_path,
-            resolve_input
+            resolve_input,
+            hwprofile::list_hw_profiles,
+            hwprofile::get_hw_profile,
+            hwprofile::create_hw_profile,
+            hwprofile::save_hw_profile,
+            hwprofile::delete_hw_profile,
+            hwprofile::add_hw_profile_image,
+            hwprofile::remove_hw_profile_image,
+            hwprofile::read_hw_profile_image,
+            hwprofile::export_hw_profile,
+            hwprofile::import_hw_profile,
+            hwprofile::set_hw_profile_choice
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

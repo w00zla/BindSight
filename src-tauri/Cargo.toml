@@ -24,6 +24,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hidapi = "2"
 quick-xml = "0.37"
+uuid = { version = "1.26.0", features = ["v4"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+base64 = "0.23.1"
+tauri-plugin-dialog = "2.7.3"
 
 # SDL2 is linked differently per platform. On Windows we build it from source
 # and static-link it, so the app needs no SDL2.dll and no system SDL2 install

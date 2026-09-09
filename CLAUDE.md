@@ -18,7 +18,11 @@ See `HANDOFF.md` for the current working state.
 ## Stack
 
 - **Shell/backend**: Tauri v2 + Rust (`src-tauri/`).
-- **Frontend**: Vue 3 + TypeScript + Vite (`src/`), single `App.vue`.
+- **Frontend**: Vue 3 + TypeScript + Vite (`src/`). `App.vue` holds the Live
+  view and the mode switch; `components/ProfileEditor.vue` is the HW profile
+  editor (Konva via `vue-konva`), `components/DeviceImage.vue` the plain-SVG
+  viewer; `hwprofile.ts` the shared profile types/helpers, `types.ts` the
+  device/input types.
 - **Input**: SDL2 raw joystick API (`sdl2` crate) for buttons/axes/hats;
   `hidapi` for the HID product string (SC's device name) and later axis usages.
 - **XML/INI**: `quick-xml` + hand-rolled parsing.
@@ -36,9 +40,29 @@ See `HANDOFF.md` for the current working state.
   `actionmaps.xml` (rebinds + `<options>` device map).
 - `bindings.rs` — `BindingIndex` (token -> bound actions), `button_token`/
   `hat_token` (with the +1 offset), `instance_for_guid`, `resolve_bindings`.
-- `config.rs` — persist the SC base path as JSON in the app config dir.
+- `config.rs` — persist the SC base path, the ignore list and the HW profile
+  choice per device as JSON in the app config dir.
+- `hwprofile.rs` — HW profiles: one folder per profile (`profile.json` +
+  images) under `<app_data_dir>/profiles/`, bundled ones under
+  `resources/profiles/` (user shadows bundled by id, editing forks). Zip
+  export/import, image add/remove/read (data URL), validation. Pure logic
+  takes `&Path` roots; the `#[tauri::command]` wrappers only resolve dirs.
 - `lib.rs` — Tauri commands, state wiring, the input thread spawn, the Wayland
   DMABUF workaround.
+
+## HW profile data model (`profile.json`, format 1)
+
+- Keyed by `hardware_id` = SC Product GUID (vendor/product, platform-stable);
+  several profiles per id are normal (`variant`: stock / addon builds).
+- Areas map an **SDL-level** input key (`button:N`, `hat:N:<dir>`, `axis:N`,
+  no axis sign — SC has none) to a shape on an image: `rect`, `ellipse`,
+  `polygon`, or `symbol` (`arrow` rotatable, `cw`, `ccw`). Several areas per
+  input are fine.
+- All coordinates are normalized 0..1 to the image's natural size, rotation
+  in degrees around the shape's center. The model is ours, never Konva's JSON —
+  the canvas lib is only the editor's interaction layer.
+- Token -> input key undoes the +1 offset (`js2_button5` -> `button:4`); axes
+  have no mapping yet.
 
 ## Commands / how to work
 
@@ -106,6 +130,14 @@ file libappindicator-gtk3-devel librsvg2-devel libxdo-devel SDL2-devel`, plus th
 - **+1 button offset**: SC `js_button1` == SDL button 0 (verified under Wine).
 - **Wayland**: `run()` sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` on Linux (fixes
   WebKitGTK "Error 71"), unless the user overrode it.
+- **Dark mode + native controls**: `:root { color-scheme: dark }` in the dark
+  media block, or WebKitGTK paints `<select>` popups white with inherited white
+  text.
+- **Konva rect rotation**: rect nodes sit at their center with
+  `offsetX/Y = half size`, so `rotation` turns around the center and the stored
+  `x/y` stay the unrotated top-left. On `transformend` read `width*scaleX`,
+  reset scale to 1 imperatively (vue-konva diffs configs and would not re-apply
+  an unchanged `scaleX: 1`).
 - **CMake 4 vs. vendored SDL2**: `sdl2-sys` ships an SDL2 whose `CMakeLists.txt`
   still says `cmake_minimum_required(VERSION 3.0)`, which CMake 4.x refuses
   ("Compatibility with CMake < 3.5 has been removed"). VS 2026 ships CMake 4.3,
