@@ -61,6 +61,29 @@ pub struct ScData {
     pub tokens: TokenLabels,
 }
 
+/// Files an SC environment must have, relative to its base path. Checked
+/// before anything is read; one missing = the environment is not loaded.
+pub const REQUIRED_FILES: [&str; 3] = [
+    "Data.p4k",
+    "build_manifest.id",
+    "user/client/0/Profiles/default/actionmaps.xml",
+];
+
+/// Check that `base_path` is a folder holding every [`REQUIRED_FILES`]
+/// entry. The error names the folder, or lists what is missing in it.
+pub fn validate_install(base_path: &str) -> Result<(), String> {
+    let base = Path::new(base_path);
+    if !base.is_dir() {
+        return Err(format!("Folder not found: {base_path}"));
+    }
+    let missing: Vec<&str> = REQUIRED_FILES.iter().copied().filter(|f| !base.join(f).is_file()).collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("Missing in {base_path}: {}", missing.join(", ")))
+    }
+}
+
 /// `build_manifest.id`, written next to `Data.p4k` by the launcher.
 pub fn manifest_path(base_path: &str) -> PathBuf {
     PathBuf::from(base_path).join("build_manifest.id")
@@ -227,23 +250,32 @@ pub const LOAD_STEPS: u8 = 4;
 /// Load the game data for the install at `base_path` (whose version is
 /// `version`): serve the cached JSON for that version if present, otherwise
 /// extract + convert and fill the cache. `cache_root` is the app cache dir.
-/// `progress` is called with the completed step (2 = extracted, 3 =
-/// converted, 4 = cached; a cache hit jumps straight to 4).
+/// With a `global_ini` override the labels come from that file instead of
+/// the install's own, and the cache is bypassed both ways (the file can
+/// change any time; the extraction costs about a second). `progress` is
+/// called with the completed step (2 = extracted, 3 = converted, 4 =
+/// cached; a cache hit jumps straight to 4).
 pub fn load(
     cache_root: &Path,
     sidecar: &Path,
     base_path: &str,
     version: &ScVersion,
+    global_ini: Option<&Path>,
     progress: &dyn Fn(u8),
 ) -> Result<ScData, String> {
     let dir = cache_dir(cache_root, version);
-    if let Some(data) = read_cache(&dir) {
-        info!("sc data cache hit: {}", dir.display());
-        progress(LOAD_STEPS);
-        return Ok(data);
+    if global_ini.is_none() {
+        if let Some(data) = read_cache(&dir) {
+            info!("sc data cache hit: {}", dir.display());
+            progress(LOAD_STEPS);
+            return Ok(data);
+        }
     }
     let p4k = p4k_path(base_path);
-    info!("sc data cache miss, extracting: cache_dir={} p4k={}", dir.display(), p4k.display());
+    match global_ini {
+        Some(ini) => info!("sc data with global.ini override, extracting: ini={} p4k={}", ini.display(), p4k.display()),
+        None => info!("sc data cache miss, extracting: cache_dir={} p4k={}", dir.display(), p4k.display()),
+    }
 
     let tmp = dir.join("extract");
     let _ = std::fs::remove_dir_all(&tmp);
@@ -255,7 +287,8 @@ pub fn load(
         progress(2);
         info!("sc data extracted in {:.2?}", extract_elapsed);
         let read = |p: &Path| std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()));
-        let data = convert(&read(&profile)?, &read(&keybinding)?, &read(&global)?)?;
+        let global = global_ini.unwrap_or(&global);
+        let data = convert(&read(&profile)?, &read(&keybinding)?, &read(global)?)?;
         let total_actions: usize = data.actions.iter().map(|m| m.actions.len()).sum();
         info!(
             "sc data converted: {} actionmaps, {} actions, {} tokens",
@@ -269,8 +302,10 @@ pub fn load(
 
     let data = result?;
     progress(3);
-    write_cache(&dir, &data)?;
-    info!("sc data cache written: {}", dir.display());
+    if global_ini.is_none() {
+        write_cache(&dir, &data)?;
+        info!("sc data cache written: {}", dir.display());
+    }
     progress(LOAD_STEPS);
     Ok(data)
 }
@@ -323,6 +358,25 @@ mod tests {
         assert_eq!(cache_dir(Path::new("/c"), &v), Path::new("/c/4.10.0-hotfix.12572603"));
         v.label = "a/b\\c d".into();
         assert_eq!(cache_dir(Path::new("/c"), &v), Path::new("/c/a_b_c_d"));
+    }
+
+    #[test]
+    fn validate_install_names_folder_or_missing_files() {
+        let dir = std::env::temp_dir().join(format!("bindsight-validate-{}", uuid::Uuid::new_v4()));
+        let base = dir.to_string_lossy().to_string();
+        assert_eq!(validate_install(&base), Err(format!("Folder not found: {base}")));
+
+        std::fs::create_dir_all(dir.join("user/client/0/Profiles/default")).unwrap();
+        std::fs::write(dir.join("Data.p4k"), b"").unwrap();
+        assert_eq!(
+            validate_install(&base),
+            Err(format!("Missing in {base}: build_manifest.id, user/client/0/Profiles/default/actionmaps.xml"))
+        );
+
+        std::fs::write(dir.join("build_manifest.id"), b"").unwrap();
+        std::fs::write(dir.join("user/client/0/Profiles/default/actionmaps.xml"), b"").unwrap();
+        assert_eq!(validate_install(&base), Ok(()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

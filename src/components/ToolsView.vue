@@ -19,7 +19,8 @@ import type {
   ResolvedBinding,
 } from "../types";
 
-const props = defineProps<{ bindings: ResolvedBinding[]; actionMaps: ActionMap[] }>();
+// `hasCurrent`: the live actionmaps.xml is loaded (else there is no Current source).
+const props = defineProps<{ bindings: ResolvedBinding[]; actionMaps: ActionMap[]; hasCurrent: boolean }>();
 const emit = defineEmits<{
   notify: [message: string, type: "ok" | "error"];
   restored: [status: LoadStatus];
@@ -89,7 +90,7 @@ interface SourceOption {
 }
 
 const sourceOptions = computed<SourceOption[]>(() => [
-  { key: CURRENT, name: "Current" },
+  ...(props.hasCurrent ? [{ key: CURRENT, name: "Current" }] : []),
   ...profiles.value.map((m) => ({ key: `${PROFILE_PREFIX}${m.file}`, name: m.name })),
   ...backups.value.map((b) => ({ key: `backup:${b.id}`, name: `${stamp(b.created)} · ${b.reason}` })),
 ]);
@@ -110,11 +111,13 @@ const bProfile = computed<BindingProfileSummary | null>(() => {
   return s.kind === "profile" ? profiles.value.find((m) => m.file === s.file) ?? null : null;
 });
 
-// A source that vanished (deleted backup, reloaded list) falls back to Current.
+// A source that vanished (deleted backup, reloaded list, no Current) falls
+// back to Current, else to the first source there is.
 function ensureKeys() {
   const keys = sourceOptions.value.map((o) => o.key);
-  if (!keys.includes(aKey.value)) aKey.value = CURRENT;
-  if (!keys.includes(bKey.value)) bKey.value = CURRENT;
+  const fallback = keys.includes(CURRENT) ? CURRENT : (keys[0] ?? "");
+  if (!keys.includes(aKey.value)) aKey.value = fallback;
+  if (!keys.includes(bKey.value)) bKey.value = fallback;
 }
 
 // --- loading ---------------------------------------------------------------
@@ -136,6 +139,10 @@ async function loadBackups() {
 }
 
 async function runCompare() {
+  if (!aKey.value || !bKey.value) {
+    report.value = null;
+    return;
+  }
   try {
     report.value = await invoke<DiffReport>("compare_bindings", {
       a: sourceFor(aKey.value),
@@ -331,6 +338,7 @@ const sameSource = computed(() => aKey.value === bKey.value);
 // --- wiring ----------------------------------------------------------------
 
 watch([aKey, bKey], runCompare);
+watch(() => props.hasCurrent, ensureKeys);
 
 // The live bindings changed (reload, restore, resort) — re-diff if a side is Current.
 watch(
@@ -376,7 +384,7 @@ onMounted(async () => {
           <span class="head-count">{{ profiles.length }}</span>
         </div>
         <div class="rows">
-          <div class="row-item" :class="{ a: aKey === CURRENT, b: bKey === CURRENT }" @click="bKey = CURRENT">
+          <div v-if="hasCurrent" class="row-item" :class="{ a: aKey === CURRENT, b: bKey === CURRENT }" @click="bKey = CURRENT">
             <span class="dot" />
             <div class="lines">
               <span class="line-title">Current</span>
@@ -396,7 +404,7 @@ onMounted(async () => {
               <span class="mono line-sub">{{ m.file }} · {{ m.bindings }} · {{ shortDate(m.modified) }}</span>
             </div>
           </div>
-          <div v-if="!profiles.length" class="row-none">None</div>
+          <div v-if="!profiles.length && !hasCurrent" class="row-none">None</div>
         </div>
         <div class="foot">
           <button type="button" class="btn outline" :disabled="busy" @click="importProfile">

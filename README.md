@@ -26,9 +26,13 @@ leaves your machine.
 
 ## Running
 
-Point Settings at your SC channel folder — the one containing `Data.p4k`
-(e.g. `C:\Program Files\Roberts Space Industries\StarCitizen\LIVE`, or the
-equivalent under your Wine prefix). Everything else is derived from it.
+Settings holds one folder per SC environment (LIVE, HOTFIX, PTU, EPTU) —
+the one containing `Data.p4k`, e.g.
+`C:\Program Files\Roberts Space Industries\StarCitizen\LIVE` (the default),
+or the equivalent under your Wine prefix. The chip in the top bar switches
+which environment the app reads. Per environment you can point the action
+labels at your own `global.ini` (e.g. a community translation) instead of
+the install's. Everything else is derived from the active folder.
 
 ## Troubleshooting
 

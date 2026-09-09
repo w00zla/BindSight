@@ -255,7 +255,7 @@ pub(crate) fn compare_bindings(
 ) -> Result<DiffReport, String> {
     let data = data.lock().unwrap();
     let current = crate::current_bindings(&data);
-    let base_path = &data.config.base_path;
+    let base_path = data.config.base_path();
     let backups_root = backups::backups_root(&app)?;
     let actions = &data.sc.data.actions;
 

@@ -14,18 +14,20 @@ import Toasts from "./components/Toasts.vue";
 import Splitter from "./components/Splitter.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
 import type {
-  DeviceInfo,
-  JoyInput,
-  Mode,
-  CurrentInput,
   ActionMap,
-  ResolvedBinding,
-  LoadStatus,
-  ScStatus,
   BoundAction,
-  SlotStatus,
   ClashReport,
+  Config,
+  CurrentInput,
+  DeviceInfo,
+  Environment,
   ImageMapView,
+  JoyInput,
+  LoadStatus,
+  Mode,
+  ResolvedBinding,
+  ScStatus,
+  SlotStatus,
 } from "./types";
 import { sameHardware, type HighlightClass, type ImageMap, type ImageMapSummary } from "./imagemap";
 
@@ -34,7 +36,9 @@ const MAX_EVENTS = 500;
 const devices = ref<DeviceInfo[]>([]);
 const events = ref<JoyInput[]>([]);
 const actionMaps = ref<ActionMap[]>([]);
-const basePath = ref("");
+// SC environments (Settings) and the one being read (top-bar chip).
+const environments = ref<Record<string, Environment>>({});
+const activeEnv = ref("LIVE");
 const bindings = ref<ResolvedBinding[]>([]);
 const tokens = ref<Record<string, string>>({});
 const currentInput = ref<CurrentInput | null>(null);
@@ -46,6 +50,8 @@ let awaitingPathLoad = false;
 // SC Product GUIDs the user marked "SC doesn't see this device" (persisted per OS).
 const ignoredDevices = ref<string[]>([]);
 const error = ref<string | null>(null);
+// The live actionmaps.xml is parsed (from the last LoadStatus).
+const profileLoaded = ref(false);
 const loading = ref(false);
 const showSettings = ref(false);
 
@@ -371,17 +377,30 @@ function isUnseen(guid: string | null): boolean {
 function isIgnored(guid: string | null): boolean {
   return !!guid && ignoredDevices.value.some((g) => g.toLowerCase() === guid.toLowerCase());
 }
-// Settings dialog Save: apply the exclusions and, if changed, the base path.
-async function applySettings(s: { basePath: string; ignored: string[] }) {
+// Settings dialog Save: apply the exclusions and the environments; the
+// backend reloads when the active environment changed.
+async function applySettings(s: { environments: Record<string, Environment>; ignored: string[] }) {
   showSettings.value = false;
   try {
     ignoredDevices.value = await invoke<string[]>("set_ignored_devices", { guids: s.ignored });
-    if (s.basePath !== basePath.value) {
-      basePath.value = s.basePath;
-      await saveBasePath();
+    const reloading = await invoke<boolean>("set_environments", { environments: s.environments });
+    environments.value = s.environments;
+    if (reloading) {
+      await awaitScLoad();
     } else {
       await loadClash();
     }
+  } catch (e) {
+    notify(String(e), "error");
+  }
+}
+
+// Top-bar chip: switch the environment the app reads.
+async function switchEnv(slug: string) {
+  try {
+    const changed = await invoke<boolean>("set_active_env", { slug });
+    activeEnv.value = slug;
+    if (changed) await awaitScLoad();
   } catch (e) {
     notify(String(e), "error");
   }
@@ -431,7 +450,7 @@ async function copyResortCommands() {
 async function applyResort() {
   try {
     const s = await invoke<LoadStatus>("apply_resort");
-    bindings.value = s.bindings;
+    takeStatus(s);
     await loadClash();
     if (s.loaded) {
       notify("actionmaps.xml resorted (backup kept next to it)", "ok");
@@ -519,9 +538,17 @@ function notify(message: string, type: "ok" | "error" = "ok") {
   }, TOAST_MS);
 }
 
+// Take a LoadStatus over: bindings, whether the profile parsed, and its error
+// for the Status panel.
+function takeStatus(s: LoadStatus) {
+  bindings.value = s.bindings;
+  profileLoaded.value = s.loaded;
+  error.value = s.loaded ? null : s.error;
+}
+
 // A backup was written back over actionmaps.xml — same follow-up as a reload.
 async function onRestored(s: LoadStatus) {
-  bindings.value = s.bindings;
+  takeStatus(s);
   await loadClash();
   if (s.loaded) {
     notify("Restored", "ok");
@@ -530,12 +557,11 @@ async function onRestored(s: LoadStatus) {
   }
 }
 
-// Persist the base path; the backend reloads the install's game data and
-// profile in the background and reports via `scdata-changed`.
-async function saveBasePath() {
+// The backend is reloading the install's game data and profile in the
+// background; show the progress and toast the outcome via `scdata-changed`.
+async function awaitScLoad() {
+  awaitingPathLoad = true;
   try {
-    awaitingPathLoad = true;
-    await invoke("set_base_path", { path: basePath.value });
     scStatus.value = await invoke<ScStatus>("get_sc_status");
   } catch (e) {
     awaitingPathLoad = false;
@@ -548,7 +574,7 @@ async function onScDataChanged(s: LoadStatus) {
   scStatus.value = s.sc;
   actionMaps.value = await invoke<ActionMap[]>("get_actions");
   tokens.value = await invoke<Record<string, string>>("get_tokens");
-  bindings.value = s.bindings;
+  takeStatus(s);
   await loadClash();
   if (!awaitingPathLoad) return;
   awaitingPathLoad = false;
@@ -569,8 +595,7 @@ async function refresh() {
   try {
     devices.value = await invoke<DeviceInfo[]>("list_joysticks");
     const s = await invoke<LoadStatus>("reload");
-    bindings.value = s.bindings;
-    if (!s.loaded) error.value = s.error;
+    takeStatus(s);
   } catch (e) {
     error.value = String(e);
   } finally {
@@ -656,12 +681,9 @@ onMounted(async () => {
     scStatus.value = await invoke<ScStatus>("get_sc_status");
     actionMaps.value = await invoke<ActionMap[]>("get_actions");
     tokens.value = await invoke<Record<string, string>>("get_tokens");
-    const cfg = await invoke<{
-      base_path: string;
-      ignored_devices: string[];
-      imagemap_choices: Record<string, string>;
-    }>("get_config");
-    basePath.value = cfg.base_path;
+    const cfg = await invoke<Config>("get_config");
+    environments.value = cfg.environments;
+    activeEnv.value = cfg.active_env;
     ignoredDevices.value = cfg.ignored_devices;
     mapChoices.value = cfg.imagemap_choices ?? {};
     bindings.value = await invoke<ResolvedBinding[]>("get_bindings");
@@ -683,17 +705,18 @@ onUnmounted(() => {
   <main class="app">
     <TopBar
       :mode="mode"
-      :basePath="basePath"
+      :activeEnv="activeEnv"
       :scVersion="scStatus?.version?.label ?? ''"
       :loading="loading"
       @update:mode="setMode"
       @refresh="refresh"
       @settings="showSettings = !showSettings"
+      @update:env="switchEnv"
     />
 
     <SettingsDialog
       v-if="showSettings"
-      :basePath="basePath"
+      :environments="environments"
       :devices="devices"
       :ignored="ignoredDevices"
       @close="showSettings = false"
@@ -761,7 +784,14 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <ToolsView v-else-if="mode === 'tools'" :bindings="bindings" :actionMaps="actionMaps" @notify="notify" @restored="onRestored" />
+    <ToolsView
+      v-else-if="mode === 'tools'"
+      :bindings="bindings"
+      :actionMaps="actionMaps"
+      :hasCurrent="profileLoaded"
+      @notify="notify"
+      @restored="onRestored"
+    />
 
     <ImageMapEditor
       v-else-if="mode === 'devices'"

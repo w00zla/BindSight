@@ -983,62 +983,77 @@ function deviceLine(d: DeviceInfo): string {
 </script>
 
 <template>
-  <section class="devices">
-    <!-- left: devices and their image-maps -->
+  <section class="devices" :class="{ log: showLog }">
+    <!-- left: devices and their image-maps, and the system panel -->
     <aside class="col-left">
-      <div class="dev-list">
-        <template v-for="d in props.devices" :key="d.index">
-          <div
-            class="dev"
-            :class="{ on: d.sdl_guid === selectedGuid, dim: !d.sc_product_guid }"
-            @click="selectDevice(d)"
-          >
-            <div class="dev-name">{{ d.sc_name ?? d.sdl_name }}</div>
-            <div class="dev-line">{{ deviceLine(d) }}</div>
-          </div>
-
-          <div v-if="d.sdl_guid === selectedGuid && d.sc_product_guid" class="maps">
+      <section class="panel grow">
+        <div class="head">
+          <Icon name="image" :size="15" />
+          <span class="head-title">Image-maps</span>
+          <span class="head-count">{{ summaries.length }}</span>
+        </div>
+        <div class="dev-list">
+          <template v-for="d in props.devices" :key="d.index">
             <div
-              v-for="s in deviceMaps"
-              :key="s.id"
-              class="map"
-              :class="{ open: s.id === openId }"
-              @click="openMap(s.id)"
+              class="dev"
+              :class="{ on: d.sdl_guid === selectedGuid, dim: !d.sc_product_guid }"
+              @click="selectDevice(d)"
             >
-              <Icon name="image" :size="13" />
-              <span class="map-name">{{ s.name }}</span>
-              <button type="button" class="icon-btn" title="Clone" @click.stop="cloneMap(s)">
-                <Icon name="clone" :size="13" />
-              </button>
-              <span v-if="s.source === 'bundled'" class="ro" title="Read-only">
-                <Icon name="lock" :size="13" />
-              </span>
-              <button v-else type="button" class="icon-btn" title="Delete image-map" @click.stop="deleteMap(s)">
-                <Icon name="trash" :size="13" />
+              <div class="dev-name">{{ d.sc_name ?? d.sdl_name }}</div>
+              <div class="dev-line">{{ deviceLine(d) }}</div>
+            </div>
+
+            <div v-if="d.sdl_guid === selectedGuid && d.sc_product_guid" class="maps">
+              <div
+                v-for="s in deviceMaps"
+                :key="s.id"
+                class="map"
+                :class="{ open: s.id === openId }"
+                @click="openMap(s.id)"
+              >
+                <Icon name="image" :size="13" />
+                <span class="map-name">{{ s.name }}</span>
+                <button type="button" class="icon-btn" title="Clone" @click.stop="cloneMap(s)">
+                  <Icon name="clone" :size="13" />
+                </button>
+                <span v-if="s.source === 'bundled'" class="ro" title="Read-only">
+                  <Icon name="lock" :size="13" />
+                </span>
+                <button v-else type="button" class="icon-btn" title="Delete image-map" @click.stop="deleteMap(s)">
+                  <Icon name="trash" :size="13" />
+                </button>
+              </div>
+              <button type="button" class="map-new" @click="newMap">
+                <Icon name="plus" :size="13" />
+                <span>New image-map</span>
               </button>
             </div>
-            <button type="button" class="map-new" @click="newMap">
-              <Icon name="plus" :size="13" />
-              <span>New image-map</span>
-            </button>
-          </div>
-        </template>
-      </div>
+          </template>
+        </div>
+        <div class="foot">
+          <button type="button" class="btn outline wide" @click="importMap">
+            <Icon name="download" :size="14" />
+            Import
+          </button>
+          <button type="button" class="btn outline wide" :disabled="!map" @click="exportMap">
+            <Icon name="upload" :size="14" />
+            Export
+          </button>
+        </div>
+      </section>
 
-      <div class="left-foot">
-        <button type="button" class="btn outline wide" @click="importMap">
-          <Icon name="download" :size="14" />
-          Import
-        </button>
-        <button type="button" class="btn outline wide" :disabled="!map" @click="exportMap">
-          <Icon name="upload" :size="14" />
-          Export
-        </button>
-        <button type="button" class="btn wide" :class="showLog ? 'primary' : 'outline'" @click="showLog = !showLog">
-          <Icon name="log" :size="14" />
-          Log
-        </button>
-      </div>
+      <section class="panel">
+        <div class="head">
+          <Icon name="settings" :size="15" />
+          <span class="head-title">System</span>
+        </div>
+        <div class="foot">
+          <button type="button" class="btn wide" :class="showLog ? 'primary' : 'outline'" @click="showLog = !showLog">
+            <Icon name="log" :size="14" />
+            Device log
+          </button>
+        </div>
+      </section>
     </aside>
 
     <!-- centre: the canvas -->
@@ -1230,7 +1245,7 @@ function deviceLine(d: DeviceInfo): string {
     </section>
 
     <!-- right: live input and areas -->
-    <aside class="col-right">
+    <aside v-if="!showLog" class="col-right">
       <div class="input-card">
         <div class="ic-key">
           <Icon name="bolt" :size="22" />
@@ -1299,6 +1314,11 @@ function deviceLine(d: DeviceInfo): string {
   gap: 16px;
   padding: 12px 16px 16px;
   min-height: 0;
+}
+
+/* The log takes the canvas column and the right one. */
+.devices.log {
+  grid-template-columns: 300px minmax(0, 1fr);
 }
 
 .grow {
@@ -1375,8 +1395,47 @@ function deviceLine(d: DeviceInfo): string {
 .col-left {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
   min-height: 0;
+}
+
+/* Panels like the Bindings mode's: head with icon + title, body, foot. */
+.panel {
+  background: var(--bg-surface);
+  border-radius: var(--radius-panel);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.panel.grow {
+  flex: 1;
+  min-height: 0;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-dim);
+}
+
+.head-title {
+  flex: 1;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.head-count {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.foot {
+  display: flex;
+  gap: 6px;
+  padding: 6px 12px 12px;
 }
 
 .dev-list {
@@ -1385,14 +1444,14 @@ function deviceLine(d: DeviceInfo): string {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 4px;
+  padding: 6px;
 }
 
 .dev {
-  background: var(--bg-surface);
   border: 1px solid transparent;
-  border-radius: var(--radius-panel);
-  padding: 12px 14px;
+  border-radius: 6px;
+  padding: 9px 10px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1400,6 +1459,7 @@ function deviceLine(d: DeviceInfo): string {
 }
 
 .dev.on {
+  background: var(--bg-surface-2);
   border-color: var(--accent);
 }
 
@@ -1469,11 +1529,6 @@ function deviceLine(d: DeviceInfo): string {
   background: transparent;
   color: var(--text-2);
   font-size: 13px;
-}
-
-.left-foot {
-  display: flex;
-  gap: 8px;
 }
 
 /* --- centre column --- */

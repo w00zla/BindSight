@@ -219,7 +219,7 @@ pub(crate) fn create_backup(
 ) -> Result<BackupSummary, String> {
     let root = backups_root(&app)?;
     let data = data.lock().unwrap();
-    let path = config::actionmaps_path(&data.config.base_path);
+    let path = config::actionmaps_path(data.config.base_path());
     create(&root, &path, &reason, &data.sc.data.actions)
 }
 
@@ -232,7 +232,7 @@ pub(crate) fn delete_backup(id: String, app: AppHandle) -> Result<(), String> {
 pub(crate) fn restore_backup(id: String, app: AppHandle, data: State<Mutex<AppData>>) -> Result<LoadStatus, String> {
     let root = backups_root(&app)?;
     let mut data = data.lock().unwrap();
-    let path = config::actionmaps_path(&data.config.base_path);
+    let path = config::actionmaps_path(data.config.base_path());
     restore(&root, &id, &path, &data.sc.data.actions)?;
     info!("backup {id} restored to {}", path.display());
     Ok(crate::reload_profile(&mut data))

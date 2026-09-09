@@ -1,20 +1,64 @@
-//! Persistent app config: the SC base path (the folder that contains
-//! `Data.p4k`), stored as JSON in the app config dir. Everything the app needs
-//! from the SC install is derived from this one path.
+//! Persistent app config: the SC environments (one base path — the folder
+//! that contains `Data.p4k` — per channel LIVE / HOTFIX / PTU / EPTU, plus an
+//! optional `global.ini` override each) and which one is active, stored as
+//! JSON in the app config dir. Everything the app needs from the SC install
+//! is derived from the active environment's path.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-/// Default SC base path — the standard Windows install. Users on other setups
-/// (e.g. Linux/Wine) point it at their own channel folder (LIVE/PTU/…).
-const DEFAULT_BASE_PATH: &str = r"C:\Program Files\Roberts Space Industries\StarCitizen\LIVE";
+/// The SC channels, in GUI order. The config always holds all four.
+pub const ENVIRONMENTS: [&str; 4] = ["LIVE", "HOTFIX", "PTU", "EPTU"];
+
+/// Default install root — the standard Windows install; the channel folder
+/// is appended. Users on other setups (e.g. Linux/Wine) point each
+/// environment at their own folder.
+const DEFAULT_INSTALL_ROOT: &str = r"C:\Program Files\Roberts Space Industries\StarCitizen";
+
+/// One SC channel install.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Environment {
+    /// The folder that holds `Data.p4k`.
+    pub path: String,
+    /// Take the action labels from `global_ini` instead of the install's own
+    /// `global.ini` (e.g. a community translation).
+    #[serde(default)]
+    pub global_ini_override: bool,
+    /// Path of the override file; kept even while the override is off.
+    #[serde(default)]
+    pub global_ini: String,
+}
+
+impl Environment {
+    fn default_for(slug: &str) -> Self {
+        Self {
+            path: format!("{DEFAULT_INSTALL_ROOT}\\{slug}"),
+            global_ini_override: false,
+            global_ini: String::new(),
+        }
+    }
+}
+
+fn default_environments() -> BTreeMap<String, Environment> {
+    ENVIRONMENTS.iter().map(|s| (s.to_string(), Environment::default_for(s))).collect()
+}
+
+fn default_active_env() -> String {
+    ENVIRONMENTS[0].to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    pub base_path: String,
+    /// Keyed by slug (see [`ENVIRONMENTS`]); missing entries are filled with
+    /// defaults on load.
+    #[serde(default = "default_environments")]
+    pub environments: BTreeMap<String, Environment>,
+    /// Slug of the environment the app reads.
+    #[serde(default = "default_active_env")]
+    pub active_env: String,
     /// SC Product GUIDs of connected devices the user declared invisible to SC
     /// ("SC doesn't see this device"), e.g. a keyboard that Wine hides from the
     /// game. Lives in the per-OS config dir, so the list is naturally
@@ -31,10 +75,45 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            base_path: DEFAULT_BASE_PATH.to_string(),
+            environments: default_environments(),
+            active_env: default_active_env(),
             ignored_devices: Vec::new(),
             imagemap_choices: HashMap::new(),
         }
+    }
+}
+
+impl Config {
+    /// Make sure every known environment exists and the active one is valid.
+    fn normalize(mut self) -> Self {
+        for slug in ENVIRONMENTS {
+            self.environments
+                .entry(slug.to_string())
+                .or_insert_with(|| Environment::default_for(slug));
+        }
+        if !ENVIRONMENTS.contains(&self.active_env.as_str()) {
+            self.active_env = default_active_env();
+        }
+        self
+    }
+
+    /// The active environment (always present after [`load`]).
+    pub fn active(&self) -> &Environment {
+        self.environments
+            .get(&self.active_env)
+            .or_else(|| self.environments.get(ENVIRONMENTS[0]))
+            .expect("config holds every environment")
+    }
+
+    /// Base path of the active environment.
+    pub fn base_path(&self) -> &str {
+        &self.active().path
+    }
+
+    /// The active environment's `global.ini` override, when switched on.
+    pub fn global_ini_override(&self) -> Option<PathBuf> {
+        let env = self.active();
+        (env.global_ini_override && !env.global_ini.is_empty()).then(|| PathBuf::from(&env.global_ini))
     }
 }
 
@@ -46,8 +125,9 @@ fn config_file(app: &AppHandle) -> Option<PathBuf> {
 pub fn load(app: &AppHandle) -> Config {
     config_file(app)
         .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|text| serde_json::from_str(&text).ok())
+        .and_then(|text| serde_json::from_str::<Config>(&text).ok())
         .unwrap_or_default()
+        .normalize()
 }
 
 /// Persist the config to the app config dir.
@@ -97,12 +177,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn config_without_ignored_devices_still_loads() {
-        // Config files written before the field existed.
-        let c: Config = serde_json::from_str(r#"{"base_path":"/sc/LIVE"}"#).unwrap();
-        assert_eq!(c.base_path, "/sc/LIVE");
+    fn defaults_hold_every_environment_with_live_active() {
+        let c = Config::default();
+        assert_eq!(c.active_env, "LIVE");
+        assert_eq!(c.environments.len(), ENVIRONMENTS.len());
+        assert_eq!(c.base_path(), r"C:\Program Files\Roberts Space Industries\StarCitizen\LIVE");
+        assert_eq!(c.environments["PTU"].path, r"C:\Program Files\Roberts Space Industries\StarCitizen\PTU");
+        assert!(c.global_ini_override().is_none());
+    }
+
+    #[test]
+    fn partial_config_is_filled_and_override_resolves() {
+        let json = r#"{"environments":{"PTU":{"path":"/sc/PTU","global_ini_override":true,"global_ini":"/x/global.ini"}},"active_env":"PTU"}"#;
+        let c = serde_json::from_str::<Config>(json).unwrap().normalize();
+        assert_eq!(c.environments.len(), ENVIRONMENTS.len());
+        assert_eq!(c.base_path(), "/sc/PTU");
+        assert_eq!(c.global_ini_override(), Some(PathBuf::from("/x/global.ini")));
         assert!(c.ignored_devices.is_empty());
-        assert!(c.imagemap_choices.is_empty());
+
+        // An unknown active slug falls back to LIVE; an override that is off
+        // or has no path is none.
+        let c = serde_json::from_str::<Config>(r#"{"active_env":"NOPE"}"#).unwrap().normalize();
+        assert_eq!(c.active_env, "LIVE");
+        assert!(c.global_ini_override().is_none());
     }
 
     #[test]

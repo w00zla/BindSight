@@ -3,17 +3,24 @@ import { computed, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
-import type { DeviceInfo } from "../types";
+import { ENVIRONMENTS, type DeviceInfo, type Environment } from "../types";
 
-const props = defineProps<{ basePath: string; devices: DeviceInfo[]; ignored: string[] }>();
+const props = defineProps<{ environments: Record<string, Environment>; devices: DeviceInfo[]; ignored: string[] }>();
 const emit = defineEmits<{
   close: [];
-  save: [settings: { basePath: string; ignored: string[] }];
+  save: [settings: { environments: Record<string, Environment>; ignored: string[] }];
   notify: [message: string, type: "ok" | "error"];
 }>();
 
 // Local copies: nothing is applied before Save.
-const path = ref(props.basePath);
+const envs = ref<Record<string, Environment>>(
+  Object.fromEntries(
+    ENVIRONMENTS.map((slug) => [
+      slug,
+      { ...(props.environments[slug] ?? { path: "", global_ini_override: false, global_ini: "" }) },
+    ]),
+  ),
+);
 const excluded = ref<string[]>([...props.ignored]);
 const addPick = ref("");
 
@@ -44,9 +51,20 @@ async function openLogDir() {
   }
 }
 
-async function browse() {
-  const dir = await open({ directory: true, multiple: false, defaultPath: path.value || undefined });
-  if (typeof dir === "string") path.value = dir;
+async function browse(slug: string) {
+  const env = envs.value[slug];
+  const dir = await open({ directory: true, multiple: false, defaultPath: env.path || undefined });
+  if (typeof dir === "string") env.path = dir;
+}
+
+async function browseIni(slug: string) {
+  const env = envs.value[slug];
+  const file = await open({
+    multiple: false,
+    defaultPath: env.global_ini || undefined,
+    filters: [{ name: "global.ini", extensions: ["ini"] }],
+  });
+  if (typeof file === "string") env.global_ini = file;
 }
 </script>
 
@@ -62,18 +80,28 @@ async function browse() {
 
       <div class="body">
         <section>
-          <div class="panel-title">Star Citizen install</div>
-          <div class="row">
-            <input v-model="path" class="input mono" placeholder="…/StarCitizen/LIVE" />
-            <button type="button" class="btn outline" @click="browse">Browse</button>
+          <div class="panel-title">Star Citizen Environments</div>
+          <div v-for="slug in ENVIRONMENTS" :key="slug" class="env">
+            <div class="env-slug mono">{{ slug }}</div>
+            <div class="env-fields">
+              <div class="row">
+                <input v-model="envs[slug].path" class="input mono" :placeholder="`…/StarCitizen/${slug}`" />
+                <button type="button" class="btn outline" @click="browse(slug)">Browse</button>
+              </div>
+              <div class="row">
+                <label class="check"><input v-model="envs[slug].global_ini_override" type="checkbox" /> Override global.ini</label>
+                <input
+                  v-model="envs[slug].global_ini"
+                  class="input mono"
+                  :disabled="!envs[slug].global_ini_override"
+                  placeholder="…/global.ini"
+                />
+                <button type="button" class="btn outline" :disabled="!envs[slug].global_ini_override" @click="browseIni(slug)">
+                  Browse
+                </button>
+              </div>
+            </div>
           </div>
-          <div class="hint">Folder that holds Data.p4k</div>
-        </section>
-
-        <section>
-          <div class="panel-title">Action labels</div>
-          <label class="check"><input type="radio" checked disabled /> Bundled</label>
-          <label class="check dim" title="Not yet available"><input type="radio" disabled /> global.ini from disk</label>
         </section>
 
         <section>
@@ -93,7 +121,7 @@ async function browse() {
         </section>
 
         <section>
-          <div class="panel-title">Log</div>
+          <div class="panel-title">Other</div>
           <div class="row">
             <button type="button" class="btn outline" @click="openLogDir">Open log folder</button>
           </div>
@@ -102,7 +130,7 @@ async function browse() {
 
       <div class="foot">
         <button type="button" class="btn outline" @click="emit('close')">Cancel</button>
-        <button type="button" class="btn primary" @click="emit('save', { basePath: path, ignored: excluded })">Save</button>
+        <button type="button" class="btn primary" @click="emit('save', { environments: envs, ignored: excluded })">Save</button>
       </div>
     </div>
   </div>
@@ -157,6 +185,39 @@ async function browse() {
   display: flex;
   flex-direction: column;
   gap: 22px;
+  max-height: 75vh;
+  overflow-y: auto;
+}
+
+.env {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.env-slug {
+  width: 64px;
+  padding-top: 11px;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: var(--text);
+}
+
+.env-fields {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.input:disabled {
+  opacity: 0.4;
+}
+
+.check {
+  white-space: nowrap;
 }
 
 section {
@@ -195,9 +256,6 @@ section {
   font-size: 14px;
 }
 
-.check.dim {
-  color: var(--text-3);
-}
 
 .chips {
   display: flex;

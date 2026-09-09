@@ -190,7 +190,7 @@ pub(crate) fn export_binding_profile(file: String, dest_path: String, data: Stat
 }
 
 fn binding_profiles_dir(data: &State<Mutex<AppData>>) -> PathBuf {
-    config::binding_profiles_dir(&data.lock().unwrap().config.base_path)
+    config::binding_profiles_dir(data.lock().unwrap().config.base_path())
 }
 
 #[cfg(test)]

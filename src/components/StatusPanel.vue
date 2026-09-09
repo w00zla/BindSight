@@ -49,9 +49,12 @@ const hasIssue = computed(
         <div class="error mono">{{ sc.error }}</div>
       </div>
 
-      <div v-if="loadError" class="tile issue">
-        <Icon name="warning" :size="16" />
-        <span>{{ loadError }}</span>
+      <div v-if="loadError" class="tile error detail">
+        <div class="row">
+          <Icon name="warning" :size="16" />
+          <span class="name">No bindings</span>
+        </div>
+        <div class="error mono">{{ loadError }}</div>
       </div>
 
       <div v-if="report?.log_error" class="tile issue" :title="logErrorTitle">
@@ -184,7 +187,7 @@ const hasIssue = computed(
 .error {
   font-size: 12px;
   color: var(--text);
-  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .row {

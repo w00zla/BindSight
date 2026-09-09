@@ -55,7 +55,11 @@ See `HANDOFF.md` for the current working state.
 - `scdata.rs` — parse `defaultProfile.xml` (action master list), `global.ini`
   (labels), `keybinding_localization.xml` (input token labels), and the user's
   `actionmaps.xml` (rebinds + `<options>` device map).
-- `scinstall.rs` — the configured install: version from `build_manifest.id`
+- `scinstall.rs` — the configured install: `validate_install` first
+  (`REQUIRED_FILES` = `Data.p4k`, `build_manifest.id`, the live
+  `actionmaps.xml`; a missing folder or file aborts the whole load with one
+  message, `ScState::invalid_install` then keeps `reload_profile` from
+  reading anything), version from `build_manifest.id`
   (`ScVersion`, label `<branch minus sc-alpha->.<P4 changelist>`, e.g.
   `4.10.0-hotfix.12572603`), and the game data (`ScData`: action master list
   + token labels). Runs the StarBreaker sidecar (`p4k extract --regex` for
@@ -63,9 +67,10 @@ See `HANDOFF.md` for the current working state.
   converts via `scdata::parse_*` (unlabeled actions dropped) and caches the
   JSON under `<app_cache_dir>/<label>/` (no format-version layer: if the
   JSON shape ever changes, users delete the cache). Loaded in a background
-  thread at start and on
-  base-path change (`lib.rs::spawn_sc_load`): steps via `scdata-progress`
-  (`LOAD_STEPS` = 4), result via `scdata-changed`.
+  thread at start and on environment change (`lib.rs::spawn_sc_load`; with
+  an active `global.ini` override the cache is bypassed and the labels come
+  from that file): steps via `scdata-progress` (`LOAD_STEPS` = 4), result
+  via `scdata-changed`.
 - `bindings.rs` — `BindingIndex` (token -> bound actions), `button_token`/
   `hat_token` (with the +1 offset), `instance_for_guid`, `resolve_bindings`,
   `analyze_clash` (saved `<options>` vs. `Game.log` order — the only order
@@ -77,8 +82,12 @@ See `HANDOFF.md` for the current working state.
 - `resort.rs` — textual `actionmaps.xml` rewrite applying a resort (joystick
   `<options>` instances + `jsN_` prefixes in `input="..."`), out-of-game
   counterpart of `pp_resortdevices`.
-- `config.rs` — persist the SC base path, the ignore list and the image-map
-  choice per device as JSON in the app config dir.
+- `config.rs` — persist the SC environments (`ENVIRONMENTS` = LIVE / HOTFIX
+  / PTU / EPTU, each a base path + optional `global.ini` override; Windows
+  default paths), the active one (`Config::base_path()` /
+  `global_ini_override()` read it), the ignore list and the image-map choice
+  per device as JSON in the app config dir. `load` fills missing
+  environments with defaults; no migration of older shapes.
 - `imagemap.rs` — image-maps: one folder per image-map (`imagemap.json` +
   images) under `<app_data_dir>/imagemaps/`, bundled ones under
   `resources/imagemaps/` (bundled are read-only, clone into the user root

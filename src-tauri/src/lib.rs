@@ -29,6 +29,9 @@ struct ScState {
     /// Completed load steps (0..=`scinstall::LOAD_STEPS`) while loading.
     progress: u8,
     error: Option<String>,
+    /// The active environment failed `scinstall::validate_install`: nothing
+    /// of it is read (no game data, no profile, no Game.log) until it changes.
+    invalid_install: bool,
     /// Bumped per load request so a slow, superseded load discards its result.
     generation: u64,
 }
@@ -167,7 +170,7 @@ fn apply_resort(
         return Err("nothing to resort".into());
     }
 
-    let path = config::actionmaps_path(&data.config.base_path);
+    let path = config::actionmaps_path(data.config.base_path());
     let xml = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let rewritten = resort::rewrite_actionmaps(&xml, &report.resort)?;
 
@@ -219,22 +222,59 @@ fn write_text_file(path: String, text: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Set the SC base path: persist it and reload the install's game data and
-/// actionmaps.xml in the background. The result arrives as a `scdata-changed`
-/// event carrying the load status.
+/// Store the environments (Settings Save). When the active one's path or
+/// label source changed, the install's game data and actionmaps.xml are
+/// reloaded in the background (result via `scdata-changed`); returns whether
+/// that reload was started.
 #[tauri::command]
-fn set_base_path(path: String, app: AppHandle, data: State<Mutex<AppData>>) {
+fn set_environments(
+    environments: std::collections::BTreeMap<String, config::Environment>,
+    app: AppHandle,
+    data: State<Mutex<AppData>>,
+) -> bool {
+    let reload = {
+        let mut data = data.lock().unwrap();
+        let before = data.config.active().clone();
+        for (slug, env) in environments {
+            if config::ENVIRONMENTS.contains(&slug.as_str()) {
+                data.config.environments.insert(slug, env);
+            } else {
+                warn!("ignoring unknown environment {slug}");
+            }
+        }
+        info!("environments set: {:?}", data.config.environments);
+        if let Err(e) = config::save(&app, &data.config) {
+            error!("failed to save config: {e}");
+        }
+        *data.config.active() != before
+    };
+    if reload {
+        spawn_sc_load(app);
+    }
+    reload
+}
+
+/// Switch the active environment (top-bar chip): persist it and reload the
+/// install's game data and actionmaps.xml in the background (result via
+/// `scdata-changed`). Returns whether anything changed.
+#[tauri::command]
+fn set_active_env(slug: String, app: AppHandle, data: State<Mutex<AppData>>) -> Result<bool, String> {
     {
         let mut data = data.lock().unwrap();
-        // Keep the rest of the config (ignore list, image-map choices) when
-        // only the path changes.
-        info!("base path set: {path}");
-        data.config.base_path = path;
+        if !config::ENVIRONMENTS.contains(&slug.as_str()) {
+            return Err(format!("unknown environment {slug}"));
+        }
+        if data.config.active_env == slug {
+            return Ok(false);
+        }
+        info!("active environment set: {slug} ({})", data.config.environments[&slug].path);
+        data.config.active_env = slug;
         if let Err(e) = config::save(&app, &data.config) {
             error!("failed to save config: {e}");
         }
     }
     spawn_sc_load(app);
+    Ok(true)
 }
 
 /// The SC token a live input resolves to (if the device is in the SC profile)
@@ -289,16 +329,28 @@ fn resolve_input(
 /// game data is in), on a base-path change, after a resort or restore, and
 /// on every Refresh.
 pub(crate) fn reload_profile(data: &mut AppData) -> LoadStatus {
-    let am_path = config::actionmaps_path(&data.config.base_path);
+    let am_path = config::actionmaps_path(data.config.base_path());
 
     let mut status = LoadStatus {
-        base_path: data.config.base_path.clone(),
+        base_path: data.config.base_path().to_string(),
         actionmaps_path: am_path.display().to_string(),
         loaded: false,
         error: None,
         bindings: Vec::new(),
         sc: data.sc.status(),
     };
+
+    // An invalid environment is reported once (the SC-data error) and
+    // otherwise left alone: nothing of it is read.
+    if data.sc.invalid_install {
+        data.profile = None;
+        data.index = bindings::BindingIndex::default();
+        data.game_log = Err(gamelog::GameLogError::NotFound {
+            path: config::game_log_path(data.config.base_path()).display().to_string(),
+            reason: "environment not loaded".into(),
+        });
+        return status;
+    }
 
     let profile = std::fs::read_to_string(&am_path)
         .map_err(|e| format!("actionmaps.xml not found: {} ({e})", status.actionmaps_path))
@@ -338,7 +390,7 @@ pub(crate) fn reload_profile(data: &mut AppData) -> LoadStatus {
             data.profile = None;
         }
     }
-    data.game_log = read_game_log(&data.config.base_path);
+    data.game_log = read_game_log(data.config.base_path());
     status
 }
 
@@ -373,14 +425,14 @@ fn read_game_log(base_path: &str) -> Result<gamelog::LogEnumeration, gamelog::Ga
 /// (payload: the `ScStatus`). A load superseded by a newer one discards its
 /// result.
 fn spawn_sc_load(app: AppHandle) {
-    let (base_path, generation) = {
+    let (base_path, global_ini, generation) = {
         let state = app.state::<Mutex<AppData>>();
         let mut data = state.lock().unwrap();
         data.sc.loading = true;
         data.sc.progress = 0;
         data.sc.error = None;
         data.sc.generation += 1;
-        (data.config.base_path.clone(), data.sc.generation)
+        (data.config.base_path().to_string(), data.config.global_ini_override(), data.sc.generation)
     };
 
     std::thread::spawn(move || {
@@ -400,7 +452,9 @@ fn spawn_sc_load(app: AppHandle) {
             let _ = app.emit("scdata-progress", &status);
         };
 
-        let version = scinstall::read_version(&base_path);
+        // Validate the folder first; one missing file aborts the whole load.
+        let valid = scinstall::validate_install(&base_path);
+        let version = valid.clone().and_then(|()| scinstall::read_version(&base_path));
         let loaded = version.as_ref().map_err(Clone::clone).and_then(|version| {
             // The version is known now; show it while the rest loads.
             {
@@ -413,7 +467,7 @@ fn spawn_sc_load(app: AppHandle) {
             progress(1);
             let cache_root = app.path().app_cache_dir().map_err(|e| format!("app cache dir: {e}"))?;
             let sidecar = scinstall::sidecar_path()?;
-            scinstall::load(&cache_root, &sidecar, &base_path, version, &progress)
+            scinstall::load(&cache_root, &sidecar, &base_path, version, global_ini.as_deref(), &progress)
         });
 
         let state = app.state::<Mutex<AppData>>();
@@ -423,6 +477,7 @@ fn spawn_sc_load(app: AppHandle) {
         }
         data.sc.loading = false;
         data.sc.version = version.ok();
+        data.sc.invalid_install = valid.is_err();
         match loaded {
             Ok(sc) => {
                 info!(
@@ -491,8 +546,8 @@ fn log_startup(app: &AppHandle, config: &config::Config) {
         );
     }
     info!(
-        "config: base_path={} ignored_devices={:?} imagemap_choices={:?}",
-        config.base_path, config.ignored_devices, config.imagemap_choices
+        "config: active_env={} environments={:?} ignored_devices={:?} imagemap_choices={:?}",
+        config.active_env, config.environments, config.ignored_devices, config.imagemap_choices
     );
 }
 
@@ -537,7 +592,7 @@ pub fn run() {
             // (`spawn_sc_load` -> `reload_profile`).
             app.manage(Mutex::new(AppData {
                 game_log: Err(gamelog::GameLogError::NotFound {
-                    path: config::game_log_path(&config.base_path).display().to_string(),
+                    path: config::game_log_path(config.base_path()).display().to_string(),
                     reason: "not read yet".into(),
                 }),
                 config,
@@ -563,7 +618,8 @@ pub fn run() {
             get_clash_report,
             apply_resort,
             set_ignored_devices,
-            set_base_path,
+            set_environments,
+            set_active_env,
             resolve_input,
             write_text_file,
             open_log_dir,

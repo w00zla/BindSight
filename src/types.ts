@@ -25,6 +25,25 @@ export type JoyInput =
 // Top-level GUI mode.
 export type Mode = "live" | "tools" | "devices";
 
+// SC channels, in GUI order; the config always holds all of them.
+export const ENVIRONMENTS = ["LIVE", "HOTFIX", "PTU", "EPTU"] as const;
+
+// One SC channel install (config.rs `Environment`).
+export interface Environment {
+  // The folder that holds Data.p4k.
+  path: string;
+  // Take the action labels from `global_ini` instead of the install's own.
+  global_ini_override: boolean;
+  global_ini: string;
+}
+
+export interface Config {
+  environments: Record<string, Environment>;
+  active_env: string;
+  ignored_devices: string[];
+  imagemap_choices: Record<string, string>;
+}
+
 export interface Action {
   name: string;
   label: string | null;

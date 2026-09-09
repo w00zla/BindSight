@@ -15,11 +15,13 @@ The core loop is closed end-to-end:
    `defaultProfile.xml`, `keybinding_localization.xml` and `global.ini` out of
    `Data.p4k` (~1 s), the app converts them to the action master list + token
    labels and caches the JSON per version in the app cache dir. Loading runs
-   in the background at start and on base-path change; the Status panel shows
+   in the background at start and on environment change; the Status panel shows
    `Reading SC data…` with a four-segment step bar meanwhile (manifest,
    extracted, converted, cached; `scdata-progress` events) and `No SC data`
-   with the error text when the manifest, `Data.p4k` or the sidecar is
-   missing or StarBreaker fails. Nothing is bundled any more, so a new SC
+   with the error text when the environment fails validation (folder
+   missing, or any of `Data.p4k`, `build_manifest.id`, `actionmaps.xml`
+   missing — listed in one message; nothing else is read then, also not on
+   Refresh), or when the sidecar is missing or StarBreaker fails. Nothing is bundled any more, so a new SC
    patch needs no app update.
 3. **Bindings**: the app reads the configured install's `actionmaps.xml`
    (rebinds + `<options>` device map) and folds in the shipped `js1` defaults
@@ -104,18 +106,24 @@ splitters, shares/order remembered in localStorage); a row splitter; the
 the bindings deck ("Bindings" panel title, chips All / jsN, search over
 label + action, columns DEVICE / INPUT / LABEL / ACTION / CATEGORY, held input
 tinted, rows without an image-map area greyed with a tooltip, click to pin).
-Settings dialog: install path + Browse, action labels (bundled / global.ini
-stub), excluded devices as chips; nothing applies before Save. Bindings =
+Settings dialog (2026-09-09): one block per environment (LIVE / HOTFIX /
+PTU / EPTU: path + Browse, "Override global.ini" checkbox with file path +
+Browse), excluded devices as chips; nothing applies before Save
+(`set_environments`, reload only when the active one changed). The top-bar
+chip shows the active environment and opens a dropdown to switch it
+(`set_active_env`, reload). Bindings =
 `ToolsView`: on the left the "Game bindings" panel (SC's action list grouped
 by category, capped at 40 % of the column), binding profiles and backups
 (Import / Export / New, Backup now, restore and delete behind
 `ConfirmDialog`), the Compare panel on the right (A/B source chips, kind and
 `jsN` filter chips, search, one tinted row per differing token). Devices =
-`ImageMapEditor`, three columns (devices + their image-maps with clone / lock
-/ trash / New and Import / Export / Log; the Konva canvas with the name, the
-six shape tools, Replace image and zoom; the live SDL-key card with Add area
-/ Delete, the areas list with filter, and Discard / Save), unsaved changes
-guarded by `ConfirmDialog`. The Log toggle swaps the canvas for the raw log
+`ImageMapEditor`, three columns (left: the "Image-maps" panel — devices +
+their image-maps with clone / lock / trash / New, Import / Export in its
+foot — and the "System" panel with the "Device log" toggle; the Konva
+canvas with the name, the six shape tools, Replace image and zoom; the
+live SDL-key card with Add area / Delete, the areas list with filter, and
+Discard / Save), unsaved changes guarded by `ConfirmDialog`. The Device log
+toggle swaps the canvas for the raw log
 (device dump + the last 500 input events, collected in every mode) with
 Clear and Save (text file via the `write_text_file` command).
 
@@ -264,15 +272,16 @@ memory `gui-naming-decisions` and the plan below.
   the `LoadStatus` back to `App.vue`), and the Compare panel (A/B source
   selects, kind and `jsN` filter chips, search, tinted diff rows).
 - **Phase 5 — cleanup**: dead code, docs, first bundled image-map.
-- Open: source for the game version chip (`build_manifest.id` next to
-  `Data.p4k`?); `labels_source` in `config.rs` for the global.ini stub.
+- Open: source for the game version chip — done (`build_manifest.id`); the
+  global.ini stub became the per-environment override (2026-09-09).
 - **GUI-unverified after the redesign**: splitter dragging and the folder
   dialog under WebKitGTK, image fitting with a real image-map, the Status
   panel with a real clash / missing device / missing Game.log, and the whole
   Bindings-mode UI (import/export file dialogs, backup create / restore /
   delete, Compare against a real layout). Also GUI-unverified (2026-09-09):
   the Game bindings panel's 40 % cap, the Devices log view and its Save
-  dialog.
+  dialog, the environment dropdown and the Settings environment blocks
+  (incl. a real global.ini override load).
 
 ## Testing
 
@@ -280,7 +289,7 @@ memory `gui-naming-decisions` and the plan below.
   (`converts_real_hardware_guids`) checks the author's real GUIDs; run with
   `cargo test -- --ignored`.
 - Frontend: `pnpm build` (vue-tsc typechecks, `noUnusedLocals` is on).
-- The real GUI test is `pnpm tauri dev` with a configured SC base path.
+- The real GUI test is `pnpm tauri dev` with a configured SC environment.
   When another session already holds port 1420, build a self-contained
   binary instead: `pnpm tauri build --debug --no-bundle`, run
   `src-tauri/target/debug/bindsight`, read `bindsight.log`, and screenshot
