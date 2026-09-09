@@ -4,6 +4,7 @@ import Icon from "./Icon.vue";
 import ColumnHead from "./ColumnHead.vue";
 import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
 import type { ResolvedBinding } from "../types";
+import { KIND_RANK } from "../devices";
 
 const props = defineProps<{
   bindings: ResolvedBinding[];
@@ -13,7 +14,6 @@ const props = defineProps<{
   // SC's device name for a binding: js1, js2, kb1, gp1.
   deviceLabel: (b: ResolvedBinding) => string;
   isClash: (token: string) => boolean;
-  isConnected: (b: ResolvedBinding) => boolean;
   isMissing: (b: ResolvedBinding) => boolean;
   isPinned: (b: ResolvedBinding) => boolean;
 }>();
@@ -22,9 +22,7 @@ const emit = defineEmits<{ pin: [b: ResolvedBinding] }>();
 const deviceFilter = ref<string | "all">("all");
 const search = ref("");
 
-// SC's own device order: the joysticks by instance, then keyboard, then gamepad.
-const KIND_RANK: Record<ResolvedBinding["device_kind"], number> = { joystick: 0, keyboard: 1, gamepad: 2 };
-
+// Same order as the device tiles, joysticks by instance.
 function deviceRank(b: ResolvedBinding): number {
   return KIND_RANK[b.device_kind] * 100 + b.instance;
 }
@@ -43,15 +41,14 @@ const deviceCounts = computed(() => {
 
 function matchesSearch(b: ResolvedBinding, q: string): boolean {
   if (!q) return true;
-  // Search covers the LABEL and ACTION columns only.
-  const hay = [labelOf(b.token), b.label ?? b.action].join(" ").toLowerCase();
+  // Search covers the INPUT and ACTION columns only.
+  const hay = [inputText(b.token), b.label ?? b.action].join(" ").toLowerCase();
   return hay.includes(q);
 }
 
 const COLUMNS: ColumnSpec[] = [
   { key: "device", label: "DEVICE", width: 70 },
-  { key: "input", label: "INPUT", width: 130 },
-  { key: "label", label: "LABEL", width: 180 },
+  { key: "input", label: "INPUT", width: 180 },
   { key: "action", label: "ACTION", width: 320 },
   { key: "category", label: "CATEGORY", width: null },
 ];
@@ -62,9 +59,7 @@ function cellValue(b: ResolvedBinding, key: string): string | number {
     case "device":
       return deviceRank(b);
     case "input":
-      return inputPart(b.token);
-    case "label":
-      return labelOf(b.token);
+      return inputText(b.token);
     case "action":
       return b.label ?? b.action;
     default:
@@ -92,14 +87,17 @@ function inputPart(token: string): string {
   return token.replace(/^(js\d+|kb1|gp1)_/, "");
 }
 
+// The INPUT cell: SC's label, else the bare token.
+function inputText(token: string): string {
+  return labelOf(token) || inputPart(token);
+}
+
 function rowTitle(b: ResolvedBinding): string | undefined {
   return props.isMissing(b) ? `No area for ${props.tokenLabel(b.token)} on the ${b.device ?? "device"} image` : undefined;
 }
 
 function deviceTitle(b: ResolvedBinding): string | undefined {
-  if (props.isClash(b.token)) return "misassigned";
-  if (!props.isConnected(b)) return "not connected";
-  return undefined;
+  return props.isClash(b.token) ? "misassigned" : undefined;
 }
 </script>
 
@@ -126,7 +124,7 @@ function deviceTitle(b: ResolvedBinding): string | undefined {
       <div class="spacer" />
       <div class="search">
         <Icon name="search" :size="14" />
-        <input v-model="search" placeholder="Find label or action…" />
+        <input v-model="search" placeholder="Find input or action…" />
       </div>
     </div>
 
@@ -146,11 +144,10 @@ function deviceTitle(b: ResolvedBinding): string | undefined {
           :title="rowTitle(b)"
           @click="emit('pin', b)"
         >
-          <span class="mono cell-device" :class="{ clash: isClash(b.token), disconnected: !isConnected(b) }" :title="deviceTitle(b)">
+          <span class="mono cell-device" :class="{ clash: isClash(b.token) }" :title="deviceTitle(b)">
             {{ deviceLabel(b) }}
           </span>
-          <span class="mono cell-input" :title="b.token">{{ inputPart(b.token) }}</span>
-          <span class="cell-label">{{ labelOf(b.token) }}</span>
+          <span class="cell-input" :class="{ mono: !labelOf(b.token) }" :title="b.token">{{ inputText(b.token) }}</span>
           <span class="cell-action">{{ b.label ?? b.action }}</span>
           <span class="cell-category">{{ categoryLabel(b.actionmap) }}</span>
         </div>
@@ -312,14 +309,6 @@ function deviceTitle(b: ResolvedBinding): string | undefined {
 
 .cell-device.clash {
   color: var(--warn);
-}
-
-.cell-device.disconnected {
-  color: var(--text-3);
-}
-
-.cell-input {
-  color: var(--text-2);
 }
 
 .cell-category {

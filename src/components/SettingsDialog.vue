@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
+import Dropdown from "./Dropdown.vue";
 import { ENVIRONMENTS, type DeviceInfo, type Environment } from "../types";
 import { deviceName } from "../devices";
 
@@ -23,8 +24,6 @@ const envs = ref<Record<string, Environment>>(
   ),
 );
 const excluded = ref<string[]>([...props.ignored]);
-const addPick = ref("");
-
 const withGuid = computed(() => props.devices.filter((d): d is DeviceInfo & { sc_product_guid: string } => !!d.sc_product_guid));
 const isExcluded = (guid: string) => excluded.value.some((g) => g.toLowerCase() === guid.toLowerCase());
 const addable = computed(() => withGuid.value.filter((d) => !isExcluded(d.sc_product_guid)));
@@ -38,9 +37,8 @@ function remove(guid: string) {
   excluded.value = excluded.value.filter((g) => g.toLowerCase() !== guid.toLowerCase());
 }
 
-function add() {
-  if (addPick.value && !isExcluded(addPick.value)) excluded.value = [...excluded.value, addPick.value];
-  addPick.value = "";
+function add(guid: string) {
+  if (guid && !isExcluded(guid)) excluded.value = [...excluded.value, guid];
 }
 
 // Immediate, not part of Save: opens the folder in the file manager.
@@ -114,10 +112,14 @@ async function browseIni(slug: string) {
                 <Icon name="close" :size="12" />
               </button>
             </span>
-            <select v-if="addable.length" v-model="addPick" class="add" @change="add">
-              <option value="" disabled>Add device</option>
-              <option v-for="d in addable" :key="d.index" :value="d.sc_product_guid">{{ deviceName(d) }}</option>
-            </select>
+            <Dropdown
+              v-if="addable.length"
+              variant="dashed"
+              modelValue=""
+              placeholder="Add device"
+              :options="addable.map((d) => ({ value: d.sc_product_guid, label: deviceName(d) }))"
+              @update:modelValue="add"
+            />
           </div>
         </section>
 
@@ -271,16 +273,6 @@ section {
   font-size: 13px;
 }
 
-.add {
-  height: var(--h-chip-sm);
-  padding: 0 10px;
-  border-radius: var(--radius-control);
-  border: 1px dashed rgba(173, 211, 235, 0.4);
-  background: transparent;
-  color: var(--text-2);
-  font-family: inherit;
-  font-size: 13px;
-}
 
 .btn {
   height: var(--h-control);

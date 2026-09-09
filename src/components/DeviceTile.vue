@@ -46,7 +46,6 @@ const state = computed(() => {
   return [`${props.bindingCount} bindings`, ...counts].join(" · ");
 });
 
-const statusText = computed(() => (props.hidden ? `${state.value} · hidden` : state.value));
 </script>
 
 <template>
@@ -59,6 +58,9 @@ const statusText = computed(() => (props.hidden ? `${state.value} · hidden` : s
         <span v-else-if="slot" class="chip mono">js{{ slot.effective_instance }}</span>
       </template>
       <span v-else-if="kindChip" class="chip mono">{{ kindChip }}</span>
+    </div>
+    <div class="row2">
+      <span class="status">{{ state }}</span>
       <button
         v-if="device.hardware_id"
         type="button"
@@ -69,7 +71,6 @@ const statusText = computed(() => (props.hidden ? `${state.value} · hidden` : s
         <Icon :name="hidden ? 'eye-off' : 'eye'" :size="14" />
       </button>
     </div>
-    <div class="row2">{{ statusText }}</div>
   </div>
 </template>
 
@@ -146,6 +147,16 @@ const statusText = computed(() => (props.hidden ? `${state.value} · hidden` : s
 .row2 {
   font-size: 13px;
   color: var(--text-2);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Sized to the row so the button does not stretch the tile. */

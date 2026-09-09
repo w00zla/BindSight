@@ -3,9 +3,11 @@ import { computed, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
+import Dropdown from "./Dropdown.vue";
 import ColumnHead from "./ColumnHead.vue";
 import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
 import ConfirmDialog, { type ConfirmButton } from "./ConfirmDialog.vue";
+import { KIND_RANK } from "../devices";
 import type {
   ActionMap,
   ActionRef,
@@ -94,6 +96,8 @@ const sourceOptions = computed<SourceOption[]>(() => [
   ...profiles.value.map((m) => ({ key: `${PROFILE_PREFIX}${m.file}`, name: m.name })),
   ...backups.value.map((b) => ({ key: `backup:${b.id}`, name: `${stamp(b.created)} · ${b.reason}` })),
 ]);
+
+const sourceDropdown = computed(() => sourceOptions.value.map((o) => ({ value: o.key, label: o.name })));
 
 function sourceFor(key: string): DiffSource {
   if (key.startsWith(PROFILE_PREFIX)) return { kind: "profile", file: key.slice(PROFILE_PREFIX.length) };
@@ -247,12 +251,10 @@ async function deleteBackup(b: BackupSummary) {
 // --- diff filters ----------------------------------------------------------
 
 const kindFilter = ref<DiffKind | "all">("all");
-const deviceFilter = ref<string[]>([]);
+const deviceFilter = ref<string | "all">("all");
 const search = ref("");
 
-// SC's own device order: the joysticks by instance, then keyboard, then gamepad.
-const KIND_RANK: Record<DiffRow["device_kind"], number> = { joystick: 0, keyboard: 1, gamepad: 2 };
-
+// Same order as the device tiles, joysticks by instance.
 function deviceRank(r: DiffRow): number {
   return KIND_RANK[r.device_kind] * 100 + (r.instance ?? -1);
 }
@@ -265,18 +267,17 @@ function deviceLabel(r: DiffRow): string {
   return r.instance === null ? "—" : `js${r.instance}`;
 }
 
-// Distinct devices present in the report, in SC's order.
-const deviceLabels = computed<string[]>(() => {
-  const seen = new Map<string, number>();
-  for (const r of report.value?.rows ?? []) seen.set(deviceLabel(r), deviceRank(r));
-  return [...seen.entries()].sort((a, b) => a[1] - b[1]).map(([label]) => label);
+// Distinct devices present in the report, in tile order, with counts.
+const deviceCounts = computed(() => {
+  const counts = new Map<string, { rank: number; count: number }>();
+  for (const r of report.value?.rows ?? []) {
+    const label = deviceLabel(r);
+    const hit = counts.get(label);
+    if (hit) hit.count += 1;
+    else counts.set(label, { rank: deviceRank(r), count: 1 });
+  }
+  return [...counts.entries()].sort((a, b) => a[1].rank - b[1].rank);
 });
-
-function toggleDevice(label: string) {
-  deviceFilter.value = deviceFilter.value.includes(label)
-    ? deviceFilter.value.filter((x) => x !== label)
-    : [...deviceFilter.value, label];
-}
 
 function refText(r: ActionRef): string {
   return r.label ?? r.action;
@@ -325,7 +326,7 @@ const filteredRows = computed<DiffRow[]>(() => {
   const q = search.value.trim().toLowerCase();
   const rows = (report.value?.rows ?? []).filter((r) => {
     if (kindFilter.value !== "all" && r.kind !== kindFilter.value) return false;
-    if (deviceFilter.value.length && !deviceFilter.value.includes(deviceLabel(r))) return false;
+    if (deviceFilter.value !== "all" && deviceLabel(r) !== deviceFilter.value) return false;
     return !q || haystack(r).includes(q);
   });
   return sortRows(rows, cols.sort.value, cellValue, (a, b) => collator.compare(a.token, b.token));
@@ -473,21 +474,9 @@ onMounted(async () => {
       <div class="head compare-head">
         <Icon name="compare" :size="16" />
         <span class="head-title no-grow">Compare</span>
-        <label class="sel">
-          <select v-model="aKey">
-            <option v-for="o in sourceOptions" :key="o.key" :value="o.key">{{ o.name }}</option>
-          </select>
-          <span class="sel-name">{{ nameFor(aKey) }}</span>
-          <Icon name="chevron-down" :size="12" />
-        </label>
+        <Dropdown v-model="aKey" :options="sourceDropdown" title="Source A" />
         <Icon name="arrow-right" :size="18" class="dim" />
-        <label class="sel">
-          <select v-model="bKey">
-            <option v-for="o in sourceOptions" :key="o.key" :value="o.key">{{ o.name }}</option>
-          </select>
-          <span class="sel-name">{{ nameFor(bKey) }}</span>
-          <Icon name="chevron-down" :size="12" />
-        </label>
+        <Dropdown v-model="bKey" :options="sourceDropdown" title="Source B" />
         <div class="spacer" />
         <div class="chips">
           <button type="button" class="chip" :class="{ active: kindFilter === 'all' }" @click="kindFilter = 'all'">
@@ -518,17 +507,20 @@ onMounted(async () => {
             ~{{ report?.changed ?? 0 }}
           </button>
         </div>
-        <div v-if="deviceLabels.length" class="divider" />
-        <div v-if="deviceLabels.length" class="chips">
+        <div v-if="deviceCounts.length" class="divider" />
+        <div v-if="deviceCounts.length" class="chips">
+          <button type="button" class="chip all" :class="{ active: deviceFilter === 'all' }" @click="deviceFilter = 'all'">
+            All <span class="count">{{ report?.rows.length ?? 0 }}</span>
+          </button>
           <button
-            v-for="label in deviceLabels"
+            v-for="[label, d] in deviceCounts"
             :key="label"
             type="button"
             class="chip mono"
-            :class="{ active: deviceFilter.includes(label) }"
-            @click="toggleDevice(label)"
+            :class="{ active: deviceFilter === label }"
+            @click="deviceFilter = label"
           >
-            {{ label }}
+            {{ label }} <span class="count">{{ d.count }}</span>
           </button>
         </div>
         <div class="search">
@@ -818,40 +810,6 @@ onMounted(async () => {
   color: var(--text-2);
 }
 
-/* A native select painted as a chip: the real control sits on top, invisible. */
-.sel {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: var(--h-chip);
-  padding: 0 12px;
-  border-radius: var(--radius-control);
-  background: var(--bg-surface-2);
-  font-size: 13px;
-  color: var(--text-2);
-  cursor: pointer;
-  max-width: 240px;
-}
-
-.sel select {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  border: none;
-  font-family: inherit;
-  cursor: pointer;
-}
-
-.sel-name {
-  font-weight: 600;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 .spacer {
   flex: 1;

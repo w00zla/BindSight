@@ -416,6 +416,9 @@ function isConnected(b: ResolvedBinding): boolean {
   return !!deviceForBinding(b);
 }
 
+// The Monitor deck lists only the bindings of connected devices.
+const connectedBindings = computed<ResolvedBinding[]>(() => bindings.value.filter(isConnected));
+
 // SC instance number from a token, e.g. "js2_button9" -> "2".
 function instanceOf(token: string): string {
   return token.match(/^js(\d+)_/)?.[1] ?? "?";
@@ -929,13 +932,12 @@ onUnmounted(() => {
         />
         <Splitter direction="col" @drag="dragLive" @end="saveLayout" @reset="resetLive" />
         <BindingsDeck
-          :bindings="bindings"
+          :bindings="connectedBindings"
           :currentToken="currentInput?.token ?? null"
           :tokenLabel="tokenLabel"
           :categoryLabel="actionmapLabel"
           :deviceLabel="deviceLabel"
           :isClash="bindingClash"
-          :isConnected="isConnected"
           :isMissing="missingInMap"
           :isPinned="isPinned"
           @pin="togglePin"

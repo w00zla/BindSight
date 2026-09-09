@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import DeviceImage from "./DeviceImage.vue";
 import { deviceKey, deviceName } from "../devices";
 import Icon from "./Icon.vue";
+import Dropdown from "./Dropdown.vue";
 import Splitter from "./Splitter.vue";
 import type { DeviceInfo, ImageMapView } from "../types";
 import type { HighlightClass } from "../imagemap";
@@ -132,14 +133,13 @@ function onReset(i: number) {
         <div class="caption">
           <Icon name="image" :size="13" />
           <template v-if="t.view">
-            <select
+            <Dropdown
               v-if="t.view.options.length > 1"
-              class="picker"
-              :value="t.view.map.id"
-              @change="emit('choose', t.device.hardware_id, ($event.target as HTMLSelectElement).value)"
-            >
-              <option v-for="s in t.view.options" :key="s.id" :value="s.id">{{ s.name }}</option>
-            </select>
+              variant="small"
+              :modelValue="t.view.map.id"
+              :options="t.view.options.map((s) => ({ value: s.id, label: s.name }))"
+              @update:modelValue="emit('choose', t.device.hardware_id, $event)"
+            />
             <span v-else class="name">{{ t.view.map.name }}</span>
           </template>
           <span v-else class="name">{{ deviceName(t.device) }}</span>
@@ -236,14 +236,4 @@ function onReset(i: number) {
   color: var(--text-3);
 }
 
-.picker {
-  height: var(--h-chip-sm);
-  padding: 0 8px;
-  border-radius: var(--radius-control);
-  border: none;
-  background: var(--bg-surface-2);
-  color: var(--text);
-  font-size: 12px;
-  font-family: inherit;
-}
 </style>
