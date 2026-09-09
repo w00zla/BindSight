@@ -14,6 +14,7 @@ import type { VueKonvaRef } from "vue-konva";
 import type { DeviceInfo, JoyInput } from "../types";
 import {
   SYMBOL_PATHS,
+  symbolPx,
   inputKey,
   inputLabel,
   sameHardware,
@@ -28,7 +29,8 @@ const emit = defineEmits<{ notify: [message: string, type: "ok" | "error"]; save
 
 type Tool = "select" | "rect" | "ellipse" | "polygon" | SymbolKind;
 const TOOLS: Tool[] = ["select", "rect", "ellipse", "polygon", "arrow", "cw", "ccw"];
-const DEFAULT_SYMBOL_SIZE = 0.05;
+// A new symbol is 5% of the image width, square on screen.
+const DEFAULT_SYMBOL_W = 0.05;
 const MIN_DRAW_PX = 4;
 
 const BLUE = "#396cd8";
@@ -199,44 +201,34 @@ async function pickImage(): Promise<string | null> {
   return src ?? null;
 }
 
-// "New" opens an inline form: name, variant and — required — the image the
-// areas will be drawn on. Only then is the profile created.
-const draftNew = ref<{ name: string; variant: string; imagePath: string } | null>(null);
-const draftImageName = computed(() => draftNew.value?.imagePath.split(/[\\/]/).pop() ?? "");
+// "New" opens an inline form: a name and the image the areas will be drawn
+// on. Picking the image creates the profile right away.
+const draftNew = ref<{ name: string } | null>(null);
 
 function startNew() {
   const d = device.value;
   if (!d?.sc_product_guid) return;
-  draftNew.value = { name: d.sc_name ?? d.sdl_name, variant: "", imagePath: "" };
-}
-
-async function pickDraftImage() {
-  if (!draftNew.value) return;
-  try {
-    const src = await pickImage();
-    if (src) draftNew.value.imagePath = src;
-  } catch (e) {
-    emit("notify", String(e), "error");
-  }
+  draftNew.value = { name: d.sc_name ?? d.sdl_name };
 }
 
 async function createProfile() {
   const d = device.value;
   const draft = draftNew.value;
-  if (!d?.sc_product_guid || !draft?.imagePath) return;
+  if (!d?.sc_product_guid || !draft) return;
   busy.value = true;
   try {
+    const imagePath = await pickImage();
+    if (!imagePath) return;
     const p = await invoke<HwProfile>("create_hw_profile", {
       name: draft.name.trim() || (d.sc_name ?? d.sdl_name),
       hardwareId: d.sc_product_guid,
       hardwareName: d.sc_name ?? "",
-      variant: draft.variant.trim(),
-      imagePath: draft.imagePath,
+      imagePath,
     });
     draftNew.value = null;
     await loadSummaries();
     profileId.value = p.id;
-    emit("notify", "HW profile created", "ok");
+    emit("notify", "Image-map created", "ok");
   } catch (e) {
     emit("notify", String(e), "error");
   } finally {
@@ -253,7 +245,7 @@ async function saveProfile() {
     savedJson.value = JSON.stringify(p);
     await loadSummaries();
     emit("saved");
-    emit("notify", "HW profile saved", "ok");
+    emit("notify", "Image-map saved", "ok");
   } catch (e) {
     emit("notify", String(e), "error");
   } finally {
@@ -271,7 +263,7 @@ async function deleteProfile() {
     await loadSummaries();
     profileId.value = matching.value[0]?.id ?? "";
     emit("saved");
-    emit("notify", "HW profile deleted", "ok");
+    emit("notify", "Image-map deleted", "ok");
   } catch (e) {
     emit("notify", String(e), "error");
   } finally {
@@ -284,12 +276,12 @@ async function exportProfile() {
   if (!p) return;
   try {
     const dest = await save({
-      defaultPath: `${p.name || "hw-profile"}.zip`,
-      filters: [{ name: "HW profile", extensions: ["zip"] }],
+      defaultPath: `${p.name || "image-map"}.zip`,
+      filters: [{ name: "Image-map", extensions: ["zip"] }],
     });
     if (!dest) return;
     await invoke("export_hw_profile", { id: p.id, destPath: dest });
-    emit("notify", "HW profile exported", "ok");
+    emit("notify", "Image-map exported", "ok");
   } catch (e) {
     emit("notify", String(e), "error");
   }
@@ -297,7 +289,7 @@ async function exportProfile() {
 
 async function importProfile() {
   try {
-    const src = await open({ multiple: false, filters: [{ name: "HW profile", extensions: ["zip"] }] });
+    const src = await open({ multiple: false, filters: [{ name: "Image-map", extensions: ["zip"] }] });
     if (!src) return;
     const s = await invoke<HwProfileSummary>("import_hw_profile", { sourcePath: src });
     imgCache.clear();
@@ -441,7 +433,8 @@ function onStageMouseDown(e: KonvaEventObject<MouseEvent>) {
       symbol: tool.value,
       x: pos.x / W.value,
       y: pos.y / H.value,
-      size: DEFAULT_SYMBOL_SIZE,
+      w: DEFAULT_SYMBOL_W,
+      h: (DEFAULT_SYMBOL_W * W.value) / H.value,
       rotation: 0,
     });
   }
@@ -563,17 +556,17 @@ function polyCfg(a: HwArea) {
 function symbolCfg(a: HwArea) {
   if (a.shape.kind !== "symbol") return {};
   const s = a.shape;
-  // 100 path units == size * image width.
-  const k = (s.size * W.value) / 100;
+  // 100 path units == w * image width by h * image height.
+  const px = symbolPx(s, W.value, H.value);
   return {
     id: a.id,
     data: SYMBOL_PATHS[s.symbol],
-    x: s.x * W.value,
-    y: s.y * H.value,
+    x: px.x,
+    y: px.y,
     offsetX: 50,
     offsetY: 50,
-    scaleX: k,
-    scaleY: k,
+    scaleX: px.scaleX,
+    scaleY: px.scaleY,
     rotation: s.rotation,
     draggable: canSelect.value,
     ...colours(a),
@@ -650,12 +643,11 @@ function onTransformEnd(a: HwArea, e: KonvaEventObject<Event>) {
     s.cy = node.y() / H.value;
     s.rotation = node.rotation();
   } else if (s.kind === "symbol") {
-    // Symbols stay square: the x scale wins.
-    s.size = (sx * 100) / W.value;
+    s.w = (sx * 100) / W.value;
+    s.h = (sy * 100) / H.value;
     s.x = node.x() / W.value;
     s.y = node.y() / H.value;
     s.rotation = node.rotation();
-    node.scaleY(sx);
   }
 }
 
@@ -719,6 +711,7 @@ const polyPreview = computed(() => {
 
 <template>
   <section class="editor">
+    <div class="panel-title">Image-maps</div>
     <div class="row">
       <select v-model="selectedGuid" class="pick">
         <option v-if="!usableDevices.length" value="">No device</option>
@@ -727,9 +720,9 @@ const polyPreview = computed(() => {
         </option>
       </select>
       <select v-model="profileId" class="pick">
-        <option value="">— no HW profile —</option>
+        <option value="">— no image-map —</option>
         <option v-for="s in matching" :key="s.id" :value="s.id">
-          {{ s.name }}{{ s.variant ? ` · ${s.variant}` : "" }}
+          {{ s.name }}
         </option>
       </select>
       <span v-if="isBundled" class="tag">bundled</span>
@@ -741,19 +734,16 @@ const polyPreview = computed(() => {
 
     <div v-if="draftNew" class="newbox">
       <div class="row">
-        <span class="cur">New HW profile for {{ device?.sc_name ?? device?.sdl_name }}</span>
+        <span class="cur">New image-map for {{ device?.sc_name ?? device?.sdl_name }}</span>
       </div>
       <div class="row">
         <input v-model="draftNew.name" class="txt" placeholder="Name" />
-        <input v-model="draftNew.variant" class="txt short" placeholder="Variant (stock, addon…)" />
       </div>
       <div class="row">
-        <button @click="pickDraftImage">{{ draftNew.imagePath ? "Change image…" : "Choose image…" }}</button>
-        <span v-if="draftNew.imagePath" class="file">{{ draftImageName }}</span>
-        <span v-else class="hint">Photo or drawing of the device (png/jpg/webp); the input areas are drawn on it.</span>
+        <button :disabled="busy" @click="createProfile">Choose image…</button>
+        <span class="hint">Photo or drawing of the device (png/jpg/webp); the input areas are drawn on it. Picking it creates the profile.</span>
       </div>
       <div class="row">
-        <button :disabled="!draftNew.imagePath || busy" @click="createProfile">Create</button>
         <button :disabled="busy" @click="draftNew = null">Cancel</button>
       </div>
     </div>
@@ -761,18 +751,12 @@ const polyPreview = computed(() => {
     <template v-if="profile && !draftNew">
       <div class="row">
         <input v-model="profile.name" class="txt" placeholder="Name" />
-        <input v-model="profile.variant" class="txt short" placeholder="Variant" />
         <button :disabled="!dirty || busy" @click="saveProfile">Save</button>
         <span v-if="dirty" class="tag warn">unsaved</span>
       </div>
 
       <div class="row tabs">
         <button @click="replaceImage">Replace image…</button>
-      </div>
-
-      <div v-if="currentImage" class="row">
-        <input v-model="currentImage.label" class="txt short" placeholder="Label" />
-        <span class="file">{{ currentImage.file }}</span>
       </div>
 
       <div class="row inputbox">
@@ -891,7 +875,7 @@ const polyPreview = computed(() => {
     </template>
 
     <p v-else-if="!draftNew" class="empty">
-      {{ usableDevices.length ? "No HW profile selected." : "No device with an SC product GUID." }}
+      {{ usableDevices.length ? "No image-map selected." : "No device with an SC product GUID." }}
     </p>
   </section>
 </template>

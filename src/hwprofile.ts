@@ -1,4 +1,4 @@
-// Hardware profile types (mirroring profile.json, format 2) plus the small
+// Hardware profile types (mirroring profile.json, format 3) plus the small
 // helpers both renderers (Konva editor, SVG viewer) share.
 
 import type { JoyInput } from "./types";
@@ -6,12 +6,13 @@ import type { JoyInput } from "./types";
 export type SymbolKind = "arrow" | "cw" | "ccw";
 
 // All coordinates normalized 0..1 relative to the image's natural size
-// (x -> width, y -> height); `size` relative to the width; rotation in
-// degrees, clockwise, around the shape's own center.
+// (x/w -> width, y/h -> height); rotation in degrees, clockwise, around the
+// shape's own center. A symbol is its 100x100 path stretched into a w x h box
+// centered at (x, y).
 export type RectShape = { kind: "rect"; x: number; y: number; w: number; h: number; rotation: number };
 export type EllipseShape = { kind: "ellipse"; cx: number; cy: number; rx: number; ry: number; rotation: number };
 export type PolygonShape = { kind: "polygon"; points: [number, number][] };
-export type SymbolShape = { kind: "symbol"; symbol: SymbolKind; x: number; y: number; size: number; rotation: number };
+export type SymbolShape = { kind: "symbol"; symbol: SymbolKind; x: number; y: number; w: number; h: number; rotation: number };
 export type Shape = RectShape | EllipseShape | PolygonShape | SymbolShape;
 
 export interface HwImage {
@@ -32,7 +33,6 @@ export interface HwProfile {
   name: string;
   hardware_id: string;
   hardware_name: string;
-  variant: string;
   image: HwImage;
   areas: HwArea[];
 }
@@ -42,7 +42,6 @@ export interface HwProfileSummary {
   name: string;
   hardware_id: string;
   hardware_name: string;
-  variant: string;
   source: "bundled" | "user";
   area_count: number;
 }
@@ -91,10 +90,10 @@ export const SYMBOL_PATHS: Record<SymbolKind, string> = {
   ccw: "M90 50 A40 40 0 1 0 50 90 L50 100 L70 82 L50 64 L50 74 A24 24 0 1 1 74 50 Z",
 };
 
-// Pixel placement of a symbol in a W x H pixel space: center, uniform scale
-// (100 path units == size * W px) and rotation.
-export function symbolPx(s: SymbolShape, W: number, H: number): { x: number; y: number; scale: number; rotation: number } {
-  return { x: s.x * W, y: s.y * H, scale: (s.size * W) / 100, rotation: s.rotation };
+// Pixel placement of a symbol in a W x H pixel space: center, per-axis scale
+// (100 path units == w * W px by h * H px) and rotation.
+export function symbolPx(s: SymbolShape, W: number, H: number): { x: number; y: number; scaleX: number; scaleY: number; rotation: number } {
+  return { x: s.x * W, y: s.y * H, scaleX: (s.w * W) / 100, scaleY: (s.h * H) / 100, rotation: s.rotation };
 }
 
 // Polygon vertices as a flat [x0, y0, x1, y1, ...] pixel list.

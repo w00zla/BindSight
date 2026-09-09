@@ -2,101 +2,30 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import DeviceImage from "./components/DeviceImage.vue";
 import ProfileEditor from "./components/ProfileEditor.vue";
-import type { DeviceInfo, JoyInput } from "./types";
+import TopBar from "./components/TopBar.vue";
+import DeviceTile from "./components/DeviceTile.vue";
+import StatusPanel from "./components/StatusPanel.vue";
+import ImageStage from "./components/ImageStage.vue";
+import LiveCard from "./components/LiveCard.vue";
+import BindingsDeck from "./components/BindingsDeck.vue";
+import Toasts from "./components/Toasts.vue";
+import Splitter from "./components/Splitter.vue";
+import SettingsDialog from "./components/SettingsDialog.vue";
+import type {
+  DeviceInfo,
+  JoyInput,
+  Mode,
+  CurrentInput,
+  ActionMap,
+  ResolvedBinding,
+  LoadStatus,
+  BoundAction,
+  SlotStatus,
+  ClashReport,
+  ProfileView,
+} from "./types";
 import { sameHardware, type HighlightClass, type HwProfile, type HwProfileSummary } from "./hwprofile";
-
-interface Action {
-  name: string;
-  label: string | null;
-  description: string | null;
-  joystick_default: string | null;
-}
-
-interface ActionMap {
-  name: string;
-  label: string | null;
-  actions: Action[];
-}
-
-interface ResolvedBinding {
-  token: string;
-  device: string | null;
-  device_guid: string | null;
-  actionmap: string;
-  action: string;
-  label: string | null;
-  // A shipped default from defaultProfile.xml (on js1), not a user rebind.
-  is_default: boolean;
-}
-
-interface LoadStatus {
-  base_path: string;
-  actionmaps_path: string;
-  loaded: boolean;
-  error: string | null;
-  bindings: ResolvedBinding[];
-}
-
-interface BoundAction {
-  actionmap: string;
-  action: string;
-  label: string | null;
-  is_default: boolean;
-}
-
-// One joystick in SC's order: the jsN SC assigns it vs the jsN its bindings
-// were saved under. connected_now: SDL sees it right now (a Game.log slot can
-// be unplugged since SC started).
-interface SlotStatus {
-  effective_instance: number;
-  stored_instance: number | null;
-  sc_product_guid: string | null;
-  name: string | null;
-  clash: boolean;
-  connected_now: boolean;
-}
-
-// A saved slot whose device is not in SC's list — it dangles and shifts the rest.
-interface MissingSlot {
-  stored_instance: number;
-  name: string;
-  sc_product_guid: string | null;
-}
-
-// An SDL-visible device SC did not list at its last start: hidden by Wine, or
-// plugged in after SC started.
-interface UnseenDevice {
-  name: string | null;
-  sc_product_guid: string | null;
-}
-
-// Why Game.log could not be used, so the GUI can say exactly what is wrong.
-type GameLogError =
-  | { kind: "not_found"; path: string; reason: string }
-  | { kind: "no_device_lines"; path: string };
-
-// One resort step: the bindings saved under js{from} belong on js{to}.
-interface ResortMove {
-  from: number;
-  to: number;
-  name: string | null;
-}
-
-// Game.log is the only order source: with log_error set, everything else is
-// empty and nothing is said about the order.
-interface ClashReport {
-  connected: SlotStatus[];
-  missing: MissingSlot[];
-  unseen: UnseenDevice[];
-  log_timestamp: string | null;
-  log_error: GameLogError | null;
-  has_clash: boolean;
-  resort: ResortMove[];
-  // In-game equivalent of `resort`: pp_resortdevices swaps, in order.
-  resort_commands: string[];
-}
 
 const MAX_EVENTS = 50;
 
@@ -106,30 +35,20 @@ const actionMaps = ref<ActionMap[]>([]);
 const basePath = ref("");
 const bindings = ref<ResolvedBinding[]>([]);
 const tokens = ref<Record<string, string>>({});
-// `sdl` is the SDL-side input name, shown when SC has no token for the input;
-// `sc_guid` lets the tile tell whether SC sees the device at all.
-const currentInput = ref<{
-  device: string;
-  sc_guid: string | null;
-  token: string | null;
-  sdl: string;
-  actions: BoundAction[];
-  // Whether the device's hardware profile has an area for this input; `null`
-  // when the device has no profile at all.
-  in_profile: boolean | null;
-} | null>(null);
+const currentInput = ref<CurrentInput | null>(null);
 const clash = ref<ClashReport | null>(null);
 // SC Product GUIDs the user marked "SC doesn't see this device" (persisted per OS).
 const ignoredDevices = ref<string[]>([]);
 const error = ref<string | null>(null);
 const loading = ref(false);
+const showSettings = ref(false);
 
 // --- hardware profiles -----------------------------------------------------
 
 // How long an axis stays highlighted after its last event (axes never rest).
 const AXIS_PULSE_MS = 400;
 
-const mode = ref<"live" | "profiles">("live");
+const mode = ref<Mode>("live");
 const profileSummaries = ref<HwProfileSummary[]>([]);
 // Profile id -> full profile, and `<profile id>/<file>` -> image data URL.
 const loadedProfiles = ref<Record<string, HwProfile>>({});
@@ -156,18 +75,59 @@ function imgSrc(id: string, file: string): string {
   return profileImages.value[`${id}/${file}`] ?? "";
 }
 
-interface ProfileView {
-  device: DeviceInfo;
-  profile: HwProfile;
-  options: HwProfileSummary[];
-}
-
 const profileViews = computed<ProfileView[]>(() =>
   devices.value.flatMap((d) => {
     const id = chosenProfileId(d.sc_product_guid);
     const p = id ? loadedProfiles.value[id] : null;
     return p ? [{ device: d, profile: p, options: profilesFor(d.sc_product_guid) }] : [];
   }),
+);
+
+// Resizable layout: stage height and live-card width, remembered locally.
+const LAYOUT_KEY = "bindsight.layout";
+const STAGE_H = { def: 440, min: 200, max: 900 };
+const LIVE_W = { def: 400, min: 280, max: 800 };
+const stageHeight = ref(STAGE_H.def);
+const liveWidth = ref(LIVE_W.def);
+try {
+  const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? "{}") as { stageHeight?: number; liveWidth?: number };
+  if (typeof saved.stageHeight === "number") stageHeight.value = saved.stageHeight;
+  if (typeof saved.liveWidth === "number") liveWidth.value = saved.liveWidth;
+} catch {
+  /* defaults */
+}
+let layoutStart: { stageHeight: number; liveWidth: number } | null = null;
+const clamp = (v: number, r: { min: number; max: number }) => Math.min(Math.max(v, r.min), r.max);
+function dragStage(delta: number) {
+  layoutStart ??= { stageHeight: stageHeight.value, liveWidth: liveWidth.value };
+  stageHeight.value = clamp(layoutStart.stageHeight + delta, STAGE_H);
+}
+function dragLive(delta: number) {
+  layoutStart ??= { stageHeight: stageHeight.value, liveWidth: liveWidth.value };
+  liveWidth.value = clamp(layoutStart.liveWidth + delta, LIVE_W);
+}
+function saveLayout() {
+  layoutStart = null;
+  try {
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ stageHeight: stageHeight.value, liveWidth: liveWidth.value }));
+  } catch {
+    /* ignore */
+  }
+}
+function resetStage() {
+  stageHeight.value = STAGE_H.def;
+  saveLayout();
+}
+function resetLive() {
+  liveWidth.value = LIVE_W.def;
+  saveLayout();
+}
+
+// Connected, not excluded devices without an image-map (placeholder tiles).
+const stagePlaceholders = computed<DeviceInfo[]>(() =>
+  devices.value.filter(
+    (d) => !isIgnored(d.sc_product_guid) && !profileViews.value.some((v) => v.device.index === d.index),
+  ),
 );
 
 async function loadProfileImage(id: string, file: string) {
@@ -211,7 +171,7 @@ async function onProfilesSaved() {
   await reloadProfiles();
 }
 
-async function setMode(m: "live" | "profiles") {
+async function setMode(m: Mode) {
   mode.value = m;
   // Inputs released while the editor was open were never seen here.
   activeInputs.value = {};
@@ -295,8 +255,8 @@ function resolvePin(b: ResolvedBinding): { guid: string; key: string } | { reaso
   const key = inputKeyForToken(b.token, d);
   if (!key) return { reason: `${tokenLabel(b.token)}: no SDL axis for it (${d.axes_error ?? "not in HID descriptor"})` };
   const has = inProfile(d.sdl_guid, key);
-  if (has === null) return { reason: `${d.sc_name ?? d.sdl_name} has no HW profile` };
-  if (!has) return { reason: `${tokenLabel(b.token)} not in HW profile` };
+  if (has === null) return { reason: `${d.sc_name ?? d.sdl_name} has no image-map` };
+  if (!has) return { reason: `No area for ${tokenLabel(b.token)}` };
   return { guid: d.sdl_guid, key };
 }
 
@@ -387,10 +347,7 @@ function slotFor(guid: string | null): SlotStatus | null {
   return guid ? slotByGuid.value.get(guid) ?? null : null;
 }
 
-// Whether the report rests on a usable Game.log.
-const hasLog = computed(() => !!clash.value && !clash.value.log_error && !!clash.value.log_timestamp);
-
-// GUIDs SC did not list at its last start (Game.log source only).
+// GUIDs SC did not list at its last start (device-order log source only).
 const unseenGuids = computed<Set<string>>(
   () => new Set((clash.value?.unseen ?? []).map((u) => u.sc_product_guid).filter((g): g is string => !!g)),
 );
@@ -399,33 +356,20 @@ function isUnseen(guid: string | null): boolean {
   return !!guid && unseenGuids.value.has(guid);
 }
 
-// Slots in SC's last-start list whose device is unplugged now.
-const unpluggedSinceStart = computed<SlotStatus[]>(() => (clash.value?.connected ?? []).filter((s) => !s.connected_now));
-
-// Game.log timestamps are UTC ("...Z"); show them in local time as
-// "YYYY-MM-DD HH:MM:SS". Unparseable input is shown as-is.
-function fmtTimestamp(ts: string | null): string {
-  if (!ts) return "?";
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return ts;
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-}
-
 function isIgnored(guid: string | null): boolean {
   return !!guid && ignoredDevices.value.some((g) => g.toLowerCase() === guid.toLowerCase());
 }
-
-// Flip "SC doesn't see this device" for a device and persist it. The clash
-// report is recomputed with the device treated as unplugged.
-async function toggleIgnored(guid: string | null) {
-  if (!guid) return;
-  const next = isIgnored(guid)
-    ? ignoredDevices.value.filter((g) => g.toLowerCase() !== guid.toLowerCase())
-    : [...ignoredDevices.value, guid];
+// Settings dialog Save: apply the exclusions and, if changed, the base path.
+async function applySettings(s: { basePath: string; ignored: string[] }) {
+  showSettings.value = false;
   try {
-    ignoredDevices.value = await invoke<string[]>("set_ignored_devices", { guids: next });
-    await loadClash();
+    ignoredDevices.value = await invoke<string[]>("set_ignored_devices", { guids: s.ignored });
+    if (s.basePath !== basePath.value) {
+      basePath.value = s.basePath;
+      await saveBasePath();
+    } else {
+      await loadClash();
+    }
   } catch (e) {
     notify(String(e), "error");
   }
@@ -457,6 +401,8 @@ async function loadClash() {
     clash.value = null;
   }
 }
+
+// Whether the clash panel has anything to show (a clash, or no usable order source).
 
 // Put the pp_resortdevices commands on the clipboard, one per line.
 async function copyResortCommands() {
@@ -526,7 +472,7 @@ async function showBinding(
       const now = Date.now();
       if (lastMissingToast.key !== tk || now - lastMissingToast.at > TOAST_MS) {
         lastMissingToast = { key: tk, at: now };
-        notify(`${res.token ? tokenLabel(res.token) : currentInput.value.sdl} not in HW profile`, "error");
+        notify(`No area for ${res.token ? tokenLabel(res.token) : currentInput.value.sdl}`, "error");
       }
     }
     // Upgrade the profile highlight to blue when SC has a binding — but only
@@ -576,12 +522,6 @@ async function saveBasePath() {
   }
 }
 
-// Show the action's label ("<null>" literally when it is missing). The
-// description is kept in the data but not shown for now.
-function actionText(a: Action): string {
-  return a.label ?? "<null>";
-}
-
 async function refresh() {
   loading.value = true;
   error.value = null;
@@ -606,9 +546,9 @@ function sdlInputName(kind: "button" | "hat" | "axis", index: number, direction:
   return `${kind} ${index}`;
 }
 
-// Live tile colour: yellow when SC doesn't see the device (unseen or excluded —
-// any SC token is meaningless then), blue when the input has SC bindings, grey
-// otherwise.
+// Live card colour: yellow when SC doesn't see the device (unseen or excluded
+// — any SC token is meaningless then), blue when the input has SC bindings,
+// grey otherwise.
 function liveState(): "unseen" | "bound" | "none" {
   const c = currentInput.value;
   if (!c) return "none";
@@ -616,23 +556,13 @@ function liveState(): "unseen" | "bound" | "none" {
   return c.actions.length ? "bound" : "none";
 }
 
-function describe(ev: JoyInput): string {
-  switch (ev.kind) {
-    case "button":
-      return `button ${ev.index} ${ev.pressed ? "down" : "up"}`;
-    case "axis":
-      return `axis ${ev.index} = ${ev.value}`;
-    case "hat":
-      return `hat ${ev.index} → ${ev.direction}`;
-  }
-}
 
 let unlisten: UnlistenFn[] = [];
 
 onMounted(async () => {
   unlisten.push(
     await listen<JoyInput>("joy-input", (e) => {
-      // The editor owns the input while a HW profile is being edited.
+      // The editor owns the input while a hardware profile is being edited.
       if (mode.value !== "live") return;
       const p = e.payload;
       events.value.unshift(p);
@@ -683,867 +613,155 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <main class="container">
-    <header class="topbar">
-      <h1>BindSight</h1>
-      <div class="modes">
-        <button :class="{ on: mode === 'live' }" @click="setMode('live')">Live</button>
-        <button :class="{ on: mode === 'profiles' }" @click="setMode('profiles')">HW profiles</button>
-      </div>
-      <button @click="refresh" :disabled="loading">
-        {{ loading ? "Scanning…" : "Refresh" }}
-      </button>
-    </header>
+  <main class="app">
+    <TopBar
+      :mode="mode"
+      :basePath="basePath"
+      :loading="loading"
+      @update:mode="setMode"
+      @refresh="refresh"
+      @settings="showSettings = !showSettings"
+    />
 
-    <template v-if="mode === 'live'">
-    <section class="config">
-      <label class="cfg-row">
-        <span>SC base path</span>
-        <input v-model="basePath" placeholder="…/StarCitizen/LIVE" />
-        <button @click="saveBasePath">Load</button>
-      </label>
-    </section>
+    <SettingsDialog
+      v-if="showSettings"
+      :basePath="basePath"
+      :devices="devices"
+      :ignored="ignoredDevices"
+      @close="showSettings = false"
+      @save="applySettings"
+    />
 
-    <p v-if="error" class="error">{{ error }}</p>
-    <p v-else-if="!loading && devices.length === 0" class="empty">
-      No joysticks detected. Plug in a device and hit Refresh.
-    </p>
-
-    <ul class="devices">
-      <li v-for="d in devices" :key="d.index" class="device" :class="{ 'device-ignored': isIgnored(d.sc_product_guid) }">
-        <div class="device-name">
-          {{ d.sc_name ?? "(unknown device)" }}
-          <span v-if="isIgnored(d.sc_product_guid)" class="js-ignored">
-            excluded
-          </span>
-          <span v-else-if="slotFor(d.sc_product_guid)?.clash" class="js-clash">
-            ⚠ SC → js{{ slotFor(d.sc_product_guid)?.effective_instance }}
-            (binds js{{ slotFor(d.sc_product_guid)?.stored_instance }})
-          </span>
-          <span v-else-if="slotFor(d.sc_product_guid)?.stored_instance" class="js-mapped">
-            ✓ js{{ slotFor(d.sc_product_guid)?.effective_instance }}
-          </span>
-          <span v-else-if="slotFor(d.sc_product_guid)" class="js-new">
-            js{{ slotFor(d.sc_product_guid)?.effective_instance }} · not in profile
-          </span>
-          <span v-else-if="isUnseen(d.sc_product_guid)" class="js-unseen">
-            not seen by SC
-          </span>
-        </div>
-        <div class="counts">
-          <span>{{ d.num_buttons }} buttons</span>
-          <span>{{ d.num_axes }} axes</span>
-          <span>{{ d.num_hats }} hats</span>
-          <span v-if="bindingCountFor(d.sc_product_guid)" class="bound-count">
-            {{ bindingCountFor(d.sc_product_guid) }} bindings
-          </span>
-          <span v-if="d.axes.length" class="axes-map mono" title="SC axis name per SDL axis index">{{ d.axes.join(" ") }}</span>
-          <span v-else-if="d.axes_error" class="axes-error" :title="d.axes_error">axes: {{ d.axes_error }}</span>
-          <button
-            class="ignore-toggle"
-            :disabled="!d.sc_product_guid"
-            :title="isIgnored(d.sc_product_guid) ? 'Count this device as visible to SC again' : 'Treat this device as one SC never sees (e.g. hidden by Wine); it then counts as unplugged'"
-            @click="toggleIgnored(d.sc_product_guid)"
-          >
-            {{ isIgnored(d.sc_product_guid) ? "Include" : "Exclude always" }}
-          </button>
-        </div>
-      </li>
-    </ul>
-
-    <p v-if="hasLog" class="source-note">
-      <code>Game.log</code> {{ fmtTimestamp(clash?.log_timestamp ?? null) }}
-      <template v-if="clash?.unseen.length"> · {{ clash?.unseen.length }} not seen by SC</template>
-      <template v-if="unpluggedSinceStart.length"> · {{ unpluggedSinceStart.length }} unplugged since</template>
-    </p>
-    <p v-else-if="clash?.log_error" class="order-note">
-      <template v-if="clash.log_error.kind === 'not_found'">
-        <code>Game.log</code> not found: <code>{{ clash.log_error.path }}</code>
-      </template>
-      <template v-else>
-        <code>Game.log</code> lists no joysticks: <code>{{ clash.log_error.path }}</code>
-      </template>
-      · no device order without it
-    </p>
-
-    <section v-if="clash?.has_clash" class="clash-banner">
-      <div class="clash-title">⚠ Device order clash</div>
-      <p class="clash-body">
-        SC assigns <code>jsN</code> by connection order, not device identity. The
-        current order no longer matches your saved profile, so bindings land on
-        the wrong device.
-      </p>
-      <ul v-if="clash.missing.length" class="clash-missing">
-        <li v-for="m in clash.missing" :key="m.stored_instance">
-          <strong>js{{ m.stored_instance }}</strong> — {{ m.name }} not in SC's
-          device list (slots after it shift down)
-        </li>
-      </ul>
-      <div v-if="clash.resort.length" class="resort">
-        <div class="resort-title">Resort</div>
-        <ul class="resort-moves">
-          <li v-for="m in clash.resort" :key="m.from">
-            <strong>js{{ m.from }} → js{{ m.to }}</strong>
-            <template v-if="m.name"> {{ m.name }}</template>
-            <template v-else> (no saved device)</template>
-          </li>
-        </ul>
-        <div class="resort-row">
-          <pre class="resort-cmds">{{ clash.resort_commands.join("\n") }}</pre>
-          <button @click="copyResortCommands">Copy</button>
-        </div>
-        <p class="resort-hint">In-game: paste into the console. Out of game: rewrite <code>actionmaps.xml</code> (SC must be closed; a backup is kept).</p>
-        <button class="resort-apply" @click="applyResort">Rewrite actionmaps.xml</button>
-      </div>
-    </section>
-
-    <section class="current" :class="'state-' + liveState()" v-if="currentInput">
-      <div class="cur-head">
-        <span class="cur-dev">{{ currentInput.device }}</span>
-        <span v-if="liveState() === 'unseen'" class="js-unverified">
-          {{ isIgnored(currentInput.sc_guid) ? "excluded" : "not seen by SC" }}
-        </span>
-        <span class="cur-detail">{{ currentInput.token ? tokenLabel(currentInput.token) : currentInput.sdl }}</span>
-      </div>
-      <div v-if="currentInput.actions.length" class="cur-actions">
-        <div v-for="(a, i) in currentInput.actions" :key="i">
-          {{ a.label ?? a.action }}
-          <span v-if="a.is_default" class="default-tag">default</span>
-          <span class="cur-ctx">({{ actionmapLabel(a.actionmap) }})</span>
+    <div v-if="mode === 'live'" class="content">
+      <div class="top-row">
+      <div class="devices-panel">
+        <div class="panel-title">Connected devices</div>
+        <div class="rail">
+        <DeviceTile
+          v-for="d in devices"
+          :key="d.index"
+          :device="d"
+          :slot="slotFor(d.sc_product_guid)"
+          :ignored="isIgnored(d.sc_product_guid)"
+          :unseen="isUnseen(d.sc_product_guid)"
+          :bindingCount="bindingCountFor(d.sc_product_guid)"
+        />
+        <div v-if="!devices.length" class="tile-none">None</div>
         </div>
       </div>
-      <div v-else class="cur-none">— not bound —</div>
-    </section>
+      <StatusPanel :report="clash" :loadError="error" @apply="applyResort" @copy="copyResortCommands" />
+      </div>
 
-    <section v-if="profileViews.length" class="hwprofiles">
-      <h2>HW profiles</h2>
-      <div v-for="v in profileViews" :key="v.device.index" class="hwprofile">
-        <div class="hp-head">
-          <span class="hp-dev">{{ v.device.sc_name ?? v.device.sdl_name }}</span>
-          <select
-            v-if="v.options.length > 1"
-            class="hp-pick"
-            :value="v.profile.id"
-            @change="setProfileChoice(v.device.sc_product_guid, ($event.target as HTMLSelectElement).value)"
-          >
-            <option v-for="s in v.options" :key="s.id" :value="s.id">
-              {{ s.name }}{{ s.variant ? ` · ${s.variant}` : "" }}
-            </option>
-          </select>
-          <span v-else class="hp-name">{{ v.profile.name }}</span>
-        </div>
-        <DeviceImage
-          v-if="imgSrc(v.profile.id, v.profile.image.file)"
-          :profile="v.profile"
-          :src="imgSrc(v.profile.id, v.profile.image.file)"
-          :active="activeFor(v.device.sdl_guid)"
+      <ImageStage
+        :views="profileViews"
+        :placeholders="stagePlaceholders"
+        :height="stageHeight"
+        :imgSrc="imgSrc"
+        :activeFor="activeFor"
+        @choose="setProfileChoice"
+      />
+      <Splitter direction="row" @drag="dragStage" @end="saveLayout" @reset="resetStage" />
+
+      <div class="deck-row" :style="{ gridTemplateColumns: `${liveWidth}px 16px minmax(0, 1fr)` }">
+        <LiveCard
+          :input="currentInput"
+          :state="liveState()"
+          :excluded="isIgnored(currentInput?.sc_guid ?? null)"
+          :tokenLabel="tokenLabel"
+          :categoryLabel="actionmapLabel"
+        />
+        <Splitter direction="col" @drag="dragLive" @end="saveLayout" @reset="resetLive" />
+        <BindingsDeck
+          :bindings="bindings"
+          :devices="devices"
+          :actionMaps="actionMaps"
+          :events="events"
+          :currentToken="currentInput?.token ?? null"
+          :tokenLabel="tokenLabel"
+          :categoryLabel="actionmapLabel"
+          :instanceOf="instanceOf"
+          :isClash="bindingClash"
+          :isConnected="isConnected"
+          :isMissing="missingInProfile"
+          :isPinned="isPinned"
+          :deviceName="nameFor"
+          @pin="togglePin"
         />
       </div>
-    </section>
-
-    <section class="bindings" v-if="bindings.length">
-      <h2>Joystick bindings ({{ bindings.length }})</h2>
-      <ul class="binding-list">
-        <li
-          v-for="(b, i) in bindings"
-          :key="i"
-          :class="{ 'binding-clash': bindingClash(b.token), 'binding-pinned': isPinned(b) }"
-          @click="togglePin(b)"
-        >
-          <span class="tok">{{ tokenLabel(b.token) }}</span>
-          <span class="blabel">
-            {{ b.label ?? b.action }}
-            <span v-if="b.is_default" class="default-tag">default</span>
-            <span v-if="missingInProfile(b)" class="js-unverified">not in HW profile</span>
-          </span>
-          <span
-            class="bctrl"
-            :class="bindingClash(b.token) ? 'ctrl-clash' : isConnected(b) ? 'ctrl-ok' : 'ctrl-warn'"
-          >
-            <template v-if="bindingClash(b.token)">⚠ js{{ instanceOf(b.token) }} misassigned</template>
-            <template v-else-if="isConnected(b)">✓ {{ b.device }}</template>
-            <template v-else>⚠ {{ b.device ?? "unknown" }} — not connected</template>
-          </span>
-        </li>
-      </ul>
-    </section>
-
-    <section class="live">
-      <h2>Live input</h2>
-      <p v-if="events.length === 0" class="empty">
-        Press a button or move an axis…
-      </p>
-      <ol v-else class="events">
-        <li v-for="(ev, i) in events" :key="i">
-          <span class="ev-device">{{ nameFor(ev.guid) }}</span>
-          <span class="ev-detail mono">{{ describe(ev) }}</span>
-        </li>
-      </ol>
-    </section>
-
-    <section class="actions">
-      <h2>Actions</h2>
-      <div class="action-scroll">
-        <div v-for="map in actionMaps" :key="map.name" class="action-group">
-          <div class="group-head">{{ map.label ?? map.name }}</div>
-          <ul>
-            <li v-for="a in map.actions" :key="a.name">{{ actionText(a) }}</li>
-          </ul>
-        </div>
-      </div>
-    </section>
-    </template>
-
-    <ProfileEditor v-else :devices="devices" @notify="notify" @saved="onProfilesSaved" />
-
-    <div class="toasts">
-      <div v-for="t in toasts" :key="t.id" :class="['toast', t.type]">
-        {{ t.message }}
-      </div>
     </div>
+
+    <div v-else-if="mode === 'tools'" class="content" />
+
+    <ProfileEditor v-else-if="mode === 'devices'" :devices="devices" @notify="notify" @saved="onProfilesSaved" />
+
+    <Toasts :toasts="toasts" />
   </main>
 </template>
 
 <style scoped>
-.container {
-  max-width: 820px;
-  margin: 0 auto;
-  padding: 1.5rem;
-}
-
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-h1 {
-  margin: 0;
-  font-size: 1.6rem;
-}
-
-h2 {
-  font-size: 1.1rem;
-  margin: 1.5rem 0 0.5rem;
-}
-
-.modes {
-  display: flex;
-  gap: 0.35rem;
-  margin-right: auto;
-  margin-left: 1rem;
-}
-
-.modes button {
-  padding: 0.25em 0.8em;
-  font-size: 0.85rem;
-  box-shadow: none;
-  border: 1px solid rgba(128, 128, 128, 0.4);
-  background: transparent;
-  color: inherit;
-}
-
-.modes button.on {
-  border-color: #396cd8;
-  background: rgba(57, 108, 216, 0.14);
-}
-
-.hwprofiles {
+.app {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-base);
 }
 
-.hwprofile {
-  border: 1px solid rgba(128, 128, 128, 0.3);
-  border-radius: 10px;
-  padding: 0.9rem 1rem;
-  background: rgba(128, 128, 128, 0.06);
+/* No column gap: the row splitter between stage and deck carries the 16px. */
+.content {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  padding: 12px 16px 16px;
+  min-height: 0;
 }
 
-.hp-head {
+.top-row {
   display: flex;
-  align-items: center;
-  gap: 0.6rem;
+  align-items: stretch;
+  gap: 16px;
+  margin-bottom: 16px;
 }
 
-.hp-dev {
-  font-weight: 600;
-}
-
-.hp-name {
-  font-size: 0.85rem;
-  opacity: 0.7;
-}
-
-.hp-pick {
-  padding: 0.25em 0.5em;
-  border-radius: 6px;
-  border: 1px solid rgba(128, 128, 128, 0.4);
-  background: transparent;
-  color: inherit;
-  font-family: inherit;
-  font-size: 0.85rem;
-}
-
-.hint {
-  font-size: 0.85rem;
-  opacity: 0.7;
-  line-height: 1.4;
-}
-
-.error {
-  color: #c0392b;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  white-space: pre-wrap;
-}
-
-.empty {
-  opacity: 0.7;
-}
-
-.devices {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.devices-panel {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-surface);
+  border-radius: var(--radius-panel);
+  padding: 12px 16px 16px;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 12px;
 }
 
-.device {
-  border: 1px solid rgba(128, 128, 128, 0.3);
-  border-radius: 10px;
-  padding: 0.9rem 1rem;
-  background: rgba(128, 128, 128, 0.06);
-}
-
-.device-name {
-  font-weight: 600;
-  margin-bottom: 0.5rem;
-}
-
-.js-mapped {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #2e7d32;
-  background: rgba(46, 125, 50, 0.14);
-  border-radius: 4px;
-  padding: 0.05rem 0.35rem;
-  margin-left: 0.4rem;
-  white-space: nowrap;
-}
-
-.js-clash {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #c0392b;
-  background: rgba(192, 57, 43, 0.14);
-  border-radius: 4px;
-  padding: 0.05rem 0.35rem;
-  margin-left: 0.4rem;
-  white-space: nowrap;
-}
-
-.js-new {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #999;
-  background: rgba(128, 128, 128, 0.14);
-  border-radius: 4px;
-  padding: 0.05rem 0.35rem;
-  margin-left: 0.4rem;
-  white-space: nowrap;
-}
-
-.js-unverified {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #b9770e;
-  background: rgba(230, 126, 34, 0.14);
-  border-radius: 4px;
-  padding: 0.05rem 0.35rem;
-  margin-left: 0.4rem;
-  white-space: nowrap;
-}
-
-.order-note {
-  margin: 0.75rem 0 0;
-  font-size: 0.85rem;
-  color: #b9770e;
-}
-
-.order-note code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.source-note {
-  margin: 0.75rem 0 0;
-  font-size: 0.85rem;
-  opacity: 0.75;
-}
-
-.source-note code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.js-unseen {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #7f8c8d;
-  background: rgba(127, 140, 141, 0.16);
-  border-radius: 4px;
-  padding: 0.05rem 0.35rem;
-  margin-left: 0.4rem;
-  white-space: nowrap;
-}
-
-.js-ignored {
-  font-size: 0.75rem;
-  font-weight: 600;
-  font-style: italic;
-  color: #7f8c8d;
-  background: rgba(127, 140, 141, 0.16);
-  border-radius: 4px;
-  padding: 0.05rem 0.35rem;
-  margin-left: 0.4rem;
-  white-space: nowrap;
-}
-
-.device-ignored {
-  opacity: 0.55;
-}
-
-.ignore-toggle {
-  margin-left: auto;
-  padding: 0.15em 0.6em;
-  font-size: 0.75rem;
-  font-weight: 500;
-  box-shadow: none;
-  border: 1px solid rgba(128, 128, 128, 0.4);
-  background: transparent;
-  color: inherit;
-}
-
-.clash-banner {
-  border: 1px solid #c0392b;
-  border-radius: 10px;
-  padding: 0.8rem 1rem;
-  margin: 0.75rem 0;
-  background: rgba(192, 57, 43, 0.08);
-}
-
-.clash-title {
-  font-weight: 700;
-  color: #c0392b;
-  margin-bottom: 0.3rem;
-}
-
-.clash-body {
-  margin: 0;
-  font-size: 0.85rem;
-  opacity: 0.85;
-}
-
-.clash-body code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.clash-missing {
-  margin: 0.5rem 0 0;
-  padding-left: 1.1rem;
-  font-size: 0.85rem;
-}
-
-.resort {
-  margin-top: 0.75rem;
-  padding-top: 0.6rem;
-  border-top: 1px solid rgba(192, 57, 43, 0.3);
-  font-size: 0.85rem;
-}
-
-.resort-title {
-  font-weight: 700;
-  margin-bottom: 0.3rem;
-}
-
-.resort-moves {
-  margin: 0 0 0.5rem;
-  padding-left: 1.1rem;
-}
-
-.resort-row {
+.rail {
   display: flex;
   align-items: flex-start;
-  gap: 0.5rem;
-}
-
-.resort-cmds {
-  flex: 1;
-  margin: 0;
-  padding: 0.4rem 0.6rem;
-  border-radius: 6px;
-  background: rgba(128, 128, 128, 0.14);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.8rem;
-  overflow-x: auto;
-}
-
-.resort-hint {
-  margin: 0.5rem 0;
-  opacity: 0.8;
-}
-
-.resort-hint code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.binding-clash {
-  background: rgba(192, 57, 43, 0.08);
-  border-radius: 4px;
-}
-
-/* Clickable: lights the input on the device's profile image. */
-.binding-list li {
-  cursor: pointer;
-}
-
-.binding-pinned {
-  background: rgba(57, 108, 216, 0.14);
-  border-radius: 4px;
-}
-
-.ctrl-clash {
-  color: #c0392b;
-  font-weight: 600;
-}
-
-.idx {
-  opacity: 0.55;
-  margin-right: 0.35rem;
-}
-
-.meta {
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.pair {
-  display: flex;
-  gap: 0.5rem;
-  font-size: 0.9rem;
-}
-
-.pair dt {
-  min-width: 6.5rem;
-  opacity: 0.6;
-}
-
-.pair dd {
-  margin: 0;
-}
-
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.counts {
-  display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem;
-  font-size: 0.85rem;
-  opacity: 0.8;
-  margin-top: 0.35rem;
+  gap: 12px;
 }
 
-.axes-map {
-  font-size: 0.8rem;
-}
-
-.axes-error {
-  font-size: 0.8rem;
-  color: #b9770e;
-}
-
-.events {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  max-height: 40vh;
-  overflow-y: auto;
-  font-size: 0.9rem;
-}
-
-.events li {
-  display: flex;
-  gap: 0.75rem;
-}
-
-.ev-device {
-  min-width: 14rem;
-  opacity: 0.7;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.action-scroll {
-  max-height: 50vh;
-  overflow-y: auto;
-  border: 1px solid rgba(128, 128, 128, 0.3);
-  border-radius: 8px;
-  padding: 0.5rem 0.75rem;
-}
-
-.action-group {
-  margin-bottom: 0.75rem;
-}
-
-.group-head {
-  font-weight: 600;
-  font-size: 0.9rem;
-  opacity: 0.85;
-  margin-bottom: 0.2rem;
-}
-
-.action-group ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.action-group li {
-  font-size: 0.85rem;
-  padding: 0.05rem 0;
-}
-
-.config {
-  margin: 0.25rem 0 0.5rem;
-}
-
-.cfg-row {
+/* Empty rail: one dimmed tile in the device tile's footprint. */
+.tile-none {
+  width: 340px;
+  height: 84px;
+  box-sizing: border-box;
+  border-radius: var(--radius-panel);
+  border: 1px dashed var(--border);
+  background: var(--bg-surface-2);
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  font-size: 0.9rem;
-}
-
-.cfg-row span {
-  opacity: 0.7;
-  white-space: nowrap;
-}
-
-.cfg-row input {
-  flex: 1;
-  padding: 0.4em 0.6em;
-  border-radius: 6px;
-  border: 1px solid rgba(128, 128, 128, 0.4);
-  background: transparent;
-  color: inherit;
-  font-family: inherit;
-}
-
-.toasts {
-  position: fixed;
-  bottom: 1rem;
-  right: 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  z-index: 1000;
-}
-
-.toast {
-  padding: 0.6rem 0.9rem;
-  border-radius: 8px;
-  font-size: 0.85rem;
-  color: #fff;
-  max-width: 24rem;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
-}
-
-.toast.ok {
-  background: #2e7d32;
-}
-
-.toast.error {
-  background: #c0392b;
-}
-
-.current {
-  border: 1px solid;
-  border-radius: 10px;
-  padding: 0.8rem 1rem;
-  margin: 0.5rem 0 1rem;
-}
-
-/* blue: the input has SC bindings */
-.state-bound {
-  border-color: #396cd8;
-  background: rgba(57, 108, 216, 0.08);
-}
-
-/* grey: SC sees the device, nothing bound */
-.state-none {
-  border-color: rgba(128, 128, 128, 0.4);
-  background: rgba(128, 128, 128, 0.06);
-}
-
-/* yellow: SC doesn't see the device (unseen or excluded) */
-.state-unseen {
-  border-color: #d4a017;
-  background: rgba(212, 160, 23, 0.12);
-}
-
-.cur-head {
-  display: flex;
-  gap: 0.6rem;
-  align-items: baseline;
-  margin-bottom: 0.3rem;
-}
-
-.cur-dev {
+  justify-content: center;
+  color: var(--text-3);
+  font-size: 15px;
   font-weight: 600;
 }
 
-.cur-detail {
-  opacity: 0.7;
-  font-size: 0.85rem;
-}
-
-.cur-actions {
-  font-size: 1.05rem;
-}
-
-.cur-ctx {
-  opacity: 0.5;
-  font-size: 0.8rem;
-}
-
-.cur-none {
-  opacity: 0.5;
-  font-style: italic;
-}
-
-.binding-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  max-height: 40vh;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  font-size: 0.85rem;
-}
-
-.binding-list li {
-  display: flex;
-  gap: 0.75rem;
-  align-items: baseline;
-}
-
-.tok {
-  min-width: 8rem;
-  opacity: 0.8;
-}
-
-.blabel {
+.deck-row {
   flex: 1;
-}
-
-.bctrl {
-  font-size: 0.8rem;
-  white-space: nowrap;
-}
-
-.ctrl-ok {
-  color: #2e7d32;
-}
-
-.ctrl-warn {
-  color: #e67e22;
-}
-
-.bound-count {
-  color: #2e7d32;
-  font-weight: 600;
-}
-
-.default-tag {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  opacity: 0.55;
-  margin-left: 0.4rem;
-  border: 1px solid rgba(128, 128, 128, 0.4);
-  border-radius: 3px;
-  padding: 0 0.3rem;
-  vertical-align: middle;
-}
-
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.5em 1.1em;
-  font-size: 0.95em;
-  font-weight: 500;
-  font-family: inherit;
-  cursor: pointer;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-  transition: border-color 0.25s;
-}
-
-button:hover:not(:disabled) {
-  border-color: #396cd8;
-}
-
-button:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-</style>
-
-<style>
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-body {
-  margin: 0;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    /* Native controls (select popups, checkboxes) follow the dark theme. */
-    color-scheme: dark;
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
-
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
+  display: grid;
+  grid-template-columns: 400px 16px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
 }
 </style>

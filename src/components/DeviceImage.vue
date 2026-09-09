@@ -38,7 +38,7 @@ function polyPoints(a: HwArea): string {
 function symbolTransform(a: HwArea): string {
   if (a.shape.kind !== "symbol") return "";
   const s = symbolPx(a.shape, W.value, H.value);
-  return `translate(${s.x} ${s.y}) rotate(${s.rotation}) scale(${s.scale}) translate(-50 -50)`;
+  return `translate(${s.x} ${s.y}) rotate(${s.rotation}) scale(${s.scaleX} ${s.scaleY}) translate(-50 -50)`;
 }
 </script>
 
@@ -80,13 +80,18 @@ function symbolTransform(a: HwArea): string {
 <style scoped>
 .device-image {
   position: relative;
-  width: 100%;
+  display: inline-block;
+  max-width: 100%;
   line-height: 0;
 }
 
+/* The image sizes the box (fits width and, via the parent's --image-max-h,
+   height); the SVG overlay stretches over it. */
 .device-image img {
   display: block;
-  width: 100%;
+  max-width: 100%;
+  max-height: var(--image-max-h, none);
+  width: auto;
   height: auto;
 }
 

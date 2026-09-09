@@ -32,9 +32,9 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::{config, AppData};
 
-/// Current profile.json format. Format 1 (several `images`, areas tied to
-/// one by id) is not read — nothing shipped with it.
-pub const FORMAT: u32 = 2;
+/// Current profile.json format. Older ones (1: several `images`; 2: square
+/// `size` symbols, `variant`) are not read — nothing shipped with them.
+pub const FORMAT: u32 = 3;
 
 const PROFILE_FILE: &str = "profile.json";
 
@@ -74,10 +74,12 @@ pub enum Shape {
     Symbol {
         /// `arrow`, `cw` or `ccw`.
         symbol: String,
+        /// Center.
         x: f64,
         y: f64,
-        /// Relative to the image width.
-        size: f64,
+        /// Box the 100x100 symbol path is stretched into (may be non-square).
+        w: f64,
+        h: f64,
         #[serde(default)]
         rotation: f64,
     },
@@ -102,8 +104,6 @@ pub struct HwProfile {
     pub hardware_id: String,
     #[serde(default)]
     pub hardware_name: String,
-    #[serde(default)]
-    pub variant: String,
     pub image: HwImage,
     #[serde(default)]
     pub areas: Vec<HwArea>,
@@ -125,7 +125,6 @@ pub struct HwProfileSummary {
     pub name: String,
     pub hardware_id: String,
     pub hardware_name: String,
-    pub variant: String,
     pub source: ProfileSource,
     pub area_count: usize,
 }
@@ -137,7 +136,6 @@ impl HwProfileSummary {
             name: p.name.clone(),
             hardware_id: p.hardware_id.clone(),
             hardware_name: p.hardware_name.clone(),
-            variant: p.variant.clone(),
             source,
             area_count: p.areas.len(),
         }
@@ -287,7 +285,6 @@ pub fn create(
     name: &str,
     hardware_id: &str,
     hardware_name: &str,
-    variant: &str,
     image_source: &Path,
 ) -> Result<HwProfile, String> {
     let id = uuid::Uuid::new_v4().to_string();
@@ -300,7 +297,6 @@ pub fn create(
         name: name.to_string(),
         hardware_id: hardware_id.to_string(),
         hardware_name: hardware_name.to_string(),
-        variant: variant.to_string(),
         image,
         areas: Vec::new(),
     };
@@ -511,18 +507,10 @@ pub(crate) fn create_hw_profile(
     name: String,
     hardware_id: String,
     hardware_name: Option<String>,
-    variant: String,
     image_path: String,
     app: AppHandle,
 ) -> Result<HwProfile, String> {
-    create(
-        &user_root(&app)?,
-        &name,
-        &hardware_id,
-        hardware_name.as_deref().unwrap_or(""),
-        &variant,
-        Path::new(&image_path),
-    )
+    create(&user_root(&app)?, &name, &hardware_id, hardware_name.as_deref().unwrap_or(""), Path::new(&image_path))
 }
 
 #[tauri::command]
@@ -619,7 +607,6 @@ mod tests {
             name: name.into(),
             hardware_id: "{0200231D-0000-0000-0000-504944564944}".into(),
             hardware_name: "Test Stick".into(),
-            variant: "stock".into(),
             image: HwImage { file: "top.png".into(), label: "Top".into() },
             areas: vec![HwArea {
                 id: "a1".into(),
@@ -638,9 +625,9 @@ mod tests {
 
     #[test]
     fn shape_json_uses_kind_tag() {
-        let json = r#"{"kind":"symbol","symbol":"arrow","x":0.3,"y":0.3,"size":0.05,"rotation":90}"#;
+        let json = r#"{"kind":"symbol","symbol":"arrow","x":0.3,"y":0.3,"w":0.05,"h":0.02,"rotation":90}"#;
         let s: Shape = serde_json::from_str(json).unwrap();
-        assert!(matches!(s, Shape::Symbol { rotation, .. } if rotation == 90.0));
+        assert!(matches!(s, Shape::Symbol { rotation, h, .. } if rotation == 90.0 && h == 0.02));
         let back = serde_json::to_value(&s).unwrap();
         assert_eq!(back["kind"], "symbol");
         // Polygon has no rotation; rect rotation defaults.
@@ -732,14 +719,14 @@ mod tests {
         let (bundled, user) = (t.path("bundled"), t.path("user"));
         let src = t.path("My Stick Top.PNG");
         fs::write(&src, PNG).unwrap();
-        let p = create(&user, "New", "{GUID}", "Stick", "stock", &src).unwrap();
+        let p = create(&user, "New", "{GUID}", "Stick", &src).unwrap();
         assert_eq!(p.id.len(), 36);
         assert_eq!(p.image.file, "My Stick Top.PNG");
         assert_eq!(p.image.label, "My Stick Top");
         assert!(user.join(&p.id).join(PROFILE_FILE).is_file());
         assert!(user.join(&p.id).join("My Stick Top.PNG").is_file());
         // No image, no profile.
-        assert!(create(&user, "No", "{GUID}", "Stick", "", &t.path("missing.png")).is_err());
+        assert!(create(&user, "No", "{GUID}", "Stick", &t.path("missing.png")).is_err());
 
         // Same source again: file name de-duplicated.
         let img2 = add_image(&bundled, &user, &p.id, &src).unwrap();

@@ -44,8 +44,8 @@ The core loop is closed end-to-end:
    `config.json`) declares a device SC never sees (e.g. a keyboard Wine hides);
    it then counts as unplugged.
 8. **HW profiles** (2026-09-09): a "HW profiles" mode with an editor — pick a
-   device, create a profile via an inline form (name, variant, and the
-   mandatory image the areas are drawn on; Replace image later keeps the
+   device, create a profile via an inline form (name, then the mandatory
+   image — picking it creates the profile; Replace image later keeps the
    areas) or pick one, press an input, draw areas
    (rect / ellipse / polygon / arrow / cw / ccw), save; zip export/import; bundled profiles from
    `resources/profiles/` (none shipped yet). The Live view shows one image
@@ -66,12 +66,26 @@ The core loop is closed end-to-end:
    cannot be read or placed carry `axes_error` (shown on the tile, e.g. a
    `/dev/hidraw` without permission) and get no axis tokens.
 
-GUI: mode switch (Live / HW profiles), config (SC base path), device tiles
-(name, `✓ jsN` / clash / `not seen by SC` / `excluded`, counts, SC axis names
-or the axes error, Exclude toggle), Game.log line with local timestamp, clash banner (missing slots,
-resort moves, commands + Copy, Rewrite button), live tile, HW
-profile images, bindings list (with `default` / `not in HW profile` tags,
-click to pin), actions list, live event log, toasts.
+GUI (redesigned 2026-09-09, phases 0-2 of the plan in the design session;
+look = RSI Pledge-Store palette + cyan live accent, Bai Jamjuree / Share Tech
+Mono bundled locally, tokens in `src/styles/tokens.css`, icons in
+`components/Icon.vue`): top bar with modes **Live / Tools / Devices**, install
+slug chip, Refresh, gear (Settings dialog). Live = "Connected devices" panel
+(status dot, name, `jsN` chip, counts; a `None` tile when empty) next to a
+"Status" panel (`No issues`, or one tile per issue: load error, `No device order
+found`, `<name> jsN missing`, `Order clash` with `Fix via config` /
+`Fix via console` and slot chips); an image stage with one tile per device
+(image-map or `No image-map` placeholder, move left/right buttons, draggable
+splitters, shares/order remembered in localStorage); a row splitter; the
+"Last input" card (label big, device, one row per bound action + category);
+the bindings deck (tabs Bindings / Actions / Log, chips All / jsN, search over
+label + action, columns DEVICE / INPUT / LABEL / ACTION / CATEGORY, held input
+tinted, rows without an image-map area greyed with a tooltip, click to pin;
+Log = device dump + raw events). Settings dialog: install path + Browse, action
+labels (bundled / global.ini stub), excluded devices as chips; nothing applies
+before Save. Tools = empty placeholder. Devices = the old `ProfileEditor`
+(unstyled, "IMAGE-MAPS" title only). Vocabulary and the remaining phases: see
+the memory `gui-naming-decisions` and the plan below.
 
 ## Verified facts (this hardware)
 
@@ -137,7 +151,7 @@ click to pin), actions list, live event log, toasts.
 
 - **Untested in the GUI** as of the 2026-09-09 commits: Konva transform math
   (rect rotation most likely to bite), file dialogs, zip import/export, live
-  highlighting, the single-image switch (format 2: the New form with its
+  highlighting, the single-image switch (format 3: the New form with its
   image pick, Replace image), and the axis path (live tile, blue axis areas,
   pinning axis bindings). `pnpm build`, `cargo test` and the headless
   `enum_joysticks` (prints `SC axes: x y z rotx roty rotz` for both VKBs).
@@ -151,21 +165,40 @@ click to pin), actions list, live event log, toasts.
   extension; import extracts every zip entry, referenced or not
   (path escapes are rejected). Broken profile folders are logged to stderr
   only.
-- Refresh button also shows in HW profiles mode (only refreshes devices).
-- The device tile's `not in profile` means SC's binding profile
-  (`actionmaps.xml`) — consider `not in actionmaps` to keep it apart from HW
-  profiles.
-- Symbol transformer keeps symbols square (x scale wins).
+- Refresh button also shows in Devices mode (only refreshes devices).
 - Axis areas can be drawn and pulse on movement, but have no SC token mapping
   (see the axis item above), so they never turn blue and are not clickable in
   the bindings list.
+
+### GUI redesign — remaining phases (plan in the 2026-09-09 design session)
+
+- **Phase 3 — Devices mode**: rename `hwprofile` -> `imagemap` (rs/ts,
+  commands, `resources/profiles/` -> `resources/imagemaps/`, app-data folder
+  with migration, config key `profile_choices` -> `imagemap_choices`); bundled
+  image-maps become hard read-only (no edit, no delete, no silent fork) with a
+  new `clone_imagemap(id, name)` command; editor UI per the canvas (device
+  list without state, image-map list with lock / clone / trash, shape-tool
+  icon bar, SDL-key input card, areas list, Discard / Save, unsaved-changes
+  guard). Zero SC data in that mode.
+- **Phase 4 — Tools mode**: `mappings.rs` (SC mapping-profile XMLs in
+  `<base>/user/client/0/controls/mappings/`, import/export), `backups.rs`
+  (`<app_data>/backups/<ts>/` + `meta.json` reason; `apply_resort` writes
+  there instead of the `.bak`), `diff.rs` (`diff_bindings`), then the Tools UI
+  (profiles list, backups list with restore, Compare A/B with chips).
+  Needs a real SC-exported mapping XML to verify the parser first.
+- **Phase 5 — cleanup**: dead code, docs, first bundled image-map.
+- Open: source for the game version chip (`build_manifest.id` next to
+  `Data.p4k`?); `labels_source` in `config.rs` for the global.ini stub.
+- **GUI-unverified after the redesign**: splitter dragging and the folder
+  dialog under WebKitGTK, image fitting with a real image-map, the Status
+  panel with a real clash / missing device / missing Game.log.
 
 ## Testing
 
 - `cd src-tauri && cargo test --lib` — 47 tests (+1 ignored). The ignored one
   (`converts_real_hardware_guids`) checks the author's real GUIDs; run with
   `cargo test -- --ignored`.
-- Frontend: `pnpm build` (vue-tsc typechecks).
+- Frontend: `pnpm build` (vue-tsc typechecks, `noUnusedLocals` is on).
 - The real GUI test is `pnpm tauri dev` with a configured SC base path — Claude
   can't run the GUI headless, so that verification is the user's.
 - Evidence for the device-order facts: `temp/joyenumtest/` (gitignored) —

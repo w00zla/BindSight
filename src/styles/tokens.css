@@ -1,0 +1,34 @@
+/* Design tokens, derived from the RSI style extract. This is the only place
+   colours (and the other base design values below) live — everything else
+   references these custom properties. */
+:root {
+  --bg-base: #0a1d29;
+  --bg-surface: #0f2c3e;
+  --bg-surface-2: #143a52;
+  --bg-surface-3: #194967;
+
+  --border: #1e4a66;
+  --border-dim: #143a52;
+
+  --accent: #54adf7;
+  --accent-text: #000;
+  --live: #4ee0ff;
+
+  --text: #ffffff;
+  --text-2: #add3eb;
+  --text-3: rgba(173, 211, 235, 0.55);
+
+  --ok: #4fd28a;
+  --warn: #f2b34c;
+  --err: #ff5c6c;
+
+  --radius-panel: 8px;
+  --radius-control: 4px;
+
+  --h-control: 36px;
+  --h-chip: 32px;
+  --h-chip-sm: 28px;
+
+  --font-ui: "Bai Jamjuree", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Share Tech Mono", Consolas, monospace;
+}

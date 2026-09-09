@@ -1,0 +1,29 @@
+@import "./tokens.css";
+@import "./fonts.css";
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  background: var(--bg-base);
+  color: var(--text);
+  font-family: var(--font-ui);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* Small uppercase title inside a panel or card ("LAST INPUT", "IMAGE-MAPS"). */
+.panel-title {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}

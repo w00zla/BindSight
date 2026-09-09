@@ -18,11 +18,17 @@ See `HANDOFF.md` for the current working state.
 ## Stack
 
 - **Shell/backend**: Tauri v2 + Rust (`src-tauri/`).
-- **Frontend**: Vue 3 + TypeScript + Vite (`src/`). `App.vue` holds the Live
-  view and the mode switch; `components/ProfileEditor.vue` is the HW profile
-  editor (Konva via `vue-konva`), `components/DeviceImage.vue` the plain-SVG
-  viewer; `hwprofile.ts` the shared profile types/helpers, `types.ts` the
-  device/input types.
+- **Frontend**: Vue 3 + TypeScript + Vite (`src/`). `App.vue` is the
+  orchestrator (all state, invokes, listeners) and composes presentational
+  components: `TopBar`, `DeviceTile`, `StatusPanel`, `ImageStage` (+
+  `Splitter`), `LiveCard`, `BindingsDeck`, `SettingsDialog`, `Toasts`, `Icon`
+  (inline stroke SVGs by name — never emoji). `components/ProfileEditor.vue`
+  is the image-map editor (Konva via `vue-konva`, still the pre-redesign UI),
+  `components/DeviceImage.vue` the plain-SVG viewer; `hwprofile.ts` the
+  shared image-map types/helpers, `types.ts` all device/input/binding types.
+  Design tokens live in `src/styles/tokens.css` (the only place colours are
+  defined), fonts are bundled under `src/assets/fonts/` (OFL). GUI text is
+  terse: one-word states, no explanatory sentences.
 - **Input**: SDL2 raw joystick API (`sdl2` crate) for buttons/axes/hats;
   `hidapi` for the HID product string (SC's device name) and later axis usages.
 - **XML/INI**: `quick-xml` + hand-rolled parsing.
@@ -59,17 +65,17 @@ See `HANDOFF.md` for the current working state.
 - `lib.rs` — Tauri commands, state wiring, the input thread spawn, the Wayland
   DMABUF workaround.
 
-## HW profile data model (`profile.json`, format 2)
+## HW profile data model (`profile.json`, format 3)
 
 - Keyed by `hardware_id` = SC Product GUID (vendor/product, platform-stable);
-  several profiles per id are normal (`variant`: stock / addon builds).
+  several profiles per id are normal (told apart by `name`).
 - **Exactly one image per profile** (`image: {file, label}`, mandatory — a
   profile is created around its image file, areas belong to it implicitly).
   Format 1 (`images[]`, areas tied to an image id) is not read.
 - Areas map an **SDL-level** input key (`button:N`, `hat:N:<dir>`, `axis:N`,
   no axis sign — SC has none) to a shape on the image: `rect`, `ellipse`,
-  `polygon`, or `symbol` (`arrow` rotatable, `cw`, `ccw`). Several areas per
-  input are fine.
+  `polygon`, or `symbol` (`arrow`, `cw`, `ccw`: the 100x100 path stretched
+  into a `w` x `h` box, rotatable). Several areas per input are fine.
 - All coordinates are normalized 0..1 to the image's natural size, rotation
   in degrees around the shape's center. The model is ours, never Konva's JSON —
   the canvas lib is only the editor's interaction layer.

@@ -1,0 +1,31 @@
+@font-face {
+  font-family: "Bai Jamjuree";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../assets/fonts/BaiJamjuree-400.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Bai Jamjuree";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("../assets/fonts/BaiJamjuree-600.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Bai Jamjuree";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("../assets/fonts/BaiJamjuree-700.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Share Tech Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../assets/fonts/ShareTechMono-400.woff2") format("woff2");
+}
