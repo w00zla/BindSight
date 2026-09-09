@@ -26,7 +26,7 @@ The core loop is closed end-to-end:
    from `defaultProfile.xml` for every action the user never rebound (tagged
    `is_default`). A blank js rebind (`js1_ `) counts as "deliberately unbound";
    a keyboard/mouse/gamepad-only rebind leaves the joystick default in place.
-4. **Live**: pressing a button/hat shows the resolved action(s) in the live tile
+4. **Monitor**: pressing a button/hat shows the resolved action(s) in the live tile
    — blue = bound, grey = nothing bound, yellow = SC doesn't see the device.
    Without an SC token the SDL input name (`button 5`, `hat 0 up`) is shown.
 5. **Device order / clash**: `Game.log` (`Connected joystickN: <Product {GUID}>`,
@@ -58,14 +58,14 @@ The core loop is closed end-to-end:
    image — picking it creates the image-map; Replace image later keeps the
    areas) or pick one, press an input, draw areas
    (rect / ellipse / polygon / arrow / cw / ccw), save; zip export/import; bundled image-maps from
-   `resources/imagemaps/` (none shipped yet). The Live view shows one image
+   `resources/imagemaps/` (none shipped yet). The Monitor view shows one image
    block per connected device that has an image-map (select when several match
    the hardware id) and lights the active inputs: buttons while
    held, hats until centered, axes as a 400 ms pulse; blue when SC has a
    binding, grey otherwise. A bound input the image-map lacks raises a toast and
    a `not in image-map` tag in the bindings list; clicking a binding row pins
    its area(s), or a toast says why it cannot. While the editor is open the
-   Live view ignores joystick input. See `CLAUDE.md` for the data model.
+   Monitor view ignores joystick input. See `CLAUDE.md` for the data model.
 
 9. **Axes** (2026-09-09): `DeviceInfo::axes` holds the SC axis name per SDL
    axis index, derived from the HID report descriptor (`hid.rs`, read via
@@ -73,7 +73,7 @@ The core loop is closed end-to-end:
    handles `kind = "axis"`, so moving an axis shows its binding in the live
    tile (resolved at most every 150 ms per axis) and lights its image-map
    area blue; the bindings list can pin axis areas. Devices whose descriptor
-   cannot be read or placed carry `axes_error` (Log tab and stderr only, never
+   cannot be read or placed carry `axes_error` (Devices log and stderr only, never
    on the device tiles, e.g. a `/dev/hidraw` without permission) and get no
    axis tokens.
 
@@ -90,8 +90,10 @@ The core loop is closed end-to-end:
 GUI (redesigned 2026-09-09, phases 0-2 of the plan in the design session;
 look = RSI Pledge-Store palette + cyan live accent, Bai Jamjuree / Share Tech
 Mono bundled locally, tokens in `src/styles/tokens.css`, icons in
-`components/Icon.vue`): top bar with modes **Live / Tools / Devices**, install
-slug chip, Refresh, gear (Settings dialog). Live = "Connected devices" panel
+`components/Icon.vue`): top bar with modes **Monitor / Bindings / Devices**
+(renamed 2026-09-09 from Live / Tools; code ids `live` / `tools` unchanged),
+install slug chip, version chip, Refresh, gear (Settings dialog). Monitor =
+"Connected devices" panel
 (status dot, name, `jsN` chip, counts; a `None` tile when empty) next to a
 "Status" panel (`No issues`, or one tile per issue: load error, `No device order
 found`, `<name> jsN missing`, `Order clash` with `Fix via config` /
@@ -99,21 +101,33 @@ found`, `<name> jsN missing`, `Order clash` with `Fix via config` /
 (image-map or `No image-map` placeholder, move left/right buttons, draggable
 splitters, shares/order remembered in localStorage); a row splitter; the
 "Last input" card (label big, device, one row per bound action + category);
-the bindings deck (tabs Bindings / Actions / Log, chips All / jsN, search over
+the bindings deck ("Bindings" panel title, chips All / jsN, search over
 label + action, columns DEVICE / INPUT / LABEL / ACTION / CATEGORY, held input
-tinted, rows without an image-map area greyed with a tooltip, click to pin;
-Log = device dump + raw events). Settings dialog: install path + Browse, action
-labels (bundled / global.ini stub), excluded devices as chips; nothing applies
-before Save. Tools = `ToolsView`: binding profiles and backups on the left
-(Import / Export / New, Backup now, restore and delete behind `ConfirmDialog`),
-the Compare panel on the right (A/B source chips, kind and `jsN` filter chips,
-search, one tinted row per differing token). Devices = `ImageMapEditor`, three
-columns (devices + their image-maps with clone / lock / trash / New and
-Import / Export; the Konva canvas with the name, the six shape tools,
-Replace image and zoom; the live SDL-key card with Add area / Delete, the
-areas list with filter, and Discard / Save), unsaved changes guarded by
-`ConfirmDialog`. Vocabulary and the remaining phases: see
-the memory `gui-naming-decisions` and the plan below.
+tinted, rows without an image-map area greyed with a tooltip, click to pin).
+Settings dialog: install path + Browse, action labels (bundled / global.ini
+stub), excluded devices as chips; nothing applies before Save. Bindings =
+`ToolsView`: on the left the "Game bindings" panel (SC's action list grouped
+by category, capped at 40 % of the column), binding profiles and backups
+(Import / Export / New, Backup now, restore and delete behind
+`ConfirmDialog`), the Compare panel on the right (A/B source chips, kind and
+`jsN` filter chips, search, one tinted row per differing token). Devices =
+`ImageMapEditor`, three columns (devices + their image-maps with clone / lock
+/ trash / New and Import / Export / Log; the Konva canvas with the name, the
+six shape tools, Replace image and zoom; the live SDL-key card with Add area
+/ Delete, the areas list with filter, and Discard / Save), unsaved changes
+guarded by `ConfirmDialog`. The Log toggle swaps the canvas for the raw log
+(device dump + the last 500 input events, collected in every mode) with
+Clear and Save (text file via the `write_text_file` command).
+
+**Tables** (2026-09-09): the bindings deck and Compare share
+`tableColumns.ts` + `ColumnHead.vue` — click a header to sort (default
+INPUT ascending, natural order, tie-break by token), drag the grip in the
+column gap to resize, double-click to reset; the last column is the `1fr`
+filler, the others have px defaults, the user's widths and the sort persist
+in localStorage (`bindsight.columns.<table>`). Rows keep a min-width so a
+narrow panel scrolls horizontally under a sticky header; every cell
+truncates with an ellipsis. Vocabulary and the remaining phases: see the
+memory `gui-naming-decisions` and the plan below.
 
 ## Verified facts (this hardware)
 
@@ -154,7 +168,21 @@ the memory `gui-naming-decisions` and the plan below.
   is emitted as a chain of swaps anchored on the cycle's first slot. Test
   in-game with 3 devices before trusting a multi-command list.
 - **After an in-game resort** SC rewrites `actionmaps.xml`; the app reloads
-  the profile only via Load (base path) or its own Rewrite — hit Load.
+  the profile via Refresh (full: devices, actionmaps.xml, Game.log), on a
+  base-path change, or its own Rewrite. Hot-plug (`devices-changed`) and
+  startup only re-list devices (2026-09-09; SDL raises one event per device
+  at start, the install has not changed).
+- **SC data (2026-09-09)**: `scripts/fetch-starbreaker.ps1` is untested
+  (no PowerShell here; `-MaximumRetryCount` needs PowerShell 6+, drop it for
+  5.1). Old cache versions under `<app_cache_dir>/` are never cleaned
+  (~100 KB per SC patch; the `v1/` format layer was dropped on 2026-09-09,
+  an existing `v1/` folder is just dead weight). The StarBreaker version is
+  pinned in both fetch scripts; bump version + SHA256 there when updating.
+  No re-extract button: delete the version's cache folder to force one.
+- **Logging (2026-09-09)**: Settings has "Open log folder" (`open_log_dir`
+  command via the opener plugin, GUI-unverified); the README lists the
+  paths. Frontend `console.*` is forwarded, but the frontend itself only
+  logs `frontend mounted` so far.
 - **Game.log staleness**: it reflects the last game start; an SDL device not in
   it is either hidden or plugged in later — Exclude disambiguates by hand.
 - **Axes: Windows unverified.** The SDL-index rule is verified on Linux
@@ -211,14 +239,14 @@ the memory `gui-naming-decisions` and the plan below.
   icon bar, SDL-key input card, areas list, Discard / Save, unsaved-changes
   guard) — **done (2026-09-09)** as `ImageMapEditor` (renamed from the old
   editor) plus a new `ConfirmDialog`. Zero SC data in that mode.
-- **Phase 4 — Tools mode**: `binding_profiles.rs` (SC binding-profile XMLs in
+- **Phase 4 — Bindings mode** (was "Tools mode"): `binding_profiles.rs` (SC binding-profile XMLs in
   `<base>/user/client/0/controls/mappings/`, import/export) — **done
   (2026-09-09)**: `BindingProfileSummary` (file, name from `profileName` else the
   file stem, joystick binding count via `resolve_bindings`, mtime), `list`/
   `import`/`export` as plain file-copy in/out of `controls/mappings/` —
   applying a layout into the live `actionmaps.xml` is explicitly not this
-  module's job; verified against a real export
-  (`data/extracted/layout_w00z14_exported.xml`, gitignored). `backups.rs` —
+  module's job; verified against a real export (since deleted with the old
+  `data/` folder). `backups.rs` —
   **done (2026-09-09)**: one folder per backup (`meta.json` + `actionmaps.xml`)
   under `<app_data>/backups/<id>/`, id = `YYYYMMDD-HHMMSS` (UTC) with a
   collision suffix; `create`/`list`/`path_of`/`delete`/`restore` (restore
@@ -230,7 +258,7 @@ the memory `gui-naming-decisions` and the plan below.
   (added), B only (removed), or both with a different `(actionmap, action)`
   set (changed) — a label-only difference never counts; plus the
   `compare_bindings` command with a `Source` (Current/Profile/Backup) per
-  side. The Tools UI — **done (2026-09-09)** as `ToolsView`: binding-profile
+  side. The Bindings-mode UI — **done (2026-09-09)** as `ToolsView`: binding-profile
   list (Current row + one row per layout, Import / Export, New disabled),
   backup list (Backup now, restore / delete via `ConfirmDialog`, restore hands
   the `LoadStatus` back to `App.vue`), and the Compare panel (A/B source
@@ -241,17 +269,28 @@ the memory `gui-naming-decisions` and the plan below.
 - **GUI-unverified after the redesign**: splitter dragging and the folder
   dialog under WebKitGTK, image fitting with a real image-map, the Status
   panel with a real clash / missing device / missing Game.log, and the whole
-  Tools UI (import/export file dialogs, backup create / restore / delete,
-  Compare against a real layout).
+  Bindings-mode UI (import/export file dialogs, backup create / restore /
+  delete, Compare against a real layout). Also GUI-unverified (2026-09-09):
+  the Game bindings panel's 40 % cap, the Devices log view and its Save
+  dialog.
 
 ## Testing
 
-- `cd src-tauri && cargo test --lib` — 72 tests (+1 ignored). The ignored one
+- `cd src-tauri && cargo test --lib` — 78 tests (+1 ignored). The ignored one
   (`converts_real_hardware_guids`) checks the author's real GUIDs; run with
   `cargo test -- --ignored`.
 - Frontend: `pnpm build` (vue-tsc typechecks, `noUnusedLocals` is on).
-- The real GUI test is `pnpm tauri dev` with a configured SC base path — Claude
-  can't run the GUI headless, so that verification is the user's.
+- The real GUI test is `pnpm tauri dev` with a configured SC base path.
+  When another session already holds port 1420, build a self-contained
+  binary instead: `pnpm tauri build --debug --no-bundle`, run
+  `src-tauri/target/debug/bindsight`, read `bindsight.log`, and screenshot
+  under KDE/Wayland by raising the window with a KWin script
+  (`workspace.activeWindow = w` for the caption `BindSight`, loaded via
+  `qdbus org.kde.KWin /Scripting loadScript`) and `spectacle -a -b -n -o`.
+- The SC-data failure paths (step bar, red tile, empty bindings) are
+  testable without touching the config: replace `target/debug/starbreaker`
+  (Tauri re-copies it on every build) with a shell wrapper that sleeps or
+  exits 1, and delete `~/.cache/com.w00zla.bindsight` to force a load.
 - Evidence for the device-order facts: `temp/joyenumtest/` (gitignored) —
   fresh/rebound actionmaps per platform, `i_DumpDeviceInformation` screenshots,
   `enum_joysticks` output.
@@ -259,7 +298,7 @@ the memory `gui-naming-decisions` and the plan below.
 ## Working data
 
 The extracted SC files live only transiently in the cache dir during a load;
-the cached JSON per version is under `<app_cache_dir>/v1/<label>/` (Linux:
+the cached JSON per version is under `<app_cache_dir>/<label>/` (Linux:
 `~/.cache/com.w00zla.bindsight/`). For offline parsing (the `parse_*`
 examples) extract them by hand:
 `src-tauri/binaries/starbreaker-<triple> p4k extract --p4k <Data.p4k> -o <dir> --regex '...' --convert cryxml`

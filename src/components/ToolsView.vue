@@ -3,8 +3,11 @@ import { computed, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
+import ColumnHead from "./ColumnHead.vue";
+import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
 import ConfirmDialog, { type ConfirmButton } from "./ConfirmDialog.vue";
 import type {
+  ActionMap,
   ActionRef,
   BackupSummary,
   BindingProfileSummary,
@@ -16,11 +19,13 @@ import type {
   ResolvedBinding,
 } from "../types";
 
-const props = defineProps<{ bindings: ResolvedBinding[] }>();
+const props = defineProps<{ bindings: ResolvedBinding[]; actionMaps: ActionMap[] }>();
 const emit = defineEmits<{
   notify: [message: string, type: "ok" | "error"];
   restored: [status: LoadStatus];
 }>();
+
+const actionCount = computed(() => props.actionMaps.reduce((n, m) => n + m.actions.length, 0));
 
 const profiles = ref<BindingProfileSummary[]>([]);
 const backups = ref<BackupSummary[]>([]);
@@ -261,13 +266,47 @@ function haystack(row: DiffRow): string {
   return [row.token, ...refs.map((r) => r.action), ...refs.map((r) => r.label ?? "")].join(" ").toLowerCase();
 }
 
+const COLUMNS: ColumnSpec[] = [
+  { key: "sign", label: "", width: 28 },
+  { key: "device", label: "DEVICE", width: 70 },
+  { key: "input", label: "INPUT", width: 130 },
+  { key: "action", label: "ACTION", width: 300 },
+  { key: "a", label: "A", width: 260 },
+  { key: "b", label: "B", width: null },
+];
+const cols = useTableColumns("bindsight.columns.compare", COLUMNS, { key: "input", dir: "asc" });
+// The A/B headers carry the source names.
+const columns = computed<ColumnSpec[]>(() =>
+  COLUMNS.map((c) =>
+    c.key === "a" || c.key === "b" ? { ...c, label: nameFor(c.key === "a" ? aKey.value : bKey.value).toUpperCase() } : c,
+  ),
+);
+
+function cellValue(r: DiffRow, key: string): string | number {
+  switch (key) {
+    case "sign":
+      return r.kind;
+    case "device":
+      return r.instance ?? -1;
+    case "input":
+      return inputPart(r.token);
+    case "action":
+      return rowAction(r);
+    case "a":
+      return cellText(r.a);
+    default:
+      return cellText(r.b);
+  }
+}
+
 const filteredRows = computed<DiffRow[]>(() => {
   const q = search.value.trim().toLowerCase();
-  return (report.value?.rows ?? []).filter((r) => {
+  const rows = (report.value?.rows ?? []).filter((r) => {
     if (kindFilter.value !== "all" && r.kind !== kindFilter.value) return false;
     if (instanceFilter.value.length && (r.instance === null || !instanceFilter.value.includes(r.instance))) return false;
     return !q || haystack(r).includes(q);
   });
+  return sortRows(rows, cols.sort.value, cellValue, (a, b) => collator.compare(a.token, b.token));
 });
 
 // The action a row is about: the A side names it, else the B side.
@@ -313,6 +352,22 @@ onMounted(async () => {
 <template>
   <div class="tools">
     <div class="left">
+      <!-- game bindings: SC's action master list -->
+      <section class="panel game">
+        <div class="head">
+          <Icon name="list" :size="15" />
+          <span class="head-title">Game bindings</span>
+          <span class="head-count">{{ actionCount }}</span>
+        </div>
+        <div class="rows scroll actions">
+          <div v-for="m in actionMaps" :key="m.name" class="action-group">
+            <div class="group-head">{{ m.label ?? m.name }}</div>
+            <div v-for="a in m.actions" :key="a.name" class="action-item">{{ a.label ?? a.name }}</div>
+          </div>
+          <div v-if="!actionMaps.length" class="row-none">None</div>
+        </div>
+      </section>
+
       <!-- binding profiles -->
       <section class="panel">
         <div class="head">
@@ -391,7 +446,7 @@ onMounted(async () => {
     </div>
 
     <!-- compare -->
-    <section class="panel compare">
+    <section class="panel compare" :style="{ '--cols': cols.template.value, '--cols-min': `${cols.minWidth.value}px` }">
       <div class="head compare-head">
         <Icon name="compare" :size="16" />
         <span class="head-title no-grow">Compare</span>
@@ -459,12 +514,14 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div class="row cols-head">
-        <span></span><span>DEVICE</span><span>INPUT</span><span>ACTION</span>
-        <span>{{ nameFor(aKey).toUpperCase() }}</span><span>{{ nameFor(bKey).toUpperCase() }}</span>
-      </div>
-
-      <div class="body">
+      <div class="table">
+        <ColumnHead
+          :columns="columns"
+          :sort="cols.sort.value"
+          @sort="cols.toggleSort"
+          @resize="cols.startResize"
+          @reset="cols.resetWidth"
+        />
         <div v-for="r in filteredRows" :key="r.token" class="row diff-row" :class="r.kind">
           <span class="sign">{{ SIGNS[r.kind] }}</span>
           <span class="mono dim">{{ r.instance === null ? "—" : `js${r.instance}` }}</span>
@@ -511,6 +568,37 @@ onMounted(async () => {
 .panel.grow {
   flex: 1;
   min-height: 0;
+}
+
+/* Capped so profiles and backups stay in view. */
+.panel.game {
+  flex: 0 1 40%;
+  min-height: 0;
+}
+
+.rows.actions {
+  padding: 10px 14px;
+}
+
+.action-group {
+  margin-bottom: 12px;
+}
+
+.group-head {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-2);
+  margin-bottom: 4px;
+}
+
+.action-item {
+  font-size: 13px;
+  padding: 2px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .head {
@@ -835,13 +923,19 @@ onMounted(async () => {
 
 .row {
   display: grid;
-  grid-template-columns: 28px 70px 130px minmax(0, 1fr) 260px 260px;
+  grid-template-columns: var(--cols);
   gap: 12px;
   padding: 8px 16px;
   align-items: center;
+  /* Content-box: padding comes on top. Rows widen, the table scrolls. */
+  min-width: var(--cols-min);
 }
 
 .cols-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-surface);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.1em;
@@ -850,14 +944,8 @@ onMounted(async () => {
   border-bottom: 1px solid var(--border-dim);
 }
 
-.cols-head span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.body {
-  overflow-y: auto;
+.table {
+  overflow: auto;
   min-height: 0;
   flex: 1;
   font-size: 13px;

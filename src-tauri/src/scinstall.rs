@@ -14,9 +14,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::scdata::{self, ActionMap};
 
-/// Bump when the cached JSON's shape changes; older caches are then ignored.
-const CACHE_FORMAT: &str = "v1";
-
 /// Files inside `Data.p4k` (forward or backward slashes, StarBreaker is not
 /// consistent between platforms), extracted in one run.
 const P4K_REGEX: &str = r"^Data[\\/]Libs[\\/]Config[\\/](defaultProfile|keybinding_localization)\.xml$|^Data[\\/]Localization[\\/]english[\\/]global\.ini$";
@@ -129,7 +126,7 @@ fn cache_dir(cache_root: &Path, version: &ScVersion) -> PathBuf {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
         .collect();
-    cache_root.join(CACHE_FORMAT).join(safe)
+    cache_root.join(safe)
 }
 
 fn read_cache(dir: &Path) -> Option<ScData> {
@@ -323,9 +320,9 @@ mod tests {
     #[test]
     fn cache_dir_is_versioned_and_sanitized() {
         let mut v = parse_manifest(MANIFEST).unwrap();
-        assert_eq!(cache_dir(Path::new("/c"), &v), Path::new("/c/v1/4.10.0-hotfix.12572603"));
+        assert_eq!(cache_dir(Path::new("/c"), &v), Path::new("/c/4.10.0-hotfix.12572603"));
         v.label = "a/b\\c d".into();
-        assert_eq!(cache_dir(Path::new("/c"), &v), Path::new("/c/v1/a_b_c_d"));
+        assert_eq!(cache_dir(Path::new("/c"), &v), Path::new("/c/a_b_c_d"));
     }
 
     #[test]

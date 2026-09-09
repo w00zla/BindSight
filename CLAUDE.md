@@ -21,15 +21,22 @@ See `HANDOFF.md` for the current working state.
 - **Shell/backend**: Tauri v2 + Rust (`src-tauri/`).
 - **Frontend**: Vue 3 + TypeScript + Vite (`src/`). `App.vue` is the
   orchestrator (all state, invokes, listeners) and composes presentational
-  components: `TopBar`, `DeviceTile`, `StatusPanel`, `ImageStage` (+
-  `Splitter`), `LiveCard`, `BindingsDeck`, `ToolsView` (the whole Tools mode:
-  binding profiles, backups, Compare), `SettingsDialog`, `Toasts`, `Icon`
-  (inline stroke SVGs by name — never emoji). `components/ImageMapEditor.vue`
-  is the image-map editor (Konva via `vue-konva`, the three-column Devices
-  mode: devices + their image-maps, canvas, live input + areas) and uses
-  `ConfirmDialog` for the unsaved-changes and delete questions;
-  `components/DeviceImage.vue` the plain-SVG viewer; `imagemap.ts` the
-  shared image-map types/helpers, `types.ts` all device/input/binding types.
+  components: `TopBar` (modes **Monitor / Bindings / Devices**; the code's
+  `Mode` ids are still `live` / `tools` / `devices`), `DeviceTile`,
+  `StatusPanel`, `ImageStage` (+ `Splitter`), `LiveCard`, `BindingsDeck`,
+  `ToolsView` (the whole Bindings mode: game bindings, binding profiles,
+  backups, Compare), `SettingsDialog`, `Toasts`, `Icon` (inline stroke SVGs
+  by name — never emoji). `components/ImageMapEditor.vue` is the image-map
+  editor (Konva via `vue-konva`, the three-column Devices mode: devices +
+  their image-maps, canvas, live input + areas; also hosts the raw device /
+  event log with Save) and uses `ConfirmDialog` for the unsaved-changes and
+  delete questions; `components/DeviceImage.vue` the plain-SVG viewer;
+  `imagemap.ts` the shared image-map types/helpers, `types.ts` all
+  device/input/binding types. **Tables** (bindings deck, Compare) are built
+  on `tableColumns.ts` (`useTableColumns`: sort state, widths, grid
+  template, localStorage persistence) + `components/ColumnHead.vue`
+  (sortable headers, resize grips): the last column is the `1fr` filler,
+  the others carry px defaults, every cell truncates with an ellipsis.
   Design tokens live in `src/styles/tokens.css` (the only place colours are
   defined), fonts are bundled under `src/assets/fonts/` (OFL). GUI text is
   terse: one-word states, no explanatory sentences.
@@ -54,8 +61,9 @@ See `HANDOFF.md` for the current working state.
   + token labels). Runs the StarBreaker sidecar (`p4k extract --regex` for
   `defaultProfile.xml`, `keybinding_localization.xml`, `global.ini`, ~1 s),
   converts via `scdata::parse_*` (unlabeled actions dropped) and caches the
-  JSON under `<app_cache_dir>/v1/<label>/`; `v1` = our JSON shape, bump it
-  when the shape changes. Loaded in a background thread at start and on
+  JSON under `<app_cache_dir>/<label>/` (no format-version layer: if the
+  JSON shape ever changes, users delete the cache). Loaded in a background
+  thread at start and on
   base-path change (`lib.rs::spawn_sc_load`): steps via `scdata-progress`
   (`LOAD_STEPS` = 4), result via `scdata-changed`.
 - `bindings.rs` — `BindingIndex` (token -> bound actions), `button_token`/
@@ -148,7 +156,7 @@ scripts/fetch-starbreaker.sh
 ```
 
 The SC game data is extracted from the configured install at runtime and
-cached per game version (`~/.cache/com.w00zla.bindsight/v1/<label>/` on
+cached per game version (`~/.cache/com.w00zla.bindsight/<label>/` on
 Linux); delete that dir to force a re-extract.
 
 ## Prerequisites (all platforms)

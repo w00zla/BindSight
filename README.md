@@ -4,16 +4,20 @@ Star Citizen joystick binding visualizer. Answers "what does each button do,
 and where does each action live?" by joining SC's own config with live
 joystick input.
 
-- **Live**: press a button, move an axis, flip a hat — see the bound action(s),
-  their category and the SC input token. Optional image-maps light up the
-  control on a picture of your device.
-- **Bindings**: every joystick binding of your profile, resolved to a label,
-  filterable per device, including the shipped defaults you never rebound.
+- **Monitor**: press a button, move an axis, flip a hat — see the bound
+  action(s), their category and the SC input token. Optional image-maps light
+  up the control on a picture of your device. Below it, every joystick binding
+  of your profile resolved to a label, sortable and filterable per device,
+  including the shipped defaults you never rebound.
+- **Bindings**: SC's action list, your exported binding profiles
+  (import/export), backups of `actionmaps.xml` with restore, and a Compare
+  view that diffs any two of them per input.
 - **Device order**: detects the `jsN` shift SC applies when devices enumerate
   in a different order (from `Game.log`) and fixes it — via
   `pp_resortdevices` console commands or by rewriting `actionmaps.xml`.
 - **Devices**: an editor for image-maps (rectangles, ellipses, polygons and
-  arrow/rotation symbols per input), with zip export/import.
+  arrow/rotation symbols per input), with zip export/import, plus a raw
+  device / input-event log you can save as text.
 
 Game data (action list, labels, input token names) is pulled out of your own
 install's `Data.p4k` at runtime with the bundled [StarBreaker](https://github.com/diogotr7/StarBreaker)

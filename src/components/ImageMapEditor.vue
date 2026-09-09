@@ -26,8 +26,8 @@ import {
   type SymbolKind,
 } from "../imagemap";
 
-const props = defineProps<{ devices: DeviceInfo[] }>();
-const emit = defineEmits<{ notify: [message: string, type: "ok" | "error"]; saved: [] }>();
+const props = defineProps<{ devices: DeviceInfo[]; events: JoyInput[] }>();
+const emit = defineEmits<{ notify: [message: string, type: "ok" | "error"]; saved: []; clearLog: [] }>();
 
 // No active tool == select/move mode.
 type Tool = "rect" | "ellipse" | "polygon" | SymbolKind;
@@ -311,6 +311,7 @@ async function openFirst() {
 }
 
 async function selectDevice(d: DeviceInfo) {
+  showLog.value = false;
   if (!d.sc_product_guid || d.sdl_guid === selectedGuid.value) return;
   if (!(await requestLeave())) return;
   selectedGuid.value = d.sdl_guid;
@@ -320,6 +321,7 @@ async function selectDevice(d: DeviceInfo) {
 }
 
 async function openMap(id: string) {
+  showLog.value = false;
   if (id === openId.value) return;
   if (!(await requestLeave())) return;
   await loadMap(id);
@@ -908,6 +910,63 @@ const polyPreview = computed(() => {
 
 // "28 btn · 8 axes · 2 hats", plus the image count for a device that is not
 // the selected one (its image-maps are listed below the card).
+// --- raw log (device dump + events, replaces the canvas while shown) --------
+
+const showLog = ref(false);
+
+// Last 8 hex chars of an SDL GUID: enough to tell devices apart in the log.
+function shortGuid(guid: string): string {
+  return guid.slice(-8);
+}
+
+function nameOfGuid(guid: string): string {
+  const d = props.devices.find((dev) => dev.sdl_guid === guid);
+  return d?.sc_name ?? d?.sdl_name ?? guid;
+}
+
+function eventText(ev: JoyInput): string {
+  switch (ev.kind) {
+    case "button":
+      return `button ${ev.index} ${ev.pressed ? "down" : "up"}`;
+    case "axis":
+      return `axis ${ev.index} = ${ev.value}`;
+    default:
+      return `hat ${ev.index} ${ev.direction}`;
+  }
+}
+
+function axesText(d: DeviceInfo): string {
+  return d.axes.length ? d.axes.join(" ") : (d.axes_error ?? "—");
+}
+
+function logText(): string {
+  const lines = [`BindSight devices log ${new Date().toISOString()}`, "", "Devices"];
+  for (const d of props.devices) {
+    lines.push(
+      `#${d.index} ${d.sc_name ?? "—"} | sdl ${d.sdl_name} | guid ${d.sdl_guid} | sc ${d.sc_product_guid ?? "—"}` +
+        ` | ${d.num_buttons} btn ${d.num_axes} axes ${d.num_hats} hats | axes ${axesText(d)}`,
+    );
+  }
+  lines.push("", "Events (newest first)");
+  for (const ev of props.events) lines.push(`${shortGuid(ev.guid)} ${nameOfGuid(ev.guid)} ${eventText(ev)}`);
+  return lines.join("\n") + "\n";
+}
+
+async function saveLog() {
+  try {
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    const dest = await save({
+      defaultPath: `bindsight-devices-${stamp}.txt`,
+      filters: [{ name: "Text", extensions: ["txt"] }],
+    });
+    if (!dest) return;
+    await invoke("write_text_file", { path: dest, text: logText() });
+    emit("notify", "Log saved", "ok");
+  } catch (e) {
+    emit("notify", String(e), "error");
+  }
+}
+
 function deviceLine(d: DeviceInfo): string {
   const parts: string[] = [];
   if (d.num_buttons) parts.push(`${d.num_buttons} btn`);
@@ -975,12 +1034,50 @@ function deviceLine(d: DeviceInfo): string {
           <Icon name="upload" :size="14" />
           Export
         </button>
+        <button type="button" class="btn wide" :class="showLog ? 'primary' : 'outline'" @click="showLog = !showLog">
+          <Icon name="log" :size="14" />
+          Log
+        </button>
       </div>
     </aside>
 
     <!-- centre: the canvas -->
     <section class="col-centre">
-      <template v-if="map">
+      <template v-if="showLog">
+        <div class="head">
+          <span class="log-title">Log</span>
+          <div class="grow" />
+          <button type="button" class="btn outline small" :disabled="!props.events.length" @click="emit('clearLog')">
+            <Icon name="trash" :size="13" />
+            Clear
+          </button>
+          <button type="button" class="btn primary small" @click="saveLog">
+            <Icon name="upload" :size="13" />
+            Save
+          </button>
+        </div>
+        <div class="log mono">
+          <div class="log-section">Devices</div>
+          <div v-for="d in props.devices" :key="d.index" class="log-line">
+            <span class="log-key">#{{ d.index }}</span>
+            <span>{{ d.sc_name ?? "—" }}</span>
+            <span class="log-dim">sdl</span><span>{{ d.sdl_name }}</span>
+            <span class="log-dim">guid</span><span>{{ d.sdl_guid }}</span>
+            <span class="log-dim">sc</span><span>{{ d.sc_product_guid ?? "—" }}</span>
+            <span class="log-dim">io</span><span>{{ d.num_buttons }} btn {{ d.num_axes }} axes {{ d.num_hats }} hats</span>
+            <span class="log-dim">axes</span><span>{{ axesText(d) }}</span>
+          </div>
+          <div v-if="!props.devices.length" class="log-line log-dim">None</div>
+          <div class="log-section log-events">Events</div>
+          <div v-for="(ev, i) in props.events" :key="i" class="log-line">
+            <span class="log-key">{{ shortGuid(ev.guid) }}</span>
+            <span class="log-device">{{ nameOfGuid(ev.guid) }}</span>
+            <span>{{ eventText(ev) }}</span>
+          </div>
+          <div v-if="!props.events.length" class="log-line log-dim">None</div>
+        </div>
+      </template>
+      <template v-else-if="map">
         <div class="head">
           <div class="head-name">
             <Icon name="image" :size="14" />
@@ -1502,6 +1599,58 @@ function deviceLine(d: DeviceInfo): string {
   justify-content: center;
   color: var(--text-3);
   font-size: 14px;
+}
+
+/* --- raw log --- */
+
+.log-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 16px;
+  font-size: 12px;
+}
+
+.log-section {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  margin-bottom: 4px;
+}
+
+.log-events {
+  margin-top: 12px;
+}
+
+.log-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 3px 0;
+}
+
+.log-key {
+  color: var(--live);
+  min-width: 5rem;
+}
+
+.log-dim {
+  color: var(--text-3);
+}
+
+.log-device {
+  min-width: 14rem;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* --- right column --- */

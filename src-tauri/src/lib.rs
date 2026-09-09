@@ -203,6 +203,22 @@ fn set_ignored_devices(
     data.config.ignored_devices.clone()
 }
 
+/// Open the app's log folder in the system file manager (Settings).
+#[tauri::command]
+fn open_log_dir(app: AppHandle) -> Result<(), String> {
+    let dir = app.path().app_log_dir().map_err(|e| format!("app log dir: {e}"))?;
+    tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(|e| format!("open {}: {e}", dir.display()))
+}
+
+/// Write a text file to a path the user picked in a save dialog (the Devices
+/// log).
+#[tauri::command]
+fn write_text_file(path: String, text: String) -> Result<(), String> {
+    std::fs::write(&path, text).map_err(|e| format!("write {path}: {e}"))?;
+    info!("wrote {path}");
+    Ok(())
+}
+
 /// Set the SC base path: persist it and reload the install's game data and
 /// actionmaps.xml in the background. The result arrives as a `scdata-changed`
 /// event carrying the load status.
@@ -549,6 +565,8 @@ pub fn run() {
             set_ignored_devices,
             set_base_path,
             resolve_input,
+            write_text_file,
+            open_log_dir,
             imagemap::list_imagemaps,
             imagemap::get_imagemap,
             imagemap::create_imagemap,

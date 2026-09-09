@@ -29,7 +29,7 @@ import type {
 } from "./types";
 import { sameHardware, type HighlightClass, type ImageMap, type ImageMapSummary } from "./imagemap";
 
-const MAX_EVENTS = 50;
+const MAX_EVENTS = 500;
 
 const devices = ref<DeviceInfo[]>([]);
 const events = ref<JoyInput[]>([]);
@@ -579,6 +579,18 @@ async function refresh() {
   await loadClash();
 }
 
+// Hot-plug (and startup): re-list the devices and redo the clash report on
+// top of them; actionmaps.xml and Game.log are not re-read (SDL raises one
+// devices-changed per device at startup, and the install did not change).
+async function refreshDevices() {
+  try {
+    devices.value = await invoke<DeviceInfo[]>("list_joysticks");
+  } catch (e) {
+    error.value = String(e);
+  }
+  await loadClash();
+}
+
 function nameFor(guid: string): string {
   const d = devices.value.find((dev) => dev.sdl_guid === guid);
   return d?.sc_name ?? guid;
@@ -606,11 +618,12 @@ let unlisten: UnlistenFn[] = [];
 onMounted(async () => {
   unlisten.push(
     await listen<JoyInput>("joy-input", (e) => {
-      // The editor owns the input while an image-map is being edited.
-      if (mode.value !== "live") return;
       const p = e.payload;
+      // The raw log collects in every mode (shown in Devices).
       events.value.unshift(p);
       if (events.value.length > MAX_EVENTS) events.value.pop();
+      // The editor owns the input while an image-map is being edited.
+      if (mode.value !== "live") return;
       trackActive(p);
 
       if (p.kind === "button" && p.pressed) {
@@ -624,7 +637,7 @@ onMounted(async () => {
   );
   unlisten.push(
     await listen("devices-changed", async () => {
-      await refresh();
+      await refreshDevices();
       await reloadMaps();
     }),
   );
@@ -636,7 +649,8 @@ onMounted(async () => {
       scStatus.value = e.payload;
     }),
   );
-  await refresh();
+  // The backend reloads actionmaps.xml itself once the game data is in.
+  await refreshDevices();
 
   try {
     scStatus.value = await invoke<ScStatus>("get_sc_status");
@@ -684,6 +698,7 @@ onUnmounted(() => {
       :ignored="ignoredDevices"
       @close="showSettings = false"
       @save="applySettings"
+      @notify="notify"
     />
 
     <div v-if="mode === 'live'" class="content">
@@ -733,9 +748,6 @@ onUnmounted(() => {
         <Splitter direction="col" @drag="dragLive" @end="saveLayout" @reset="resetLive" />
         <BindingsDeck
           :bindings="bindings"
-          :devices="devices"
-          :actionMaps="actionMaps"
-          :events="events"
           :currentToken="currentInput?.token ?? null"
           :tokenLabel="tokenLabel"
           :categoryLabel="actionmapLabel"
@@ -744,20 +756,21 @@ onUnmounted(() => {
           :isConnected="isConnected"
           :isMissing="missingInMap"
           :isPinned="isPinned"
-          :deviceName="nameFor"
           @pin="togglePin"
         />
       </div>
     </div>
 
-    <ToolsView v-else-if="mode === 'tools'" :bindings="bindings" @notify="notify" @restored="onRestored" />
+    <ToolsView v-else-if="mode === 'tools'" :bindings="bindings" :actionMaps="actionMaps" @notify="notify" @restored="onRestored" />
 
     <ImageMapEditor
       v-else-if="mode === 'devices'"
       ref="editor"
       :devices="devices"
+      :events="events"
       @notify="notify"
       @saved="onMapsSaved"
+      @clear-log="events = []"
     />
 
     <Toasts :toasts="toasts" />

@@ -7,9 +7,9 @@ import type { Mode } from "../types";
 const props = defineProps<{ mode: Mode; basePath: string; scVersion: string; loading: boolean }>();
 const emit = defineEmits<{ "update:mode": [mode: Mode]; refresh: []; settings: [] }>();
 
-const TABS: { mode: Mode; label: string; icon: "live" | "tools" | "devices" }[] = [
-  { mode: "live", label: "Live", icon: "live" },
-  { mode: "tools", label: "Tools", icon: "tools" },
+const TABS: { mode: Mode; label: string; icon: "live" | "bindings" | "devices" }[] = [
+  { mode: "live", label: "Monitor", icon: "live" },
+  { mode: "tools", label: "Bindings", icon: "bindings" },
   { mode: "devices", label: "Devices", icon: "devices" },
 ];
 

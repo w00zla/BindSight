@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
 import type { DeviceInfo } from "../types";
 
 const props = defineProps<{ basePath: string; devices: DeviceInfo[]; ignored: string[] }>();
-const emit = defineEmits<{ close: []; save: [settings: { basePath: string; ignored: string[] }] }>();
+const emit = defineEmits<{
+  close: [];
+  save: [settings: { basePath: string; ignored: string[] }];
+  notify: [message: string, type: "ok" | "error"];
+}>();
 
 // Local copies: nothing is applied before Save.
 const path = ref(props.basePath);
@@ -28,6 +33,15 @@ function remove(guid: string) {
 function add() {
   if (addPick.value && !isExcluded(addPick.value)) excluded.value = [...excluded.value, addPick.value];
   addPick.value = "";
+}
+
+// Immediate, not part of Save: opens the folder in the file manager.
+async function openLogDir() {
+  try {
+    await invoke("open_log_dir");
+  } catch (e) {
+    emit("notify", String(e), "error");
+  }
 }
 
 async function browse() {
@@ -75,6 +89,13 @@ async function browse() {
               <option value="" disabled>Add device</option>
               <option v-for="d in addable" :key="d.index" :value="d.sc_product_guid">{{ d.sc_name ?? d.sdl_name }}</option>
             </select>
+          </div>
+        </section>
+
+        <section>
+          <div class="panel-title">Log</div>
+          <div class="row">
+            <button type="button" class="btn outline" @click="openLogDir">Open log folder</button>
           </div>
         </section>
       </div>
