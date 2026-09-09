@@ -1,6 +1,6 @@
 // Shared frontend types for data coming from the Rust backend.
 
-import type { HwProfile, HwProfileSummary } from "./hwprofile";
+import type { ImageMap, ImageMapSummary } from "./imagemap";
 
 export interface DeviceInfo {
   index: number;
@@ -124,14 +124,14 @@ export interface CurrentInput {
   token: string | null;
   sdl: string;
   actions: BoundAction[];
-  // Whether the device's hardware profile has an area for this input; `null`
-  // when the device has no profile at all.
-  in_profile: boolean | null;
+  // Whether the device's image-map has an area for this input; `null` when
+  // the device has no image-map at all.
+  in_imagemap: boolean | null;
 }
 
-// One device with a chosen HW profile, shown on the image stage.
-export interface ProfileView {
+// One device with a chosen image-map, shown on the image stage.
+export interface ImageMapView {
   device: DeviceInfo;
-  profile: HwProfile;
-  options: HwProfileSummary[];
+  map: ImageMap;
+  options: ImageMapSummary[];
 }

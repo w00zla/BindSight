@@ -3,6 +3,7 @@ name = "bindsight"
 version = "0.1.0"
 description = "Star Citizen Joystick Binding Visualizer & Mapper"
 authors = ["w00zla"]
+license = "MIT"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

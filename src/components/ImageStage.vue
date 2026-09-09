@@ -3,11 +3,11 @@ import { computed, ref, watch } from "vue";
 import DeviceImage from "./DeviceImage.vue";
 import Icon from "./Icon.vue";
 import Splitter from "./Splitter.vue";
-import type { DeviceInfo, ProfileView } from "../types";
-import type { HighlightClass } from "../hwprofile";
+import type { DeviceInfo, ImageMapView } from "../types";
+import type { HighlightClass } from "../imagemap";
 
 const props = defineProps<{
-  views: ProfileView[];
+  views: ImageMapView[];
   // Connected devices without an image-map: shown as placeholder tiles.
   placeholders: DeviceInfo[];
   // Stage height in px (the parent owns the vertical splitter).
@@ -17,7 +17,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ choose: [guid: string | null, id: string] }>();
 
-type Tile = { device: DeviceInfo; view: ProfileView | null };
+type Tile = { device: DeviceInfo; view: ImageMapView | null };
 
 // Tile order: user-swapped device indices first (remembered), the rest in
 // SDL order.
@@ -130,12 +130,12 @@ function onReset(i: number) {
             <select
               v-if="t.view.options.length > 1"
               class="picker"
-              :value="t.view.profile.id"
+              :value="t.view.map.id"
               @change="emit('choose', t.device.sc_product_guid, ($event.target as HTMLSelectElement).value)"
             >
               <option v-for="s in t.view.options" :key="s.id" :value="s.id">{{ s.name }}</option>
             </select>
-            <span v-else class="name">{{ t.view.profile.name }}</span>
+            <span v-else class="name">{{ t.view.map.name }}</span>
           </template>
           <span v-else class="name">{{ t.device.sc_name ?? t.device.sdl_name }}</span>
           <button v-if="i > 0" type="button" class="move" title="Move left" @click="swap(i - 1)">
@@ -146,9 +146,9 @@ function onReset(i: number) {
           </button>
         </div>
         <DeviceImage
-          v-if="t.view && imgSrc(t.view.profile.id, t.view.profile.image.file)"
-          :profile="t.view.profile"
-          :src="imgSrc(t.view.profile.id, t.view.profile.image.file)"
+          v-if="t.view && imgSrc(t.view.map.id, t.view.map.image.file)"
+          :map="t.view.map"
+          :src="imgSrc(t.view.map.id, t.view.map.image.file)"
           :active="activeFor(t.device.sdl_guid)"
         />
         <div v-else-if="!t.view" class="empty">

@@ -9,7 +9,7 @@ pub mod config;
 pub mod gamelog;
 pub mod guid;
 pub mod hid;
-pub mod hwprofile;
+pub mod imagemap;
 pub mod input;
 pub mod resort;
 pub mod scdata;
@@ -162,8 +162,8 @@ fn set_base_path(
     actions: State<Vec<scdata::ActionMap>>,
     data: State<Mutex<AppData>>,
 ) -> LoadStatus {
-    // Keep the rest of the config (ignore list, profile choices) when only the
-    // path changes.
+    // Keep the rest of the config (ignore list, image-map choices) when only
+    // the path changes.
     let config = config::Config { base_path: path.clone(), ..data.lock().unwrap().config.clone() };
     if let Err(e) = config::save(&app, &config) {
         eprintln!("bindsight: failed to save config: {e}");
@@ -333,17 +333,18 @@ pub fn run() {
             set_ignored_devices,
             set_base_path,
             resolve_input,
-            hwprofile::list_hw_profiles,
-            hwprofile::get_hw_profile,
-            hwprofile::create_hw_profile,
-            hwprofile::save_hw_profile,
-            hwprofile::delete_hw_profile,
-            hwprofile::add_hw_profile_image,
-            hwprofile::remove_hw_profile_image,
-            hwprofile::read_hw_profile_image,
-            hwprofile::export_hw_profile,
-            hwprofile::import_hw_profile,
-            hwprofile::set_hw_profile_choice
+            imagemap::list_imagemaps,
+            imagemap::get_imagemap,
+            imagemap::create_imagemap,
+            imagemap::save_imagemap,
+            imagemap::delete_imagemap,
+            imagemap::clone_imagemap,
+            imagemap::add_imagemap_image,
+            imagemap::remove_imagemap_image,
+            imagemap::read_imagemap_image,
+            imagemap::export_imagemap,
+            imagemap::import_imagemap,
+            imagemap::set_imagemap_choice
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

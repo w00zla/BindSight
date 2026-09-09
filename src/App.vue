@@ -23,9 +23,9 @@ import type {
   BoundAction,
   SlotStatus,
   ClashReport,
-  ProfileView,
+  ImageMapView,
 } from "./types";
-import { sameHardware, type HighlightClass, type HwProfile, type HwProfileSummary } from "./hwprofile";
+import { sameHardware, type HighlightClass, type ImageMap, type ImageMapSummary } from "./imagemap";
 
 const MAX_EVENTS = 50;
 
@@ -43,43 +43,43 @@ const error = ref<string | null>(null);
 const loading = ref(false);
 const showSettings = ref(false);
 
-// --- hardware profiles -----------------------------------------------------
+// --- image-maps --------------------------------------------------------
 
 // How long an axis stays highlighted after its last event (axes never rest).
 const AXIS_PULSE_MS = 400;
 
 const mode = ref<Mode>("live");
-const profileSummaries = ref<HwProfileSummary[]>([]);
-// Profile id -> full profile, and `<profile id>/<file>` -> image data URL.
-const loadedProfiles = ref<Record<string, HwProfile>>({});
-const profileImages = ref<Record<string, string>>({});
-// Lowercase hardware id -> chosen profile id (from config.json).
-const profileChoices = ref<Record<string, string>>({});
+const mapSummaries = ref<ImageMapSummary[]>([]);
+// Map id -> full image-map, and `<map id>/<file>` -> image data URL.
+const loadedMaps = ref<Record<string, ImageMap>>({});
+const mapImages = ref<Record<string, string>>({});
+// Lowercase hardware id -> chosen map id (from config.json).
+const mapChoices = ref<Record<string, string>>({});
 // SDL GUID -> input key -> highlight class, for the currently active inputs.
 const activeInputs = ref<Record<string, Record<string, HighlightClass>>>({});
 const axisTimers = new Map<string, number>();
 
-function profilesFor(guid: string | null): HwProfileSummary[] {
-  return profileSummaries.value.filter((s) => sameHardware(s.hardware_id, guid));
+function mapsFor(guid: string | null): ImageMapSummary[] {
+  return mapSummaries.value.filter((s) => sameHardware(s.hardware_id, guid));
 }
 
-// The user's pick for this device, else the single/first matching profile.
-function chosenProfileId(guid: string | null): string | null {
-  const list = profilesFor(guid);
+// The user's pick for this device, else the single/first matching map.
+function chosenMapId(guid: string | null): string | null {
+  const list = mapsFor(guid);
   if (!list.length) return null;
-  const pick = guid ? profileChoices.value[guid.toLowerCase()] : undefined;
+  const pick = guid ? mapChoices.value[guid.toLowerCase()] : undefined;
   return list.find((s) => s.id === pick)?.id ?? list[0].id;
 }
 
 function imgSrc(id: string, file: string): string {
-  return profileImages.value[`${id}/${file}`] ?? "";
+  return mapImages.value[`${id}/${file}`] ?? "";
 }
 
-const profileViews = computed<ProfileView[]>(() =>
+const mapViews = computed<ImageMapView[]>(() =>
   devices.value.flatMap((d) => {
-    const id = chosenProfileId(d.sc_product_guid);
-    const p = id ? loadedProfiles.value[id] : null;
-    return p ? [{ device: d, profile: p, options: profilesFor(d.sc_product_guid) }] : [];
+    const id = chosenMapId(d.sc_product_guid);
+    const p = id ? loadedMaps.value[id] : null;
+    return p ? [{ device: d, map: p, options: mapsFor(d.sc_product_guid) }] : [];
   }),
 );
 
@@ -126,67 +126,67 @@ function resetLive() {
 // Connected, not excluded devices without an image-map (placeholder tiles).
 const stagePlaceholders = computed<DeviceInfo[]>(() =>
   devices.value.filter(
-    (d) => !isIgnored(d.sc_product_guid) && !profileViews.value.some((v) => v.device.index === d.index),
+    (d) => !isIgnored(d.sc_product_guid) && !mapViews.value.some((v) => v.device.index === d.index),
   ),
 );
 
-async function loadProfileImage(id: string, file: string) {
+async function loadMapImage(id: string, file: string) {
   const key = `${id}/${file}`;
-  if (profileImages.value[key]) return;
+  if (mapImages.value[key]) return;
   try {
-    profileImages.value[key] = await invoke<string>("read_hw_profile_image", { id, file });
+    mapImages.value[key] = await invoke<string>("read_imagemap_image", { id, file });
   } catch {
     /* a missing image just stays blank */
   }
 }
 
-async function loadChosenProfiles() {
+async function loadChosenMaps() {
   for (const d of devices.value) {
-    const id = chosenProfileId(d.sc_product_guid);
-    if (!id || loadedProfiles.value[id]) continue;
+    const id = chosenMapId(d.sc_product_guid);
+    if (!id || loadedMaps.value[id]) continue;
     try {
-      const p = await invoke<HwProfile>("get_hw_profile", { id });
-      loadedProfiles.value[id] = p;
-      await loadProfileImage(p.id, p.image.file);
+      const p = await invoke<ImageMap>("get_imagemap", { id });
+      loadedMaps.value[id] = p;
+      await loadMapImage(p.id, p.image.file);
     } catch {
-      /* skip a profile that will not load */
+      /* skip a map that will not load */
     }
   }
 }
 
-async function reloadProfiles() {
+async function reloadMaps() {
   try {
-    profileSummaries.value = await invoke<HwProfileSummary[]>("list_hw_profiles");
+    mapSummaries.value = await invoke<ImageMapSummary[]>("list_imagemaps");
   } catch (e) {
     error.value = String(e);
     return;
   }
-  await loadChosenProfiles();
+  await loadChosenMaps();
 }
 
 // A save in the editor can change the image and areas — drop the caches.
-async function onProfilesSaved() {
-  loadedProfiles.value = {};
-  profileImages.value = {};
-  await reloadProfiles();
+async function onMapsSaved() {
+  loadedMaps.value = {};
+  mapImages.value = {};
+  await reloadMaps();
 }
 
 async function setMode(m: Mode) {
   mode.value = m;
   // Inputs released while the editor was open were never seen here.
   activeInputs.value = {};
-  if (m === "live") await reloadProfiles();
+  if (m === "live") await reloadMaps();
 }
 
-async function setProfileChoice(guid: string | null, id: string) {
+async function setMapChoice(guid: string | null, id: string) {
   if (!guid) return;
   try {
-    const cfg = await invoke<{ profile_choices: Record<string, string> }>("set_hw_profile_choice", {
+    const cfg = await invoke<{ imagemap_choices: Record<string, string> }>("set_imagemap_choice", {
       hardwareId: guid,
-      profileId: id || null,
+      imagemapId: id || null,
     });
-    profileChoices.value = cfg.profile_choices;
-    await loadChosenProfiles();
+    mapChoices.value = cfg.imagemap_choices;
+    await loadChosenMaps();
   } catch (e) {
     notify(String(e), "error");
   }
@@ -205,7 +205,7 @@ function clearActive(guid: string, drop: (key: string) => boolean) {
   activeInputs.value = { ...activeInputs.value, [guid]: next };
 }
 
-// A binding clicked in the list, kept lit on the profile image until clicked
+// A binding clicked in the list, kept lit on the image-map image until clicked
 // again or another one is picked.
 const pinned = ref<{ guid: string; key: string } | null>(null);
 
@@ -215,9 +215,9 @@ function activeFor(guid: string): Map<string, HighlightClass> {
   return m;
 }
 
-// Hardware-profile input key for an SC token on a device. Undoes the +1
-// offset of button/hat numbering; axes go through the device's HID-derived
-// axis names (`js2_rotz` -> the SDL index whose name is `rotz`).
+// Image-map input key for an SC token on a device. Undoes the +1 offset of
+// button/hat numbering; axes go through the device's HID-derived axis names
+// (`js2_rotz` -> the SDL index whose name is `rotz`).
 function inputKeyForToken(token: string, d: DeviceInfo): string | null {
   const b = token.match(/^js\d+_button(\d+)$/);
   if (b) return `button:${Number(b[1]) - 1}`;
@@ -231,18 +231,18 @@ function inputKeyForToken(token: string, d: DeviceInfo): string | null {
   return null;
 }
 
-// Does the profile shown for this device (by SDL GUID) have an area for the
-// input? `null` when the device has no profile.
-function inProfile(sdlGuid: string, key: string): boolean | null {
+// Does the map shown for this device (by SDL GUID) have an area for the
+// input? `null` when the device has no image-map.
+function inMap(sdlGuid: string, key: string): boolean | null {
   const d = devices.value.find((dev) => dev.sdl_guid === sdlGuid);
-  const id = chosenProfileId(d?.sc_product_guid ?? null);
-  const p = id ? loadedProfiles.value[id] : null;
+  const id = chosenMapId(d?.sc_product_guid ?? null);
+  const p = id ? loadedMaps.value[id] : null;
   if (!p) return null;
   return p.areas.some((a) => a.input === key);
 }
 
-// Can a binding in the list be lit on a profile image? Needs a connected
-// device with a profile and a mappable token.
+// Can a binding in the list be lit on an image-map image? Needs a connected
+// device with an image-map and a mappable token.
 function pinTarget(b: ResolvedBinding): { guid: string; key: string } | null {
   const r = resolvePin(b);
   return "reason" in r ? null : r;
@@ -254,16 +254,16 @@ function resolvePin(b: ResolvedBinding): { guid: string; key: string } | { reaso
   if (!d) return { reason: `${b.device ?? "Device"} not connected` };
   const key = inputKeyForToken(b.token, d);
   if (!key) return { reason: `${tokenLabel(b.token)}: no SDL axis for it (${d.axes_error ?? "not in HID descriptor"})` };
-  const has = inProfile(d.sdl_guid, key);
+  const has = inMap(d.sdl_guid, key);
   if (has === null) return { reason: `${d.sc_name ?? d.sdl_name} has no image-map` };
   if (!has) return { reason: `No area for ${tokenLabel(b.token)}` };
   return { guid: d.sdl_guid, key };
 }
 
-// The device has a profile, but no area for this binding's input.
-function missingInProfile(b: ResolvedBinding): boolean {
+// The device has an image-map, but no area for this binding's input.
+function missingInMap(b: ResolvedBinding): boolean {
   const t = pinTarget(b);
-  return !!t && inProfile(t.guid, t.key) === false;
+  return !!t && inMap(t.guid, t.key) === false;
 }
 
 function isPinned(b: ResolvedBinding): boolean {
@@ -463,9 +463,9 @@ async function showBinding(
       token: res.token,
       sdl: sdlInputName(kind, index, direction),
       actions: res.actions,
-      in_profile: inProfile(guid, key),
+      in_imagemap: inMap(guid, key),
     };
-    if (res.actions.length && currentInput.value.in_profile === false) {
+    if (res.actions.length && currentInput.value.in_imagemap === false) {
       // One toast per input while it is on screen — hammering a button
       // must not stack them.
       const tk = `${guid}#${key}`;
@@ -475,7 +475,7 @@ async function showBinding(
         notify(`No area for ${res.token ? tokenLabel(res.token) : currentInput.value.sdl}`, "error");
       }
     }
-    // Upgrade the profile highlight to blue when SC has a binding — but only
+    // Upgrade the image-map highlight to blue when SC has a binding — but only
     // while the input is still held (the resolve is async).
     if (activeInputs.value[guid]?.[key] !== undefined) {
       setActive(guid, key, res.actions.length ? "bound" : "none");
@@ -494,7 +494,7 @@ interface Toast {
 // How long a toast stays on screen.
 const TOAST_MS = 4000;
 const toasts = ref<Toast[]>([]);
-// The last "not in profile" toast for a live input, to avoid stacking.
+// The last "not in image-map" toast for a live input, to avoid stacking.
 let lastMissingToast = { key: "", at: 0 };
 let toastSeq = 0;
 
@@ -562,7 +562,7 @@ let unlisten: UnlistenFn[] = [];
 onMounted(async () => {
   unlisten.push(
     await listen<JoyInput>("joy-input", (e) => {
-      // The editor owns the input while a hardware profile is being edited.
+      // The editor owns the input while an image-map is being edited.
       if (mode.value !== "live") return;
       const p = e.payload;
       events.value.unshift(p);
@@ -581,7 +581,7 @@ onMounted(async () => {
   unlisten.push(
     await listen("devices-changed", async () => {
       await refresh();
-      await reloadProfiles();
+      await reloadMaps();
     }),
   );
   await refresh();
@@ -592,16 +592,16 @@ onMounted(async () => {
     const cfg = await invoke<{
       base_path: string;
       ignored_devices: string[];
-      profile_choices: Record<string, string>;
+      imagemap_choices: Record<string, string>;
     }>("get_config");
     basePath.value = cfg.base_path;
     ignoredDevices.value = cfg.ignored_devices;
-    profileChoices.value = cfg.profile_choices ?? {};
+    mapChoices.value = cfg.imagemap_choices ?? {};
     bindings.value = await invoke<ResolvedBinding[]>("get_bindings");
   } catch (e) {
     error.value = String(e);
   }
-  await reloadProfiles();
+  await reloadMaps();
 });
 
 onUnmounted(() => {
@@ -653,12 +653,12 @@ onUnmounted(() => {
       </div>
 
       <ImageStage
-        :views="profileViews"
+        :views="mapViews"
         :placeholders="stagePlaceholders"
         :height="stageHeight"
         :imgSrc="imgSrc"
         :activeFor="activeFor"
-        @choose="setProfileChoice"
+        @choose="setMapChoice"
       />
       <Splitter direction="row" @drag="dragStage" @end="saveLayout" @reset="resetStage" />
 
@@ -682,7 +682,7 @@ onUnmounted(() => {
           :instanceOf="instanceOf"
           :isClash="bindingClash"
           :isConnected="isConnected"
-          :isMissing="missingInProfile"
+          :isMissing="missingInMap"
           :isPinned="isPinned"
           :deviceName="nameFor"
           @pin="togglePin"
@@ -692,7 +692,7 @@ onUnmounted(() => {
 
     <div v-else-if="mode === 'tools'" class="content" />
 
-    <ProfileEditor v-else-if="mode === 'devices'" :devices="devices" @notify="notify" @saved="onProfilesSaved" />
+    <ProfileEditor v-else-if="mode === 'devices'" :devices="devices" @notify="notify" @saved="onMapsSaved" />
 
     <Toasts :toasts="toasts" />
   </main>

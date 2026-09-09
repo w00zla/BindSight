@@ -18,11 +18,11 @@ import {
   inputKey,
   inputLabel,
   sameHardware,
-  type HwArea,
-  type HwProfile,
-  type HwProfileSummary,
+  type Area,
+  type ImageMap,
+  type ImageMapSummary,
   type SymbolKind,
-} from "../hwprofile";
+} from "../imagemap";
 
 const props = defineProps<{ devices: DeviceInfo[] }>();
 const emit = defineEmits<{ notify: [message: string, type: "ok" | "error"]; saved: [] }>();
@@ -44,11 +44,11 @@ const selectedGuid = ref("");
 const device = computed(() => usableDevices.value.find((d) => d.sdl_guid === selectedGuid.value) ?? null);
 const hardwareId = computed(() => device.value?.sc_product_guid ?? null);
 
-const summaries = ref<HwProfileSummary[]>([]);
+const summaries = ref<ImageMapSummary[]>([]);
 const matching = computed(() => summaries.value.filter((s) => sameHardware(s.hardware_id, hardwareId.value)));
 
 const profileId = ref("");
-const profile = ref<HwProfile | null>(null);
+const profile = ref<ImageMap | null>(null);
 // Serialized state as last stored, for the dirty indicator.
 const savedJson = ref("");
 const dirty = computed(() => !!profile.value && JSON.stringify(profile.value) !== savedJson.value);
@@ -59,7 +59,7 @@ const busy = ref(false);
 // --- canvas state ----------------------------------------------------------
 
 const currentImage = computed(() => profile.value?.image ?? null);
-const imageAreas = computed<HwArea[]>(() => profile.value?.areas ?? []);
+const imageAreas = computed<Area[]>(() => profile.value?.areas ?? []);
 
 const imgEl = ref<HTMLImageElement | null>(null);
 const natW = ref(0);
@@ -100,7 +100,7 @@ function newId(): string {
 
 async function loadSummaries() {
   try {
-    summaries.value = await invoke<HwProfileSummary[]>("list_hw_profiles");
+    summaries.value = await invoke<ImageMapSummary[]>("list_imagemaps");
   } catch (e) {
     emit("notify", String(e), "error");
   }
@@ -108,7 +108,7 @@ async function loadSummaries() {
 
 async function loadProfile(id: string) {
   try {
-    const p = await invoke<HwProfile>("get_hw_profile", { id });
+    const p = await invoke<ImageMap>("get_imagemap", { id });
     profile.value = p;
     savedJson.value = JSON.stringify(p);
     selectedId.value = null;
@@ -124,7 +124,7 @@ async function imageUrl(id: string, file: string): Promise<string> {
   const key = `${id}/${file}`;
   const hit = imgCache.get(key);
   if (hit) return hit;
-  const url = await invoke<string>("read_hw_profile_image", { id, file });
+  const url = await invoke<string>("read_imagemap_image", { id, file });
   imgCache.set(key, url);
   return url;
 }
@@ -219,7 +219,7 @@ async function createProfile() {
   try {
     const imagePath = await pickImage();
     if (!imagePath) return;
-    const p = await invoke<HwProfile>("create_hw_profile", {
+    const p = await invoke<ImageMap>("create_imagemap", {
       name: draft.name.trim() || (d.sc_name ?? d.sdl_name),
       hardwareId: d.sc_product_guid,
       hardwareName: d.sc_name ?? "",
@@ -240,7 +240,7 @@ async function saveProfile() {
   if (!profile.value) return;
   busy.value = true;
   try {
-    const p = await invoke<HwProfile>("save_hw_profile", { profile: profile.value });
+    const p = await invoke<ImageMap>("save_imagemap", { map: profile.value });
     profile.value = p;
     savedJson.value = JSON.stringify(p);
     await loadSummaries();
@@ -258,7 +258,7 @@ async function deleteProfile() {
   if (!p || currentSummary.value?.source !== "user") return;
   busy.value = true;
   try {
-    await invoke("delete_hw_profile", { id: p.id });
+    await invoke("delete_imagemap", { id: p.id });
     profileId.value = "";
     await loadSummaries();
     profileId.value = matching.value[0]?.id ?? "";
@@ -280,7 +280,7 @@ async function exportProfile() {
       filters: [{ name: "Image-map", extensions: ["zip"] }],
     });
     if (!dest) return;
-    await invoke("export_hw_profile", { id: p.id, destPath: dest });
+    await invoke("export_imagemap", { id: p.id, destPath: dest });
     emit("notify", "Image-map exported", "ok");
   } catch (e) {
     emit("notify", String(e), "error");
@@ -291,7 +291,7 @@ async function importProfile() {
   try {
     const src = await open({ multiple: false, filters: [{ name: "Image-map", extensions: ["zip"] }] });
     if (!src) return;
-    const s = await invoke<HwProfileSummary>("import_hw_profile", { sourcePath: src });
+    const s = await invoke<ImageMapSummary>("import_imagemap", { sourcePath: src });
     imgCache.clear();
     await loadSummaries();
     if (sameHardware(s.hardware_id, hardwareId.value)) profileId.value = s.id;
@@ -313,16 +313,16 @@ async function replaceImage() {
     const src = await pickImage();
     if (!src) return;
     const old = p.image.file;
-    const img = await invoke<{ file: string; label: string }>("add_hw_profile_image", {
+    const img = await invoke<{ file: string; label: string }>("add_imagemap_image", {
       id: p.id,
       sourcePath: src,
     });
     p.image = img;
     if (old !== img.file) {
-      await invoke("remove_hw_profile_image", { id: p.id, file: old });
+      await invoke("remove_imagemap_image", { id: p.id, file: old });
       imgCache.delete(`${p.id}/${old}`);
     }
-    // The file is on disk already — keep profile.json in step with it.
+    // The file is on disk already — keep imagemap.json in step with it.
     await saveProfile();
   } catch (e) {
     emit("notify", String(e), "error");
@@ -369,10 +369,10 @@ function onKeyDown(e: KeyboardEvent) {
 
 // --- normalized <-> stage pixels ------------------------------------------
 
-function addArea(shape: HwArea["shape"]) {
+function addArea(shape: Area["shape"]) {
   const p = profile.value;
   if (!p || !currentInput.value) return;
-  const area: HwArea = { id: newId(), input: currentInput.value, shape };
+  const area: Area = { id: newId(), input: currentInput.value, shape };
   p.areas.push(area);
   selectedId.value = area.id;
   tool.value = "select";
@@ -489,7 +489,7 @@ function commitPolygon() {
 
 // --- shape configs ---------------------------------------------------------
 
-function colours(a: HwArea) {
+function colours(a: Area) {
   const isCurrent = a.input === currentInput.value;
   const selected = a.id === selectedId.value;
   return {
@@ -503,7 +503,7 @@ function colours(a: HwArea) {
 
 const canSelect = computed(() => tool.value === "select");
 
-function rectCfg(a: HwArea) {
+function rectCfg(a: Area) {
   if (a.shape.kind !== "rect") return {};
   const s = a.shape;
   const w = s.w * W.value;
@@ -524,7 +524,7 @@ function rectCfg(a: HwArea) {
   };
 }
 
-function ellipseCfg(a: HwArea) {
+function ellipseCfg(a: Area) {
   if (a.shape.kind !== "ellipse") return {};
   const s = a.shape;
   // Konva ellipses already draw around their origin — no offset needed.
@@ -540,7 +540,7 @@ function ellipseCfg(a: HwArea) {
   };
 }
 
-function polyCfg(a: HwArea) {
+function polyCfg(a: Area) {
   if (a.shape.kind !== "polygon") return {};
   return {
     id: a.id,
@@ -553,7 +553,7 @@ function polyCfg(a: HwArea) {
   };
 }
 
-function symbolCfg(a: HwArea) {
+function symbolCfg(a: Area) {
   if (a.shape.kind !== "symbol") return {};
   const s = a.shape;
   // 100 path units == w * image width by h * image height.
@@ -576,12 +576,12 @@ function symbolCfg(a: HwArea) {
 
 // --- shape edits -----------------------------------------------------------
 
-function onAreaClick(a: HwArea) {
+function onAreaClick(a: Area) {
   if (!canSelect.value) return;
   selectedId.value = a.id;
 }
 
-function onAreaEnter(a: HwArea) {
+function onAreaEnter(a: Area) {
   const pos = stagePointer();
   hover.value = pos ? { x: pos.x + 10, y: pos.y + 10, text: inputLabel(a.input) } : null;
 }
@@ -590,7 +590,7 @@ function onAreaLeave() {
   hover.value = null;
 }
 
-function onDragEnd(a: HwArea, e: KonvaEventObject<DragEvent>) {
+function onDragEnd(a: Area, e: KonvaEventObject<DragEvent>) {
   const node = e.target;
   const s = a.shape;
   if (s.kind === "rect") {
@@ -610,7 +610,7 @@ function onDragEnd(a: HwArea, e: KonvaEventObject<DragEvent>) {
   }
 }
 
-function onTransformEnd(a: HwArea, e: KonvaEventObject<Event>) {
+function onTransformEnd(a: Area, e: KonvaEventObject<Event>) {
   const node = e.target;
   const s = a.shape;
   const sx = node.scaleX();

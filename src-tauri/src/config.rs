@@ -22,10 +22,10 @@ pub struct Config {
     /// hidden under Wine. Older config files without the field still load.
     #[serde(default)]
     pub ignored_devices: Vec<String>,
-    /// Which hardware profile to show per device: lowercase SC Product GUID
-    /// -> profile id. Only needed when several profiles exist for one device.
+    /// Which image-map to show per device: lowercase SC Product GUID -> image-map
+    /// id. Only needed when several image-maps exist for one device.
     #[serde(default)]
-    pub profile_choices: HashMap<String, String>,
+    pub imagemap_choices: HashMap<String, String>,
 }
 
 impl Default for Config {
@@ -33,7 +33,7 @@ impl Default for Config {
         Self {
             base_path: DEFAULT_BASE_PATH.to_string(),
             ignored_devices: Vec::new(),
-            profile_choices: HashMap::new(),
+            imagemap_choices: HashMap::new(),
         }
     }
 }
@@ -89,6 +89,6 @@ mod tests {
         let c: Config = serde_json::from_str(r#"{"base_path":"/sc/LIVE"}"#).unwrap();
         assert_eq!(c.base_path, "/sc/LIVE");
         assert!(c.ignored_devices.is_empty());
-        assert!(c.profile_choices.is_empty());
+        assert!(c.imagemap_choices.is_empty());
     }
 }

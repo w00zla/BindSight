@@ -43,17 +43,17 @@ The core loop is closed end-to-end:
 7. **Exclude**: a per-device "Exclude always" (`ignored_devices` in the per-OS
    `config.json`) declares a device SC never sees (e.g. a keyboard Wine hides);
    it then counts as unplugged.
-8. **HW profiles** (2026-09-09): a "HW profiles" mode with an editor — pick a
-   device, create a profile via an inline form (name, then the mandatory
-   image — picking it creates the profile; Replace image later keeps the
+8. **Image-maps** (2026-09-09): the "Devices" mode with an editor — pick a
+   device, create an image-map via an inline form (name, then the mandatory
+   image — picking it creates the image-map; Replace image later keeps the
    areas) or pick one, press an input, draw areas
-   (rect / ellipse / polygon / arrow / cw / ccw), save; zip export/import; bundled profiles from
-   `resources/profiles/` (none shipped yet). The Live view shows one image
-   block per connected device that has a profile (select when several match
+   (rect / ellipse / polygon / arrow / cw / ccw), save; zip export/import; bundled image-maps from
+   `resources/imagemaps/` (none shipped yet). The Live view shows one image
+   block per connected device that has an image-map (select when several match
    the hardware id) and lights the active inputs: buttons while
    held, hats until centered, axes as a 400 ms pulse; blue when SC has a
-   binding, grey otherwise. A bound input the profile lacks raises a toast and
-   a `not in HW profile` tag in the bindings list; clicking a binding row pins
+   binding, grey otherwise. A bound input the image-map lacks raises a toast and
+   a `not in image-map` tag in the bindings list; clicking a binding row pins
    its area(s), or a toast says why it cannot. While the editor is open the
    Live view ignores joystick input. See `CLAUDE.md` for the data model.
 
@@ -61,7 +61,7 @@ The core loop is closed end-to-end:
    axis index, derived from the HID report descriptor (`hid.rs`, read via
    hidapi in `input.rs`, count cross-checked against SDL). `resolve_input`
    handles `kind = "axis"`, so moving an axis shows its binding in the live
-   tile (resolved at most every 150 ms per axis) and lights its HW profile
+   tile (resolved at most every 150 ms per axis) and lights its image-map
    area blue; the bindings list can pin axis areas. Devices whose descriptor
    cannot be read or placed carry `axes_error` (shown on the tile, e.g. a
    `/dev/hidraw` without permission) and get no axis tokens.
@@ -147,7 +147,7 @@ the memory `gui-naming-decisions` and the plan below.
   known limitation, falls back to order/manual.
 - `bindingCountFor` on the device tiles counts shipped defaults too.
 
-### HW profiles — open items (found while building, not built; user decides)
+### Image-maps — open items (found while building, not built; user decides)
 
 - **Untested in the GUI** as of the 2026-09-09 commits: Konva transform math
   (rect rotation most likely to bite), file dialogs, zip import/export, live
@@ -155,15 +155,15 @@ the memory `gui-naming-decisions` and the plan below.
   image pick, Replace image), and the axis path (live tile, blue axis areas,
   pinning axis bindings). `pnpm build`, `cargo test` and the headless
   `enum_joysticks` (prints `SC axes: x y z rotx roty rotz` for both VKBs).
-- **First bundled profile**: once one exists, copy its folder to
-  `src-tauri/resources/profiles/<id>/`.
+- **First bundled image-map**: once one exists, copy its folder to
+  `src-tauri/resources/imagemaps/<id>/`.
 - Mode switch remounts the editor: **unsaved changes are lost without a
   warning**.
-- The pinned binding highlight is not cleared on device change / profile
+- The pinned binding highlight is not cleared on device change / image-map
   reload.
 - `validate()` does not check uniqueness of `areas[].id` nor the image file
   extension; import extracts every zip entry, referenced or not
-  (path escapes are rejected). Broken profile folders are logged to stderr
+  (path escapes are rejected). Broken image-map folders are logged to stderr
   only.
 - Refresh button also shows in Devices mode (only refreshes devices).
 - Axis areas can be drawn and pulse on movement, but have no SC token mapping
@@ -173,10 +173,12 @@ the memory `gui-naming-decisions` and the plan below.
 ### GUI redesign — remaining phases (plan in the 2026-09-09 design session)
 
 - **Phase 3 — Devices mode**: rename `hwprofile` -> `imagemap` (rs/ts,
-  commands, `resources/profiles/` -> `resources/imagemaps/`, app-data folder
-  with migration, config key `profile_choices` -> `imagemap_choices`); bundled
+  commands, `resources/profiles/` -> `resources/imagemaps/`, app-data folder,
+  config key `profile_choices` -> `imagemap_choices`; no migration, nothing
+  existed yet) — **rename done (2026-09-09)**; bundled
   image-maps become hard read-only (no edit, no delete, no silent fork) with a
-  new `clone_imagemap(id, name)` command; editor UI per the canvas (device
+  new `clone_imagemap(id, name)` command — **read-only + clone_imagemap done
+  (2026-09-09)**; editor UI per the canvas (device
   list without state, image-map list with lock / clone / trash, shape-tool
   icon bar, SDL-key input card, areas list, Discard / Save, unsaved-changes
   guard). Zero SC data in that mode.
@@ -195,7 +197,7 @@ the memory `gui-naming-decisions` and the plan below.
 
 ## Testing
 
-- `cd src-tauri && cargo test --lib` — 47 tests (+1 ignored). The ignored one
+- `cd src-tauri && cargo test --lib` — 49 tests (+1 ignored). The ignored one
   (`converts_real_hardware_guids`) checks the author's real GUIDs; run with
   `cargo test -- --ignored`.
 - Frontend: `pnpm build` (vue-tsc typechecks, `noUnusedLocals` is on).

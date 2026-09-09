@@ -23,8 +23,9 @@ See `HANDOFF.md` for the current working state.
   components: `TopBar`, `DeviceTile`, `StatusPanel`, `ImageStage` (+
   `Splitter`), `LiveCard`, `BindingsDeck`, `SettingsDialog`, `Toasts`, `Icon`
   (inline stroke SVGs by name — never emoji). `components/ProfileEditor.vue`
-  is the image-map editor (Konva via `vue-konva`, still the pre-redesign UI),
-  `components/DeviceImage.vue` the plain-SVG viewer; `hwprofile.ts` the
+  is the image-map editor (Konva via `vue-konva`, still the pre-redesign UI;
+  unchanged for now, renamed in a later step),
+  `components/DeviceImage.vue` the plain-SVG viewer; `imagemap.ts` the
   shared image-map types/helpers, `types.ts` all device/input/binding types.
   Design tokens live in `src/styles/tokens.css` (the only place colours are
   defined), fonts are bundled under `src/assets/fonts/` (OFL). GUI text is
@@ -55,22 +56,23 @@ See `HANDOFF.md` for the current working state.
 - `resort.rs` — textual `actionmaps.xml` rewrite applying a resort (joystick
   `<options>` instances + `jsN_` prefixes in `input="..."`), out-of-game
   counterpart of `pp_resortdevices`.
-- `config.rs` — persist the SC base path, the ignore list and the HW profile
+- `config.rs` — persist the SC base path, the ignore list and the image-map
   choice per device as JSON in the app config dir.
-- `hwprofile.rs` — HW profiles: one folder per profile (`profile.json` +
-  images) under `<app_data_dir>/profiles/`, bundled ones under
-  `resources/profiles/` (user shadows bundled by id, editing forks). Zip
-  export/import, image add/remove/read (data URL), validation. Pure logic
-  takes `&Path` roots; the `#[tauri::command]` wrappers only resolve dirs.
+- `imagemap.rs` — image-maps: one folder per image-map (`imagemap.json` +
+  images) under `<app_data_dir>/imagemaps/`, bundled ones under
+  `resources/imagemaps/` (bundled are read-only, clone into the user root
+  with a fresh id; import assigns a fresh id too). Zip export/import,
+  image add/remove/read (data URL), validation. Pure logic takes `&Path`
+  roots; the `#[tauri::command]` wrappers only resolve dirs.
 - `lib.rs` — Tauri commands, state wiring, the input thread spawn, the Wayland
   DMABUF workaround.
 
-## HW profile data model (`profile.json`, format 3)
+## Image-map data model (`imagemap.json`, format 3)
 
 - Keyed by `hardware_id` = SC Product GUID (vendor/product, platform-stable);
-  several profiles per id are normal (told apart by `name`).
-- **Exactly one image per profile** (`image: {file, label}`, mandatory — a
-  profile is created around its image file, areas belong to it implicitly).
+  several image-maps per id are normal (told apart by `name`).
+- **Exactly one image per image-map** (`image: {file, label}`, mandatory — an
+  image-map is created around its image file, areas belong to it implicitly).
   Format 1 (`images[]`, areas tied to an image id) is not read.
 - Areas map an **SDL-level** input key (`button:N`, `hat:N:<dir>`, `axis:N`,
   no axis sign — SC has none) to a shape on the image: `rect`, `ellipse`,

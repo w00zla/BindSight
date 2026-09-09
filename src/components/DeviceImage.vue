@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { SYMBOL_PATHS, polygonPx, symbolPx, type HighlightClass, type HwArea, type HwProfile } from "../hwprofile";
+import { SYMBOL_PATHS, polygonPx, symbolPx, type HighlightClass, type Area, type ImageMap } from "../imagemap";
 
 const props = defineProps<{
-  profile: HwProfile;
+  map: ImageMap;
   src: string;
   // input key -> highlight class for the currently active inputs
   active: Map<string, HighlightClass>;
@@ -20,14 +20,14 @@ function onLoad(e: Event) {
   H.value = img.naturalHeight;
 }
 
-const areas = computed<HwArea[]>(() => props.profile.areas);
+const areas = computed<Area[]>(() => props.map.areas);
 
-function cls(a: HwArea): string {
+function cls(a: Area): string {
   const c = props.active.get(a.input);
   return c ? `area ${c}` : "area";
 }
 
-function polyPoints(a: HwArea): string {
+function polyPoints(a: Area): string {
   if (a.shape.kind !== "polygon") return "";
   const px = polygonPx(a.shape, W.value, H.value);
   const out: string[] = [];
@@ -35,7 +35,7 @@ function polyPoints(a: HwArea): string {
   return out.join(" ");
 }
 
-function symbolTransform(a: HwArea): string {
+function symbolTransform(a: Area): string {
   if (a.shape.kind !== "symbol") return "";
   const s = symbolPx(a.shape, W.value, H.value);
   return `translate(${s.x} ${s.y}) rotate(${s.rotation}) scale(${s.scaleX} ${s.scaleY}) translate(-50 -50)`;
@@ -44,7 +44,7 @@ function symbolTransform(a: HwArea): string {
 
 <template>
   <div class="device-image">
-    <img :src="src" :alt="profile.image.label" @load="onLoad" />
+    <img :src="src" :alt="map.image.label" @load="onLoad" />
     <svg v-if="W && H" :viewBox="`0 0 ${W} ${H}`" preserveAspectRatio="none">
       <template v-for="a in areas" :key="a.id">
         <rect
