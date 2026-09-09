@@ -6,13 +6,14 @@
 //! `defaultProfile.xml` groups bindable actions under `<actionmap>` elements:
 //!
 //! ```xml
-//! <actionmap name="seat_general" UILabel="@ui_CGSeatGeneral" UICategory="@ui_CCSeatGeneral">
+//! <actionmap name="seat_general" UILabel="@ui_CGSeatGeneral">
 //!   <action name="v_eject" UILabel="@ui_CIEject" UIDescription="@ui_CIEjectDesc" joystick=" " .../>
 //! </actionmap>
 //! ```
 //!
-//! The `UILabel`/`UIDescription`/`UICategory` values are `@ui_*` keys resolved
-//! against `global.ini`, whose entries are `ui_*=text` (the `@` is dropped).
+//! The `UILabel`/`UIDescription` values are `@ui_*` keys resolved against
+//! `global.ini`, whose entries are `ui_*=text` (the `@` is dropped). The
+//! `UICategory` (SC's options-menu category) is deliberately not carried over.
 
 use std::collections::HashMap;
 
@@ -31,12 +32,11 @@ pub struct Action {
     pub joystick_default: Option<String>,
 }
 
-/// A group of actions (SC's `<actionmap>`), with its resolved label/category.
+/// A group of actions (SC's `<actionmap>`), with its resolved label.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionMap {
     pub name: String,
     pub label: Option<String>,
-    pub category: Option<String>,
     pub actions: Vec<Action>,
 }
 
@@ -104,7 +104,6 @@ fn actionmap_from(e: &BytesStart, loc: &HashMap<String, String>) -> ActionMap {
     ActionMap {
         name: attrs.get("name").cloned().unwrap_or_default(),
         label: resolve(attrs.get("UILabel"), loc),
-        category: resolve(attrs.get("UICategory"), loc),
         actions: Vec::new(),
     }
 }
@@ -276,6 +275,13 @@ pub(crate) fn split_product(product: &str) -> (String, Option<String>) {
     (product.trim().to_string(), None)
 }
 
+/// Whether a raw rebind input targets a joystick at all — a real token
+/// (`js1_button6`, `lctrl+js1_x`) or a blank one (`js2_ `) that explicitly
+/// unbinds the shipped default. Unlike [`parse_js_binding`], blank counts.
+pub fn is_joystick_rebind(input: &str) -> bool {
+    input.rsplit('+').next().is_some_and(|main| main.trim_start().starts_with("js"))
+}
+
 /// Parse a raw rebind input into its joystick `(instance, token)`, or `None`
 /// if it is not a bound joystick input. Handles a modifier prefix
 /// (`lctrl+js1_button1`) by taking the part after the last `+`, and treats a
@@ -300,7 +306,7 @@ mod tests {
     fn parses_actionmaps_and_resolves_labels() {
         let xml = r#"<profile>
           <actiongroup action="v_attack"><action name="v_attack_all"/></actiongroup>
-          <actionmap name="seat_general" UILabel="@ui_grp" UICategory="@ui_cat">
+          <actionmap name="seat_general" UILabel="@ui_grp">
             <action name="v_eject" UILabel="@ui_eject" UIDescription="@ui_eject_desc" joystick=" "/>
             <action name="v_look" UILabel="@ui_look" joystick="js1_button3"/>
           </actionmap>
@@ -308,7 +314,6 @@ mod tests {
 
         let mut loc = HashMap::new();
         loc.insert("ui_grp".to_string(), "Seat General".to_string());
-        loc.insert("ui_cat".to_string(), "Seats".to_string());
         loc.insert("ui_eject".to_string(), "Eject".to_string());
         loc.insert("ui_eject_desc".to_string(), "Eject from seat".to_string());
         // ui_look intentionally absent -> unresolved
@@ -320,7 +325,6 @@ mod tests {
         let m = &maps[0];
         assert_eq!(m.name, "seat_general");
         assert_eq!(m.label.as_deref(), Some("Seat General"));
-        assert_eq!(m.category.as_deref(), Some("Seats"));
         assert_eq!(m.actions.len(), 2);
 
         assert_eq!(m.actions[0].name, "v_eject");
@@ -404,6 +408,15 @@ mod tests {
         assert_eq!(parse_js_binding("js2_ "), None); // device-tagged but unbound
         assert_eq!(parse_js_binding("kb1_insert"), None); // not a joystick
         assert_eq!(parse_js_binding(" "), None);
+    }
+
+    #[test]
+    fn detects_joystick_rebinds_including_blank_ones() {
+        assert!(is_joystick_rebind("js1_button6"));
+        assert!(is_joystick_rebind("lctrl+js1_x"));
+        assert!(is_joystick_rebind("js2_ ")); // blank = deliberately unbound
+        assert!(!is_joystick_rebind("kb1_insert"));
+        assert!(!is_joystick_rebind(" "));
     }
 
     #[test]

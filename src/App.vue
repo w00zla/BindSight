@@ -29,7 +29,6 @@ interface Action {
 interface ActionMap {
   name: string;
   label: string | null;
-  category: string | null;
   actions: Action[];
 }
 
@@ -40,6 +39,8 @@ interface ResolvedBinding {
   actionmap: string;
   action: string;
   label: string | null;
+  // A shipped default from defaultProfile.xml (on js1), not a user rebind.
+  is_default: boolean;
 }
 
 interface LoadStatus {
@@ -54,6 +55,7 @@ interface BoundAction {
   actionmap: string;
   action: string;
   label: string | null;
+  is_default: boolean;
 }
 
 // One joystick in SC's order: the jsN SC assigns it vs the jsN its bindings
@@ -111,7 +113,15 @@ const actionMaps = ref<ActionMap[]>([]);
 const basePath = ref("");
 const bindings = ref<ResolvedBinding[]>([]);
 const tokens = ref<Record<string, string>>({});
-const currentInput = ref<{ device: string; token: string | null; actions: BoundAction[] } | null>(null);
+// `sdl` is the SDL-side input name, shown when SC has no token for the input;
+// `sc_guid` lets the tile tell whether SC sees the device at all.
+const currentInput = ref<{
+  device: string;
+  sc_guid: string | null;
+  token: string | null;
+  sdl: string;
+  actions: BoundAction[];
+} | null>(null);
 const clash = ref<ClashReport | null>(null);
 // SC Product GUIDs the user marked "SC doesn't see this device" (persisted per OS).
 const ignoredDevices = ref<string[]>([]);
@@ -174,9 +184,14 @@ function isUnseen(guid: string | null): boolean {
 // Slots in SC's last-start list whose device is unplugged now.
 const unpluggedSinceStart = computed<SlotStatus[]>(() => (clash.value?.connected ?? []).filter((s) => !s.connected_now));
 
-// "2026-09-08T21:06:00.762Z" -> "2026-09-08 21:06:00" for display.
+// Game.log timestamps are UTC ("...Z"); show them in local time as
+// "YYYY-MM-DD HH:MM:SS". Unparseable input is shown as-is.
 function fmtTimestamp(ts: string | null): string {
-  return ts ? ts.replace("T", " ").replace(/\.\d+Z$/, "").replace(/Z$/, "") : "unknown time";
+  if (!ts) return "?";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 function isIgnored(guid: string | null): boolean {
@@ -241,7 +256,13 @@ async function showBinding(
       index,
       direction,
     });
-    currentInput.value = { device: nameFor(guid), token: res.token, actions: res.actions };
+    currentInput.value = {
+      device: nameFor(guid),
+      sc_guid: devices.value.find((d) => d.sdl_guid === guid)?.sc_product_guid ?? null,
+      token: res.token,
+      sdl: sdlInputName(kind, index, direction),
+      actions: res.actions,
+    };
   } catch {
     /* ignore transient resolve errors */
   }
@@ -302,6 +323,21 @@ async function refresh() {
 function nameFor(guid: string): string {
   const d = devices.value.find((dev) => dev.sdl_guid === guid);
   return d?.sc_name ?? guid;
+}
+
+// SDL-side name of a live input, e.g. "button 5" or "hat 0 up".
+function sdlInputName(kind: "button" | "hat", index: number, direction: string | null): string {
+  return kind === "button" ? `button ${index}` : `hat ${index} ${direction ?? ""}`.trim();
+}
+
+// Live tile colour: yellow when SC doesn't see the device (unseen or excluded —
+// any SC token is meaningless then), blue when the input has SC bindings, grey
+// otherwise.
+function liveState(): "unseen" | "bound" | "none" {
+  const c = currentInput.value;
+  if (!c) return "none";
+  if (isIgnored(c.sc_guid) || isUnseen(c.sc_guid)) return "unseen";
+  return c.actions.length ? "bound" : "none";
 }
 
 function describe(ev: JoyInput): string {
@@ -379,14 +415,14 @@ onUnmounted(() => {
         <div class="device-name">
           {{ d.sc_name ?? "(unknown device)" }}
           <span v-if="isIgnored(d.sc_product_guid)" class="js-ignored">
-            SC doesn't see this device
+            excluded
           </span>
           <span v-else-if="slotFor(d.sc_product_guid)?.clash" class="js-clash">
             ⚠ SC → js{{ slotFor(d.sc_product_guid)?.effective_instance }}
             (binds js{{ slotFor(d.sc_product_guid)?.stored_instance }})
           </span>
           <span v-else-if="slotFor(d.sc_product_guid) && !clash?.order_verified" class="js-unverified">
-            js{{ slotFor(d.sc_product_guid)?.effective_instance }}? · order unverified
+            order unknown
           </span>
           <span v-else-if="slotFor(d.sc_product_guid)?.stored_instance" class="js-mapped">
             ✓ js{{ slotFor(d.sc_product_guid)?.effective_instance }}
@@ -395,7 +431,7 @@ onUnmounted(() => {
             js{{ slotFor(d.sc_product_guid)?.effective_instance }} · not in profile
           </span>
           <span v-else-if="isUnseen(d.sc_product_guid)" class="js-unseen">
-            not seen by SC at last start
+            not seen by SC
           </span>
         </div>
         <div class="counts">
@@ -411,40 +447,26 @@ onUnmounted(() => {
             :title="isIgnored(d.sc_product_guid) ? 'Count this device as visible to SC again' : 'Treat this device as one SC never sees (e.g. hidden by Wine); it then counts as unplugged'"
             @click="toggleIgnored(d.sc_product_guid)"
           >
-            {{ isIgnored(d.sc_product_guid) ? "Mark: SC sees it" : "Mark: SC doesn't see it" }}
+            {{ isIgnored(d.sc_product_guid) ? "Include" : "Exclude always" }}
           </button>
         </div>
       </li>
     </ul>
 
     <p v-if="logSource" class="source-note">
-      SC device order from <code>Game.log</code> (last game start,
-      {{ fmtTimestamp(logSource.timestamp) }}).
-      <template v-if="clash?.unseen.length">
-        {{ clash?.unseen.length }} device(s) not seen by SC then — hidden from SC
-        (e.g. by Wine) or plugged in later; restart SC to re-enumerate.
-      </template>
-      <template v-if="unpluggedSinceStart.length">
-        {{ unpluggedSinceStart.length }} device(s) SC saw then are unplugged now —
-        SC will renumber on its next start.
-      </template>
+      <code>Game.log</code> {{ fmtTimestamp(logSource.timestamp) }}
+      <template v-if="clash?.unseen.length"> · {{ clash?.unseen.length }} not seen by SC</template>
+      <template v-if="unpluggedSinceStart.length"> · {{ unpluggedSinceStart.length }} unplugged since</template>
     </p>
     <p v-else-if="clash && clash.source.kind === 'sdl_derived' && devices.length" class="order-note">
       <template v-if="clash.source.log_error?.kind === 'not_found'">
-        <code>Game.log</code> not found at <code>{{ clash.source.log_error.path }}</code>
-        ({{ clash.source.log_error.reason }}). Start SC once so it enumerates your
-        devices.
+        <code>Game.log</code> not found: <code>{{ clash.source.log_error.path }}</code>
       </template>
       <template v-else-if="clash.source.log_error?.kind === 'no_device_lines'">
-        <code>Game.log</code> at <code>{{ clash.source.log_error.path }}</code> lists no
-        joysticks — SC saw none at its last start, or the log format changed.
+        <code>Game.log</code> lists no joysticks: <code>{{ clash.source.log_error.path }}</code>
       </template>
-      <template v-else>No <code>Game.log</code> consulted (no profile loaded).</template>
-      <template v-if="!clash.order_verified">
-        Device order is derived from SDL and unverified on this platform;
-        <code>jsN</code> numbers are a best guess. Only missing devices are
-        reported as clashes here.
-      </template>
+      <template v-else><code>Game.log</code> not consulted</template>
+      <template v-if="!clash.order_verified"> · order unknown</template>
     </p>
 
     <section v-if="clash?.has_clash" class="clash-banner">
@@ -462,15 +484,18 @@ onUnmounted(() => {
       </ul>
     </section>
 
-    <section class="current" v-if="currentInput">
+    <section class="current" :class="'state-' + liveState()" v-if="currentInput">
       <div class="cur-head">
         <span class="cur-dev">{{ currentInput.device }}</span>
-        <span v-if="currentInput.token" class="js-badge">js{{ instanceOf(currentInput.token) }}</span>
-        <span class="cur-detail">{{ tokenLabel(currentInput.token) }}</span>
+        <span v-if="liveState() === 'unseen'" class="js-unverified">
+          {{ isIgnored(currentInput.sc_guid) ? "excluded" : "not seen by SC" }}
+        </span>
+        <span class="cur-detail">{{ currentInput.token ? tokenLabel(currentInput.token) : currentInput.sdl }}</span>
       </div>
       <div v-if="currentInput.actions.length" class="cur-actions">
         <div v-for="(a, i) in currentInput.actions" :key="i">
           {{ a.label ?? a.action }}
+          <span v-if="a.is_default" class="default-tag">default</span>
           <span class="cur-ctx">({{ actionmapLabel(a.actionmap) }})</span>
         </div>
       </div>
@@ -482,7 +507,10 @@ onUnmounted(() => {
       <ul class="binding-list">
         <li v-for="(b, i) in bindings" :key="i" :class="{ 'binding-clash': bindingClash(b.token) }">
           <span class="tok">{{ tokenLabel(b.token) }}</span>
-          <span class="blabel">{{ b.label ?? b.action }}</span>
+          <span class="blabel">
+            {{ b.label ?? b.action }}
+            <span v-if="b.is_default" class="default-tag">default</span>
+          </span>
           <span
             class="bctrl"
             :class="bindingClash(b.token) ? 'ctrl-clash' : isConnected(b) ? 'ctrl-ok' : 'ctrl-warn'"
@@ -512,10 +540,7 @@ onUnmounted(() => {
       <h2>Actions</h2>
       <div class="action-scroll">
         <div v-for="map in actionMaps" :key="map.name" class="action-group">
-          <div class="group-head">
-            {{ map.label ?? map.name }}
-            <span v-if="map.category" class="cat">{{ map.category }}</span>
-          </div>
+          <div class="group-head">{{ map.label ?? map.name }}</div>
           <ul>
             <li v-for="a in map.actions" :key="a.name">{{ actionText(a) }}</li>
           </ul>
@@ -590,16 +615,6 @@ h2 {
 .device-name {
   font-weight: 600;
   margin-bottom: 0.5rem;
-}
-
-.js-badge {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #396cd8;
-  background: rgba(57, 108, 216, 0.12);
-  border-radius: 4px;
-  padding: 0.05rem 0.35rem;
-  margin-left: 0.4rem;
 }
 
 .js-mapped {
@@ -827,15 +842,6 @@ h2 {
   margin-bottom: 0.2rem;
 }
 
-.cat {
-  font-weight: 500;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  opacity: 0.55;
-  margin-left: 0.4rem;
-}
-
 .action-group ul {
   list-style: none;
   margin: 0;
@@ -901,11 +907,28 @@ h2 {
 }
 
 .current {
-  border: 1px solid #396cd8;
+  border: 1px solid;
   border-radius: 10px;
   padding: 0.8rem 1rem;
   margin: 0.5rem 0 1rem;
+}
+
+/* blue: the input has SC bindings */
+.state-bound {
+  border-color: #396cd8;
   background: rgba(57, 108, 216, 0.08);
+}
+
+/* grey: SC sees the device, nothing bound */
+.state-none {
+  border-color: rgba(128, 128, 128, 0.4);
+  background: rgba(128, 128, 128, 0.06);
+}
+
+/* yellow: SC doesn't see the device (unseen or excluded) */
+.state-unseen {
+  border-color: #d4a017;
+  background: rgba(212, 160, 23, 0.12);
 }
 
 .cur-head {
@@ -981,6 +1004,18 @@ h2 {
 .bound-count {
   color: #2e7d32;
   font-weight: 600;
+}
+
+.default-tag {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.55;
+  margin-left: 0.4rem;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  border-radius: 3px;
+  padding: 0 0.3rem;
+  vertical-align: middle;
 }
 
 button {

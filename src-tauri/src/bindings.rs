@@ -6,13 +6,13 @@
 //! / [`hat_token`] builds the token -> [`BindingIndex::resolve`] returns the
 //! bound action(s).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
 use crate::gamelog::{GameLogError, LogEnumeration};
 use crate::input::DeviceInfo;
-use crate::scdata::{parse_js_binding, ActionMap, UserProfile};
+use crate::scdata::{is_joystick_rebind, parse_js_binding, ActionMap, UserProfile};
 
 /// An action a token is bound to, with the context (actionmap) it applies in.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -20,6 +20,31 @@ pub struct BoundAction {
     pub actionmap: String,
     pub action: String,
     pub label: Option<String>,
+    /// Comes from `defaultProfile.xml`'s joystick default (always on `js1`),
+    /// not from a user rebind.
+    pub is_default: bool,
+}
+
+/// Instance SC applies `defaultProfile.xml`'s unnumbered joystick defaults to
+/// (`joystick="button1"` means `js1_button1`) — confirmed by the user.
+const DEFAULT_INSTANCE: u32 = 1;
+
+/// Full SC token for an unnumbered joystick default from `defaultProfile.xml`.
+pub fn default_token(token: &str) -> String {
+    format!("js{DEFAULT_INSTANCE}_{token}")
+}
+
+/// Actions whose joystick binding the user touched in `actionmaps.xml` — any
+/// rebind with a `js` input, including a blank one (`js1_ `) that unbinds the
+/// shipped default. For those the default no longer applies. A keyboard/mouse/
+/// gamepad-only rebind does not count: rebinds are per device.
+fn joystick_touched(profile: &UserProfile) -> HashSet<(&str, &str)> {
+    profile
+        .rebinds
+        .iter()
+        .filter(|r| is_joystick_rebind(&r.input))
+        .map(|r| (r.actionmap.as_str(), r.action.as_str()))
+        .collect()
 }
 
 /// Lookup from an SC input token (e.g. `"js2_button9"`) to the actions bound to
@@ -54,7 +79,25 @@ impl BindingIndex {
                 actionmap: rebind.actionmap.clone(),
                 action: rebind.action.clone(),
                 label,
+                is_default: false,
             });
+        }
+
+        // Shipped defaults (always js1) for actions the user never touched.
+        let touched = joystick_touched(profile);
+        for map in maps {
+            for action in &map.actions {
+                let Some(token) = &action.joystick_default else { continue };
+                if touched.contains(&(map.name.as_str(), action.name.as_str())) {
+                    continue;
+                }
+                by_token.entry(default_token(token)).or_default().push(BoundAction {
+                    actionmap: map.name.clone(),
+                    action: action.name.clone(),
+                    label: action.label.clone(),
+                    is_default: true,
+                });
+            }
         }
 
         Self { by_token }
@@ -94,11 +137,15 @@ pub struct ResolvedBinding {
     pub actionmap: String,
     pub action: String,
     pub label: Option<String>,
+    /// A shipped default from `defaultProfile.xml` (on `js1`), not a user rebind.
+    pub is_default: bool,
 }
 
 /// Flatten the user's joystick rebinds into resolved bindings: each real (bound)
 /// joystick input with its SC token, the device it sits on, and the action's
-/// label. Non-joystick or unbound rebinds are skipped.
+/// label. Non-joystick or unbound rebinds are skipped. Shipped `js1` defaults
+/// are appended for every action the user never touched (see
+/// [`joystick_touched`]).
 pub fn resolve_bindings(maps: &[ActionMap], profile: &UserProfile) -> Vec<ResolvedBinding> {
     let mut label_of: HashMap<(&str, &str), Option<String>> = HashMap::new();
     for map in maps {
@@ -128,7 +175,28 @@ pub fn resolve_bindings(maps: &[ActionMap], profile: &UserProfile) -> Vec<Resolv
                 .get(&(rebind.actionmap.as_str(), rebind.action.as_str()))
                 .cloned()
                 .flatten(),
+            is_default: false,
         });
+    }
+
+    let touched = joystick_touched(profile);
+    let default_device = device_of.get(&DEFAULT_INSTANCE);
+    for map in maps {
+        for action in &map.actions {
+            let Some(token) = &action.joystick_default else { continue };
+            if touched.contains(&(map.name.as_str(), action.name.as_str())) {
+                continue;
+            }
+            out.push(ResolvedBinding {
+                token: default_token(token),
+                device: default_device.map(|d| d.0.to_string()),
+                device_guid: default_device.and_then(|d| d.1.map(String::from)),
+                actionmap: map.name.clone(),
+                action: action.name.clone(),
+                label: action.label.clone(),
+                is_default: true,
+            });
+        }
     }
     out
 }
@@ -214,15 +282,17 @@ pub struct ClashReport {
 }
 
 /// SC's device order derived from SDL's, plus whether that derivation is
-/// verified on this platform. SDL's enumeration order is NOT SC's — measured on
-/// the real setup (`temp/joyenumtest`, one sample each):
+/// verified on this platform. This is only the fallback when no usable
+/// `Game.log` exists — SDL's enumeration order is NOT SC's, measured on the
+/// real setup (`temp/joyenumtest`):
 ///
-/// - **Windows**: SC enumerates in exactly the reverse of SDL's order (four
-///   devices, exact mirror).
-/// - **Linux/Wine**: SDL's order matched SC's for the visible sticks, but Wine
-///   also hides devices SC never sees (e.g. the Keychron K2 HE), so a plain
-///   identity mapping counts phantom slots. Until that is understood the Linux
-///   order is only a best guess, flagged unverified.
+/// - **Windows**: SC enumerates in exactly the reverse of SDL's order (one
+///   sample, four devices, exact mirror).
+/// - **Linux/Wine**: no usable relation. SC's order stayed put across a reboot
+///   that reshuffled the evdev (SDL) order, and Wine hides devices SC never
+///   sees (e.g. a Keychron K2 HE keyboard). The identity mapping here is only a
+///   placeholder so the slots exist; the order is unknown, flagged unverified,
+///   and no rank clash is ever asserted from it.
 fn sc_order_from_sdl(devices: &[DeviceInfo]) -> (Vec<&DeviceInfo>, bool) {
     if cfg!(target_os = "windows") {
         (devices.iter().rev().collect(), true)
@@ -685,5 +755,67 @@ mod tests {
         let fire = resolved.iter().find(|b| b.action == "v_fire").unwrap();
         assert_eq!(fire.token, "js2_button1");
         assert_eq!(fire.device.as_deref(), Some("R"));
+    }
+
+    #[test]
+    fn shipped_defaults_apply_on_js1_unless_the_user_touched_the_action() {
+        let profile_xml = r#"<profile>
+          <actionmap name="m" UILabel="@m">
+            <action name="untouched" joystick="button1" UILabel="@a"/>
+            <action name="rebound" joystick="x"/>
+            <action name="unbound" joystick="y"/>
+            <action name="kb_only" joystick="button2"/>
+            <action name="no_default"/>
+          </actionmap>
+        </profile>"#;
+        let mut loc = HashMap::new();
+        loc.insert("a".to_string(), "Untouched".to_string());
+        let maps = parse_default_profile(profile_xml, &loc).unwrap();
+
+        let user_xml = r#"<ActionMaps>
+          <options type="joystick" instance="1" Product=" L {0201231D-0000-0000-0000-504944564944}"/>
+          <actionmap name="m">
+            <action name="rebound"><rebind input="js2_rotz"/></action>
+            <action name="unbound"><rebind input="js1_ "/></action>
+            <action name="kb_only"><rebind input="kb1_k"/></action>
+          </actionmap>
+        </ActionMaps>"#;
+        let profile = parse_user_profile(user_xml).unwrap();
+
+        let resolved = resolve_bindings(&maps, &profile);
+        let find = |action: &str| resolved.iter().filter(|b| b.action == action).collect::<Vec<_>>();
+
+        // Untouched: the default shows up on js1, on the js1 device, tagged.
+        let u = find("untouched");
+        assert_eq!(u.len(), 1);
+        assert_eq!(u[0].token, "js1_button1");
+        assert!(u[0].is_default);
+        assert_eq!(u[0].device.as_deref(), Some("L"));
+        assert_eq!(u[0].label.as_deref(), Some("Untouched"));
+
+        // Rebound: only the user's binding, the default is replaced.
+        let r = find("rebound");
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].token, "js2_rotz");
+        assert!(!r[0].is_default);
+
+        // Explicitly unbound (blank js rebind): nothing at all.
+        assert!(find("unbound").is_empty());
+
+        // A keyboard-only rebind leaves the joystick default in place.
+        let k = find("kb_only");
+        assert_eq!(k.len(), 1);
+        assert_eq!(k[0].token, "js1_button2");
+        assert!(k[0].is_default);
+
+        assert!(find("no_default").is_empty());
+
+        // The live index sees the same defaults.
+        let index = BindingIndex::build(&maps, &profile);
+        let hit = index.resolve("js1_button1");
+        assert_eq!(hit.len(), 1);
+        assert!(hit[0].is_default);
+        assert!(index.resolve("js1_x").is_empty()); // replaced by the js2_rotz rebind
+        assert!(index.resolve("js1_y").is_empty()); // unbound
     }
 }

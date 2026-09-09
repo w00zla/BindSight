@@ -2,7 +2,6 @@
   {
     "name": "seat_general",
     "label": "Vehicles - Seats and Operator Modes",
-    "category": null,
     "actions": [
       {
         "name": "v_emergency_exit",
@@ -171,7 +170,6 @@
   {
     "name": "spaceship_general",
     "label": "Vehicles - Cockpit",
-    "category": "FLIGHT",
     "actions": [
       {
         "name": "v_self_destruct",
@@ -256,7 +254,6 @@
   {
     "name": "vehicle_mfd",
     "label": "Vehicles - Multi Function Displays (MFDs)",
-    "category": null,
     "actions": [
       {
         "name": "v_mfd_interact_cycle_forwards_short",
@@ -593,7 +590,6 @@
   {
     "name": "spaceship_view",
     "label": "Vehicles - View",
-    "category": "FLIGHT",
     "actions": [
       {
         "name": "v_view_yaw_left",
@@ -732,7 +728,6 @@
   {
     "name": "spaceship_movement",
     "label": "Flight - Movement",
-    "category": "FLIGHT",
     "actions": [
       {
         "name": "v_pitch_up",
@@ -1357,7 +1352,6 @@
   {
     "name": "spaceship_quantum",
     "label": "Flight - Quantum Travel",
-    "category": null,
     "actions": [
       {
         "name": "v_toggle_qdrive_engagement",
@@ -1370,7 +1364,6 @@
   {
     "name": "spaceship_docking",
     "label": "Flight - Docking",
-    "category": null,
     "actions": [
       {
         "name": "v_toggle_docking_request",
@@ -1389,7 +1382,6 @@
   {
     "name": "spaceship_targeting",
     "label": "Vehicles - Targeting",
-    "category": "FLIGHT",
     "actions": [
       {
         "name": "v_auto_targeting_toggle_long",
@@ -1546,7 +1538,6 @@
   {
     "name": "spaceship_targeting_advanced",
     "label": "Vehicles - Target Cycling",
-    "category": "FLIGHT",
     "actions": [
       {
         "name": "v_target_under_reticle",
@@ -1685,7 +1676,6 @@
   {
     "name": "spaceship_target_hailing",
     "label": "Flight - Target Hailing",
-    "category": "FLIGHT",
     "actions": [
       {
         "name": "v_target_hail",
@@ -1698,7 +1688,6 @@
   {
     "name": "spaceship_radar",
     "label": "Flight - Radar",
-    "category": "FLIGHT",
     "actions": [
       {
         "name": "v_invoke_ping",
@@ -1711,7 +1700,6 @@
   {
     "name": "spaceship_scanning",
     "label": "Vehicles - Scanning",
-    "category": "FLIGHT",
     "actions": [
       {
         "name": "v_scanning_trigger_scan",
@@ -1736,7 +1724,6 @@
   {
     "name": "spaceship_mining",
     "label": "Vehicles - Mining",
-    "category": "FLIGHT",
     "actions": [
       {
         "name": "v_toggle_mining_laser_fire",
@@ -1803,7 +1790,6 @@
   {
     "name": "spaceship_salvage",
     "label": "Vehicles - Salvage",
-    "category": "FLIGHT",
     "actions": [
       {
         "name": "tractor_beam_vehicle_increase_distance",
@@ -1996,7 +1982,6 @@
   {
     "name": "turret_movement",
     "label": "Turret Movement",
-    "category": null,
     "actions": [
       {
         "name": "turret_pitch_up",
@@ -2105,7 +2090,6 @@
   {
     "name": "turret_advanced",
     "label": "Turret Advanced",
-    "category": null,
     "actions": [
       {
         "name": "turret_esp_toggle",
@@ -2166,7 +2150,6 @@
   {
     "name": "spaceship_weapons",
     "label": "Vehicles - Weapons",
-    "category": "FLIGHT",
     "actions": [
       {
         "name": "v_weapon_gimbals_state_toggle",
@@ -2467,7 +2450,6 @@
   {
     "name": "spaceship_missiles",
     "label": "Vehicles - Missiles",
-    "category": "FLIGHT",
     "actions": [
       {
         "name": "v_weapon_toggle_launch_missile",
@@ -2558,7 +2540,6 @@
   {
     "name": "spaceship_defensive",
     "label": "Vehicles - Shields and Countermeasures",
-    "category": "FLIGHT",
     "actions": [
       {
         "name": "v_weapon_countermeasure_decoy_launch",
@@ -2637,7 +2618,6 @@
   {
     "name": "spaceship_power",
     "label": "Flight - Power",
-    "category": "FLIGHT",
     "actions": [
       {
         "name": "v_power_toggle",
@@ -2818,7 +2798,6 @@
   {
     "name": "spaceship_hud",
     "label": "Flight - HUD",
-    "category": "FLIGHT",
     "actions": [
       {
         "name": "v_cycle_pitch_ladder_mode",
@@ -2855,7 +2834,6 @@
   {
     "name": "lights_controller",
     "label": "Lights",
-    "category": null,
     "actions": [
       {
         "name": "v_lights",
@@ -2880,7 +2858,6 @@
   {
     "name": "stopwatch",
     "label": "Stop Watch",
-    "category": null,
     "actions": [
       {
         "name": "stopwatch_reset",
@@ -2899,7 +2876,6 @@
   {
     "name": "player",
     "label": "On Foot - All",
-    "category": "ON FOOT",
     "actions": [
       {
         "name": "moveleft",
@@ -3374,7 +3350,6 @@
   {
     "name": "prone",
     "label": "On Foot - All",
-    "category": "ON FOOT",
     "actions": [
       {
         "name": "prone_rollleft",
@@ -3393,7 +3368,6 @@
   {
     "name": "tractor_beam",
     "label": "On Foot - All",
-    "category": "ON FOOT",
     "actions": [
       {
         "name": "tractor_beam_increase_distance",
@@ -3412,7 +3386,6 @@
   {
     "name": "incapacitated",
     "label": "On Foot - All",
-    "category": "ON FOOT",
     "actions": [
       {
         "name": "incapacitatedRespawn",
@@ -3425,7 +3398,6 @@
   {
     "name": "zero_gravity_eva",
     "label": "E.V.A - All",
-    "category": "E.V.A.",
     "actions": [
       {
         "name": "eva_view_yaw_left",
@@ -3570,7 +3542,6 @@
   {
     "name": "zero_gravity_traversal",
     "label": "E.V.A. - Zero-G Traversal",
-    "category": null,
     "actions": [
       {
         "name": "zgt_launch",
@@ -3601,7 +3572,6 @@
   {
     "name": "vehicle_general",
     "label": "Ground Vehicle - General",
-    "category": "Vehicle",
     "actions": [
       {
         "name": "v_horn",
@@ -3740,7 +3710,6 @@
   {
     "name": "vehicle_driver",
     "label": "Ground Vehicle - Movement",
-    "category": "Vehicle",
     "actions": [
       {
         "name": "v_move_forward",
@@ -3867,7 +3836,6 @@
   {
     "name": "spectator",
     "label": "Electronic Access - Spectator",
-    "category": "Electronic Access - Spectator",
     "actions": [
       {
         "name": "spectate_next_target",
@@ -3952,7 +3920,6 @@
   {
     "name": "default",
     "label": "Social - General",
-    "category": "Social - General",
     "actions": [
       {
         "name": "respawn",
@@ -4007,7 +3974,6 @@
   {
     "name": "ui_notification",
     "label": "Social - Invites",
-    "category": "Social - General",
     "actions": [
       {
         "name": "ui_notification_accept",
@@ -4032,7 +3998,6 @@
   {
     "name": "player_emotes",
     "label": "Social - Emotes",
-    "category": "ON FOOT",
     "actions": [
       {
         "name": "emote_cs_forward",
@@ -4279,7 +4244,6 @@
   {
     "name": "player_input_optical_tracking",
     "label": "VOIP, FOIP and Head Tracking",
-    "category": "VOIP, FOIP and Head Tracking",
     "actions": [
       {
         "name": "hmd_toggle",
@@ -4364,7 +4328,6 @@
   {
     "name": "player_choice",
     "label": "Quick Keys, Interactions, and Inner Thought",
-    "category": "Quick Keys, Interactions, and Inner Thought",
     "actions": [
       {
         "name": "pc_interaction_mode",
@@ -4581,7 +4544,6 @@
   {
     "name": "view_director_mode",
     "label": "Camera - Advanced Camera Controls",
-    "category": "CAMERA",
     "actions": [
       {
         "name": "view_enable_camview_mode",
