@@ -116,8 +116,12 @@ pub enum GameLogError {
 /// Read and parse a `Game.log`.
 pub fn read(path: &Path) -> Result<LogEnumeration, GameLogError> {
     let display = path.display().to_string();
-    let text = std::fs::read_to_string(path)
+    let bytes = std::fs::read(path)
         .map_err(|e| GameLogError::NotFound { path: display.clone(), reason: e.to_string() })?;
+    // Not valid UTF-8 on Windows: SC writes OS strings (e.g. audio device
+    // names) in the ANSI code page. The device lines are ASCII, so lossy
+    // decoding only garbles lines we do not read.
+    let text = String::from_utf8_lossy(&bytes);
     parse(&text).ok_or(GameLogError::NoDeviceLines { path: display })
 }
 
@@ -187,6 +191,21 @@ mod tests {
         // A malformed index is skipped, not a crash.
         assert!(parse("<t> - Connected joystickX: Foo {…}\n").is_none());
         assert!(parse("<t> - Connected xinputX: Gamepad\n").is_none());
+    }
+
+    #[test]
+    fn read_tolerates_non_utf8_bytes() {
+        // Windows SC logs device names in the ANSI code page: `ö` is the single
+        // byte 0xF6 (verbatim from a real Windows Game.log).
+        let mut bytes = b"<t> FriendlyName='Kopfh".to_vec();
+        bytes.push(0xF6);
+        bytes.extend_from_slice(b"rermikrofon (A50 Mic)'\n");
+        bytes.extend_from_slice(LOG.as_bytes());
+        let path = std::env::temp_dir().join(format!("bindsight-gamelog-{}.log", uuid::Uuid::new_v4()));
+        std::fs::write(&path, &bytes).unwrap();
+        let result = read(&path);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(result.unwrap().joysticks.len(), 2);
     }
 
     #[test]
