@@ -269,6 +269,13 @@ file libappindicator-gtk3-devel librsvg2-devel libxdo-devel SDL2-devel`, plus th
   buttons/wheel (`kb1_mouse1`, `kb1_mwheel_up`); mouse is not supported.
 - **Keyboard capture needs the BindSight window focused** (webview keydown;
   SDL2 delivers key events only to its own window). It runs in every mode
+- **Windows RawInput pads need `SDL_JOYSTICK_THREAD=1`** (`input::init_sdl`):
+  SDL's RawInput driver (e.g. an Xbox pad over Bluetooth, SDL GUID ending
+  `72`) gets device arrival/removal and input only as messages to SDL's
+  hidden window, which nothing pumps without SDL's video subsystem. Without
+  the hint such a pad turned on after start never appeared (DirectInput
+  sticks were fine: their hot-plug comes from a `CM_Register_Notification`
+  callback).
   and `preventDefault`s every mapped key (deliberate: a rebind flow must own
   the keyboard); only text fields and open dialogs (`[role="dialog"]`) are
   skipped. PrintScreen / Meta never arrive.

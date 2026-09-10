@@ -16,6 +16,10 @@ fn main() -> Result<(), String> {
     for d in &devices {
         println!("[{}] {}", d.index, d.sc_name.as_deref().unwrap_or("<no HID name>"));
         println!("    SDL name:   {}", d.sdl_name);
+        println!("    kind:       {:?} (SDL type {})", d.kind, d.sdl_type);
+        if let Some(name) = &d.controller_name {
+            println!("    controller: {name}, slot {:?}", d.gamepad_slot);
+        }
         println!("    SDL GUID:   {}", d.sdl_guid);
         println!(
             "    SC Product: {}",

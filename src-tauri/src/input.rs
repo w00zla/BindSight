@@ -434,11 +434,22 @@ fn open_all(joystick: &JoystickSubsystem, controllers: &GameControllerSubsystem,
     Ok(open)
 }
 
+/// The SDL context, with SDL's own joystick thread switched on. On Windows,
+/// RawInput devices (e.g. an Xbox pad over Bluetooth) learn about arrival,
+/// removal and their input only through messages to SDL's hidden message
+/// window, and without SDL's video subsystem nothing pumps that window: such a
+/// pad plugged in after start never showed up. The joystick thread pumps it.
+/// No effect on other platforms.
+pub fn init_sdl() -> Result<sdl2::Sdl, String> {
+    sdl2::hint::set("SDL_JOYSTICK_THREAD", "1");
+    sdl2::init()
+}
+
 /// Enumerate connected hardware with a short-lived SDL context. For the
 /// standalone examples only — the running app reads [`DeviceList`] instead,
 /// which also carries the synthetic keyboard.
 pub fn enumerate() -> Result<Vec<DeviceInfo>, String> {
-    let sdl = sdl2::init()?;
+    let sdl = init_sdl()?;
     let joystick = sdl.joystick()?;
     let controllers = sdl.game_controller()?;
     let hid = hid_table();
@@ -456,7 +467,7 @@ pub fn spawn(app: AppHandle, devices: DeviceList) {
 }
 
 fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
-    let sdl = sdl2::init()?;
+    let sdl = init_sdl()?;
     let joystick = sdl.joystick()?;
     let controllers = sdl.game_controller()?;
     let mut event_pump = sdl.event_pump()?;

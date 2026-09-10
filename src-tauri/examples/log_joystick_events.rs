@@ -17,7 +17,8 @@ use sdl2::event::Event;
 const AXIS_PRINT_THRESHOLD: i32 = 3000;
 
 fn main() -> Result<(), String> {
-    let sdl = sdl2::init()?;
+    // Same init as the app: RawInput pads need SDL's joystick thread on Windows.
+    let sdl = bindsight_lib::input::init_sdl()?;
     let joystick = sdl.joystick()?;
 
     // Joysticks must stay open to receive their events; keep them alive and
