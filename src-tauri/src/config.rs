@@ -70,6 +70,17 @@ pub struct Config {
     /// id. Only needed when several image-maps exist for one device.
     #[serde(default)]
     pub imagemap_choices: HashMap<String, String>,
+    /// Back up `actionmaps.xml` before BindSight overwrites it (Fix via config,
+    /// restore). On unless the user switched it off.
+    #[serde(default = "default_auto_backup")]
+    pub auto_backup: bool,
+    /// Write DEBUG records to the app log; INFO and up otherwise.
+    #[serde(default)]
+    pub debug_logging: bool,
+}
+
+fn default_auto_backup() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -79,6 +90,8 @@ impl Default for Config {
             active_env: default_active_env(),
             ignored_devices: Vec::new(),
             imagemap_choices: HashMap::new(),
+            auto_backup: default_auto_backup(),
+            debug_logging: false,
         }
     }
 }
@@ -184,6 +197,7 @@ mod tests {
         assert_eq!(c.base_path(), r"C:\Program Files\Roberts Space Industries\StarCitizen\LIVE");
         assert_eq!(c.environments["PTU"].path, r"C:\Program Files\Roberts Space Industries\StarCitizen\PTU");
         assert!(c.global_ini_override().is_none());
+        assert!(c.auto_backup);
     }
 
     #[test]
@@ -194,6 +208,12 @@ mod tests {
         assert_eq!(c.base_path(), "/sc/PTU");
         assert_eq!(c.global_ini_override(), Some(PathBuf::from("/x/global.ini")));
         assert!(c.ignored_devices.is_empty());
+        // Auto-backups are on unless switched off explicitly; debug logging is
+        // off unless switched on.
+        assert!(c.auto_backup);
+        assert!(!serde_json::from_str::<Config>(r#"{"auto_backup":false}"#).unwrap().auto_backup);
+        assert!(!c.debug_logging);
+        assert!(serde_json::from_str::<Config>(r#"{"debug_logging":true}"#).unwrap().debug_logging);
 
         // An unknown active slug falls back to LIVE; an override that is off
         // or has no path is none.

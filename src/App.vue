@@ -15,6 +15,7 @@ import WindowEdges from "./components/WindowEdges.vue";
 import { deviceKey, deviceName } from "./devices";
 import Splitter from "./components/Splitter.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
+import { setDebugLogging } from "./logging";
 import type {
   DeviceKind,
   ActionMap,
@@ -111,6 +112,10 @@ const error = ref<string | null>(null);
 const profileLoaded = ref(false);
 const loading = ref(false);
 const showSettings = ref(false);
+// Back up actionmaps.xml before BindSight overwrites it (Settings).
+const autoBackup = ref(true);
+// Write DEBUG records to bindsight.log (Settings).
+const debugLogging = ref(false);
 
 // --- image-maps --------------------------------------------------------
 
@@ -517,10 +522,20 @@ const orderedDevices = computed<DeviceInfo[]>(() =>
 );
 // Settings dialog Save: apply the exclusions and the environments; the
 // backend reloads when the active environment changed.
-async function applySettings(s: { environments: Record<string, Environment>; ignored: string[] }) {
+async function applySettings(s: {
+  environments: Record<string, Environment>;
+  ignored: string[];
+  autoBackup: boolean;
+  debugLogging: boolean;
+}) {
   showSettings.value = false;
   try {
     ignoredDevices.value = await invoke<string[]>("set_ignored_devices", { guids: s.ignored });
+    await invoke("set_auto_backup", { enabled: s.autoBackup });
+    autoBackup.value = s.autoBackup;
+    await invoke("set_debug_logging", { enabled: s.debugLogging });
+    debugLogging.value = s.debugLogging;
+    setDebugLogging(s.debugLogging);
     const reloading = await invoke<boolean>("set_environments", { environments: s.environments });
     environments.value = s.environments;
     if (reloading) {
@@ -591,7 +606,7 @@ async function applyResort() {
     takeStatus(s);
     await loadClash();
     if (s.loaded) {
-      notify("actionmaps.xml resorted (backup kept next to it)", "ok");
+      notify("actionmaps.xml resorted", "ok");
     } else {
       notify(s.error ?? "Reload failed", "error");
     }
@@ -670,10 +685,39 @@ function applyResolution(p: JoyInput, key: string, res: InputResolution) {
   }
 }
 
+// The SC token an input event stands for, with the jsN from actionmaps.xml
+// (like the Last Input card); null when SC cannot bind it (device not in the
+// profile, pad without a slot, unknown axis name, hat diagonal or centre).
+function eventToken(p: JoyInput): string | null {
+  const d = deviceOf(p.guid);
+  const js = () => slotFor(d?.sc_product_guid ?? null)?.stored_instance ?? null;
+  switch (p.kind) {
+    case "key":
+      return `kb1_${p.name}`;
+    case "padbutton":
+    case "padaxis":
+      return d?.gamepad_slot ? `gp1_${p.name}` : null;
+    case "button": {
+      const n = js();
+      return n ? `js${n}_button${p.index + 1}` : null;
+    }
+    case "axis": {
+      const n = js();
+      const axis = d?.axes[p.index];
+      return n && axis ? `js${n}_${axis}` : null;
+    }
+    default: {
+      const n = js();
+      const cardinal = ["up", "right", "down", "left"].includes(p.direction);
+      return n && cardinal ? `js${n}_hat${p.index + 1}_${p.direction}` : null;
+    }
+  }
+}
+
 // One path for every live input, whatever made it: the raw log collects in
 // every mode, the editor owns the input while an image-map is being edited.
 function onInput(p: JoyInput) {
-  events.value.unshift({ ...p, at: Date.now() });
+  events.value.unshift({ ...p, at: Date.now(), token: eventToken(p) });
   if (events.value.length > MAX_EVENTS) events.value.pop();
   trackHeld(p);
   if (p.kind === "key") keyInput.value = p;
@@ -875,6 +919,9 @@ onMounted(async () => {
     environments.value = cfg.environments;
     activeEnv.value = cfg.active_env;
     ignoredDevices.value = cfg.ignored_devices;
+    autoBackup.value = cfg.auto_backup;
+    debugLogging.value = cfg.debug_logging;
+    setDebugLogging(cfg.debug_logging);
     mapChoices.value = cfg.imagemap_choices ?? {};
     bindings.value = await invoke<ResolvedBinding[]>("get_bindings");
   } catch (e) {
@@ -912,6 +959,8 @@ onUnmounted(() => {
       :environments="environments"
       :devices="orderedDevices"
       :ignored="ignoredDevices"
+      :autoBackup="autoBackup"
+      :debugLogging="debugLogging"
       @close="showSettings = false"
       @save="applySettings"
       @notify="notify"
@@ -920,7 +969,7 @@ onUnmounted(() => {
     <div v-if="mode === 'live'" class="content">
       <div class="top-row">
       <div class="devices-panel">
-        <div class="panel-title">Connected devices</div>
+        <div class="panel-title">Connected Devices</div>
         <div class="rail">
         <DeviceTile
           v-for="d in orderedDevices"
@@ -995,6 +1044,7 @@ onUnmounted(() => {
       :events="events"
       :keyInput="keyInput"
       :chosenMapId="chosenMapId"
+      :tokenLabel="tokenLabel"
       @choose="setMapChoice"
       @notify="notify"
       @saved="onMapsSaved"

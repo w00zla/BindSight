@@ -1,8 +1,9 @@
 //! Backups of the live `actionmaps.xml`: one folder per backup under
 //! `<app_data_dir>/backups/<id>/`, holding a copy of the file (`actionmaps.xml`)
-//! plus `meta.json` (when it was made, and why). Taken manually (the Tools UI),
-//! before a resort (`apply_resort` in `lib.rs`), and before a restore (so a
-//! restore is itself undoable).
+//! plus `meta.json` (when it was made, why, and for which game version). Taken
+//! manually (the Tools UI) and — while `Config::auto_backup` is on — before a
+//! resort (`apply_resort` in `lib.rs`) and before a restore (so a restore is
+//! itself undoable).
 //!
 //! The pure logic works on `&Path` roots so it is testable without an
 //! `AppHandle`; the `#[tauri::command]` wrappers only resolve the root.
@@ -26,6 +27,10 @@ pub struct BackupMeta {
     /// Unix seconds.
     pub created: u64,
     pub reason: String,
+    /// `ScVersion::label` of the install loaded when the backup was made;
+    /// `None` when none was loaded, or for backups made before it was recorded.
+    #[serde(default)]
+    pub game_version: Option<String>,
 }
 
 /// Listing entry for one backup.
@@ -35,6 +40,7 @@ pub struct BackupSummary {
     pub id: String,
     pub created: u64,
     pub reason: String,
+    pub game_version: Option<String>,
     /// Bindings in the backed-up file across all devices, per
     /// [`binding_profiles::summarize`].
     pub bindings: usize,
@@ -100,12 +106,25 @@ fn read_summary(dir: &Path, id: &str, actions: &[scdata::ActionMap]) -> Result<B
     let text = fs::read_to_string(&meta_path).map_err(|e| format!("{}: {e}", meta_path.display()))?;
     let meta: BackupMeta = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", meta_path.display()))?;
     let summary = binding_profiles::summarize(&dir.join(XML_FILE), actions)?;
-    Ok(BackupSummary { id: id.to_string(), created: meta.created, reason: meta.reason, bindings: summary.bindings })
+    Ok(BackupSummary {
+        id: id.to_string(),
+        created: meta.created,
+        reason: meta.reason,
+        game_version: meta.game_version,
+        bindings: summary.bindings,
+    })
 }
 
 /// Copy `actionmaps` into a fresh backup folder under `root`, with `reason`
-/// (trimmed; empty becomes `"manual"`) recorded in `meta.json`.
-pub fn create(root: &Path, actionmaps: &Path, reason: &str, actions: &[scdata::ActionMap]) -> Result<BackupSummary, String> {
+/// (trimmed; empty becomes `"manual"`) and `game_version` recorded in
+/// `meta.json`.
+pub fn create(
+    root: &Path,
+    actionmaps: &Path,
+    reason: &str,
+    game_version: Option<&str>,
+    actions: &[scdata::ActionMap],
+) -> Result<BackupSummary, String> {
     if !actionmaps.is_file() {
         return Err(format!("{}: not found", actionmaps.display()));
     }
@@ -119,7 +138,7 @@ pub fn create(root: &Path, actionmaps: &Path, reason: &str, actions: &[scdata::A
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     fs::copy(actionmaps, dir.join(XML_FILE)).map_err(|e| e.to_string())?;
 
-    let meta = BackupMeta { created, reason: reason.to_string() };
+    let meta = BackupMeta { created, reason: reason.to_string(), game_version: game_version.map(str::to_string) };
     let json = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
     fs::write(dir.join(META_FILE), json).map_err(|e| e.to_string())?;
 
@@ -172,15 +191,22 @@ pub fn delete(root: &Path, id: &str) -> Result<(), String> {
     fs::remove_dir_all(root.join(id)).map_err(|e| format!("{id}: {e}"))
 }
 
-/// Restore backup `id` over the live `actionmaps`: a safety backup of the
-/// current file is made first (reason `"before restore"`), unless `actionmaps`
-/// doesn't exist yet, then the backup's file is copied over it. Never touches
-/// the backup itself. Returns the safety backup's summary, or `None` when none
-/// was made (nothing existed to back up).
-pub fn restore(root: &Path, id: &str, actionmaps: &Path, actions: &[scdata::ActionMap]) -> Result<Option<BackupSummary>, String> {
+/// Restore backup `id` over the live `actionmaps`: with `auto_backup`, a safety
+/// backup of the current file is made first (reason `"before restore"`),
+/// unless `actionmaps` doesn't exist yet, then the backup's file is copied over
+/// it. Never touches the backup itself. Returns the safety backup's summary, or
+/// `None` when none was made (auto-backup off, or nothing existed to back up).
+pub fn restore(
+    root: &Path,
+    id: &str,
+    actionmaps: &Path,
+    auto_backup: bool,
+    game_version: Option<&str>,
+    actions: &[scdata::ActionMap],
+) -> Result<Option<BackupSummary>, String> {
     let backup_path = path_of(root, id)?;
-    let safety = if actionmaps.is_file() {
-        Some(create(root, actionmaps, "before restore", actions)?)
+    let safety = if auto_backup && actionmaps.is_file() {
+        Some(create(root, actionmaps, "before restore", game_version, actions)?)
     } else {
         None
     };
@@ -221,7 +247,8 @@ pub(crate) fn create_backup(
     let root = backups_root(&app)?;
     let data = data.lock().unwrap();
     let path = config::actionmaps_path(data.config.base_path());
-    create(&root, &path, &reason, &data.sc.data.actions)
+    let version = data.sc.version.as_ref().map(|v| v.label.as_str());
+    create(&root, &path, &reason, version, &data.sc.data.actions)
 }
 
 #[tauri::command]
@@ -234,9 +261,27 @@ pub(crate) fn restore_backup(id: String, app: AppHandle, data: State<Mutex<AppDa
     let root = backups_root(&app)?;
     let mut data = data.lock().unwrap();
     let path = config::actionmaps_path(data.config.base_path());
-    restore(&root, &id, &path, &data.sc.data.actions)?;
+    let version = data.sc.version.as_ref().map(|v| v.label.as_str());
+    restore(&root, &id, &path, data.config.auto_backup, version, &data.sc.data.actions)?;
     info!("backup {id} restored to {}", path.display());
     Ok(crate::reload_profile(&mut data))
+}
+
+/// Open backup `id`'s folder in the system file manager.
+#[tauri::command]
+pub(crate) fn open_backup_dir(id: String, app: AppHandle) -> Result<(), String> {
+    let file = path_of(&backups_root(&app)?, &id)?;
+    let dir = file.parent().ok_or_else(|| format!("{}: no parent", file.display()))?;
+    tauri_plugin_opener::open_path(dir, None::<&str>).map_err(|e| format!("open {}: {e}", dir.display()))
+}
+
+/// Open the backups folder in the system file manager (Settings), creating it
+/// when no backup exists yet.
+#[tauri::command]
+pub(crate) fn open_backups_dir(app: AppHandle) -> Result<(), String> {
+    let root = backups_root(&app)?;
+    fs::create_dir_all(&root).map_err(|e| format!("{}: {e}", root.display()))?;
+    tauri_plugin_opener::open_path(&root, None::<&str>).map_err(|e| format!("open {}: {e}", root.display()))
 }
 
 #[cfg(test)]
@@ -344,22 +389,25 @@ mod tests {
         let am = t.path("actionmaps.xml");
         fs::write(&am, actionmaps_xml()).unwrap();
 
-        let s = create(&root, &am, "  before Fix via config  ", &sample_actions()).unwrap();
-        assert_eq!(s.reason, "before Fix via config");
+        let s = create(&root, &am, "  before order fix  ", Some("4.10.0-hotfix.12572603"), &sample_actions()).unwrap();
+        assert_eq!(s.reason, "before order fix");
+        assert_eq!(s.game_version.as_deref(), Some("4.10.0-hotfix.12572603"));
         assert_eq!(s.bindings, 3); // js1_button1 + js1_button2 + kb1_space
         assert!(root.join(&s.id).join(XML_FILE).is_file());
         assert_eq!(fs::read_to_string(root.join(&s.id).join(XML_FILE)).unwrap(), actionmaps_xml());
 
         let meta: BackupMeta = serde_json::from_str(&fs::read_to_string(root.join(&s.id).join(META_FILE)).unwrap()).unwrap();
         assert_eq!(meta.created, s.created);
-        assert_eq!(meta.reason, "before Fix via config");
+        assert_eq!(meta.reason, "before order fix");
+        assert_eq!(meta.game_version.as_deref(), Some("4.10.0-hotfix.12572603"));
 
-        // Empty reason becomes "manual".
-        let s2 = create(&root, &am, "   ", &sample_actions()).unwrap();
+        // Empty reason becomes "manual"; no loaded game version stays unknown.
+        let s2 = create(&root, &am, "   ", None, &sample_actions()).unwrap();
         assert_eq!(s2.reason, "manual");
+        assert_eq!(s2.game_version, None);
 
         // Missing source file is refused.
-        assert!(create(&root, &t.path("missing.xml"), "x", &sample_actions()).unwrap_err().contains("not found"));
+        assert!(create(&root, &t.path("missing.xml"), "x", None, &sample_actions()).unwrap_err().contains("not found"));
     }
 
     #[test]
@@ -372,7 +420,7 @@ mod tests {
         // Force two backups to land on the same id by pre-creating it.
         let id = format_timestamp(now_secs());
         fs::create_dir_all(root.join(&id)).unwrap();
-        let s = create(&root, &am, "manual", &sample_actions()).unwrap();
+        let s = create(&root, &am, "manual", None, &sample_actions()).unwrap();
         assert_ne!(s.id, id);
         assert!(s.id.starts_with(&format!("{id}-")));
     }
@@ -383,12 +431,24 @@ mod tests {
         let root = t.path("backups");
         fs::create_dir_all(&root).unwrap();
 
-        for (id, created) in [("20230101-000000", 1_672_531_200u64), ("20240101-000000", 1_704_067_200u64)] {
+        // The older one is a meta.json from before game versions were recorded.
+        let metas = [
+            ("20230101-000000", r#"{"created":1672531200,"reason":"manual"}"#.to_string()),
+            (
+                "20240101-000000",
+                serde_json::to_string_pretty(&BackupMeta {
+                    created: 1_704_067_200,
+                    reason: "manual".into(),
+                    game_version: Some("4.10.0-hotfix.12572603".into()),
+                })
+                .unwrap(),
+            ),
+        ];
+        for (id, meta) in metas {
             let dir = root.join(id);
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join(XML_FILE), actionmaps_xml()).unwrap();
-            let meta = BackupMeta { created, reason: "manual".into() };
-            fs::write(dir.join(META_FILE), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+            fs::write(dir.join(META_FILE), meta).unwrap();
         }
         // No meta.json: skipped.
         fs::create_dir_all(root.join("broken")).unwrap();
@@ -397,7 +457,9 @@ mod tests {
         let found = list(&root, &sample_actions());
         assert_eq!(found.len(), 2, "the broken folder is skipped");
         assert_eq!(found[0].id, "20240101-000000");
+        assert_eq!(found[0].game_version.as_deref(), Some("4.10.0-hotfix.12572603"));
         assert_eq!(found[1].id, "20230101-000000");
+        assert_eq!(found[1].game_version, None);
         for s in &found {
             assert_eq!(s.bindings, 3);
         }
@@ -413,12 +475,13 @@ mod tests {
         fs::create_dir_all(am.parent().unwrap()).unwrap();
         fs::write(&am, "old content").unwrap();
 
-        let backup = create(&root, &am, "manual", &sample_actions()).unwrap();
+        let backup = create(&root, &am, "manual", None, &sample_actions()).unwrap();
         fs::write(&am, actionmaps_xml()).unwrap(); // live file changes after the backup
 
-        let safety = restore(&root, &backup.id, &am, &sample_actions()).unwrap();
+        let safety = restore(&root, &backup.id, &am, true, Some("4.10.0-hotfix.12572603"), &sample_actions()).unwrap();
         let safety = safety.expect("a safety backup is made when the live file exists");
         assert_eq!(safety.reason, "before restore");
+        assert_eq!(safety.game_version.as_deref(), Some("4.10.0-hotfix.12572603"));
         // Live file now holds the restored (old) content.
         assert_eq!(fs::read_to_string(&am).unwrap(), "old content");
         // The restored backup itself is untouched.
@@ -433,16 +496,32 @@ mod tests {
         let root = t.path("backups");
         let am = t.path("live/actionmaps.xml");
 
-        let backup = create(&root, &t.path("source.xml"), "manual", &sample_actions()).unwrap_err();
+        let backup = create(&root, &t.path("source.xml"), "manual", None, &sample_actions()).unwrap_err();
         assert!(backup.contains("not found")); // sanity: no source yet either
 
         fs::write(t.path("source.xml"), actionmaps_xml()).unwrap();
-        let backup = create(&root, &t.path("source.xml"), "manual", &sample_actions()).unwrap();
+        let backup = create(&root, &t.path("source.xml"), "manual", None, &sample_actions()).unwrap();
 
         assert!(!am.is_file());
-        let safety = restore(&root, &backup.id, &am, &sample_actions()).unwrap();
+        let safety = restore(&root, &backup.id, &am, true, None, &sample_actions()).unwrap();
         assert!(safety.is_none());
         assert_eq!(fs::read_to_string(&am).unwrap(), actionmaps_xml());
+    }
+
+    #[test]
+    fn restore_without_auto_backup_makes_no_safety_backup() {
+        let t = Tmp::new();
+        let root = t.path("backups");
+        let am = t.path("live/actionmaps.xml");
+        fs::create_dir_all(am.parent().unwrap()).unwrap();
+        fs::write(&am, "old content").unwrap();
+        let backup = create(&root, &am, "manual", None, &sample_actions()).unwrap();
+        fs::write(&am, actionmaps_xml()).unwrap();
+
+        let safety = restore(&root, &backup.id, &am, false, None, &sample_actions()).unwrap();
+        assert!(safety.is_none());
+        assert_eq!(fs::read_to_string(&am).unwrap(), "old content");
+        assert_eq!(list(&root, &sample_actions()).len(), 1, "only the restored backup exists");
     }
 
     #[test]
@@ -451,7 +530,7 @@ mod tests {
         let root = t.path("backups");
         let am = t.path("actionmaps.xml");
         fs::write(&am, actionmaps_xml()).unwrap();
-        let s = create(&root, &am, "manual", &sample_actions()).unwrap();
+        let s = create(&root, &am, "manual", None, &sample_actions()).unwrap();
         assert!(root.join(&s.id).is_dir());
 
         delete(&root, &s.id).unwrap();

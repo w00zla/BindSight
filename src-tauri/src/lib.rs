@@ -153,10 +153,10 @@ fn get_clash_report(
 
 /// Apply the clash report's resort to the live `actionmaps.xml` — the
 /// out-of-game equivalent of the `pp_resortdevices` commands. The game must
-/// not be running (it would overwrite the file on exit). A backup of the
-/// original is taken first via `backups::create` (reason "before Fix via
-/// config" — the GUI's button label). Reloads the profile afterwards and
-/// returns the load status, like `set_base_path`.
+/// not be running (it would overwrite the file on exit). While auto-backups
+/// are on, a backup of the original is taken first via `backups::create`
+/// (reason "before order fix"). Reloads the
+/// profile afterwards and returns the load status, like `set_base_path`.
 #[tauri::command]
 fn apply_resort(
     app: AppHandle,
@@ -176,10 +176,17 @@ fn apply_resort(
     let xml = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let rewritten = resort::rewrite_actionmaps(&xml, &report.resort)?;
 
-    let backup = backups::create(&backups::backups_root(&app)?, &path, "before Fix via config", &data.sc.data.actions)?;
+    let backup = if data.config.auto_backup {
+        let version = data.sc.version.as_ref().map(|v| v.label.as_str());
+        let root = backups::backups_root(&app)?;
+        Some(backups::create(&root, &path, "before order fix", version, &data.sc.data.actions)?.id)
+    } else {
+        None
+    };
     std::fs::write(&path, rewritten).map_err(|e| format!("write {}: {e}", path.display()))?;
     let moves: Vec<String> = report.resort.iter().map(|m| format!("js{}->js{}", m.from, m.to)).collect();
-    info!("resort applied to {}: {} (backup {})", path.display(), moves.join(" "), backup.id);
+    let backup = backup.map_or_else(|| "auto-backup off".to_string(), |id| format!("backup {id}"));
+    info!("resort applied to {}: {} ({backup})", path.display(), moves.join(" "));
 
     Ok(reload_profile(&mut data))
 }
@@ -206,6 +213,44 @@ fn set_ignored_devices(
         error!("failed to save config: {e}");
     }
     data.config.ignored_devices.clone()
+}
+
+/// Persist whether BindSight backs up `actionmaps.xml` before overwriting it
+/// (Settings Save).
+#[tauri::command]
+fn set_auto_backup(enabled: bool, app: AppHandle, data: State<Mutex<AppData>>) {
+    let mut data = data.lock().unwrap();
+    if data.config.auto_backup == enabled {
+        return;
+    }
+    data.config.auto_backup = enabled;
+    info!("auto-backup set: {enabled}");
+    if let Err(e) = config::save(&app, &data.config) {
+        error!("failed to save config: {e}");
+    }
+}
+
+/// Cap the log level: DEBUG while Settings "Enable debug logging" is on, INFO
+/// otherwise. `log::set_max_level` is global and immediate; dependencies stay
+/// at WARN through the plugin's per-target filter. Webview records bypass the
+/// cap (the plugin's `log` command), `src/logging.ts` drops those itself.
+fn apply_log_level(debug: bool) {
+    log::set_max_level(if debug { log::LevelFilter::Debug } else { log::LevelFilter::Info });
+}
+
+/// Persist the debug logging switch and apply it right away (Settings Save).
+#[tauri::command]
+fn set_debug_logging(enabled: bool, app: AppHandle, data: State<Mutex<AppData>>) {
+    let mut data = data.lock().unwrap();
+    if data.config.debug_logging == enabled {
+        return;
+    }
+    data.config.debug_logging = enabled;
+    apply_log_level(enabled);
+    info!("debug logging set: {enabled}");
+    if let Err(e) = config::save(&app, &data.config) {
+        error!("failed to save config: {e}");
+    }
 }
 
 /// Open the app's log folder in the system file manager (Settings).
@@ -608,6 +653,7 @@ pub fn run() {
             std::panic::set_hook(Box::new(|info| error!("panic: {info}")));
 
             let config = config::load(app.handle());
+            apply_log_level(config.debug_logging);
             log_startup(app.handle(), &config);
             // The profile and Game.log are read once the game data is in
             // (`spawn_sc_load` -> `reload_profile`).
@@ -665,6 +711,10 @@ pub fn run() {
             backups::create_backup,
             backups::delete_backup,
             backups::restore_backup,
+            backups::open_backup_dir,
+            backups::open_backups_dir,
+            set_auto_backup,
+            set_debug_logging,
             diff::compare_bindings
         ])
         .run(tauri::generate_context!())

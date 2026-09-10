@@ -27,8 +27,8 @@ See `HANDOFF.md` for the current working state.
   backups, Compare), `SettingsDialog`, `Toasts`, `Icon` (inline stroke SVGs
   by name — never emoji). `components/ImageMapEditor.vue` is the image-map
   editor (Konva via `vue-konva`, the three-column Devices mode: devices +
-  their image-maps, canvas, live input + areas; also hosts the raw device /
-  event log with Save) and uses `ConfirmDialog` for the unsaved-changes and
+  their image-maps, canvas, live input + areas; also hosts Device Info: the
+  Device List and Device Events tiles, each with its own Save) and uses `ConfirmDialog` for the unsaved-changes and
   delete questions; `components/DeviceImage.vue` the plain-SVG viewer;
   `imagemap.ts` the shared image-map types/helpers (incl. token <-> input
   key), `keyboard.ts` the webview keyboard capture (`KeyboardEvent.code` ->
@@ -107,8 +107,8 @@ See `HANDOFF.md` for the current working state.
 - `config.rs` — persist the SC environments (`ENVIRONMENTS` = LIVE / HOTFIX
   / PTU / EPTU, each a base path + optional `global.ini` override; Windows
   default paths), the active one (`Config::base_path()` /
-  `global_ini_override()` read it), the ignore list and the image-map choice
-  per device as JSON in the app config dir. `load` fills missing
+  `global_ini_override()` read it), the ignore list, the image-map choice
+  per device, the auto-backup and debug logging switches as JSON in the app config dir. `load` fills missing
   environments with defaults; no migration of older shapes.
 - `imagemap.rs` — image-maps: one folder per image-map (`imagemap.json` +
   images) under `<app_data_dir>/imagemaps/`, bundled ones under
@@ -121,8 +121,12 @@ See `HANDOFF.md` for the current working state.
   root): list/import/export only, applying one is not built.
 - `backups.rs` — backups of the live `actionmaps.xml`, one folder per backup
   (`meta.json` + `actionmaps.xml`) under `<app_data_dir>/backups/<id>/`, id =
-  `YYYYMMDD-HHMMSS` (UTC) with a `-2`, `-3`, … suffix on collision. Taken
-  manually, before a resort (`apply_resort` in `lib.rs`), and before a restore.
+  `YYYYMMDD-HHMMSS` (UTC) with a `-2`, `-3`, … suffix on collision. `meta.json`
+  records reason and game version (`ScVersion::label`, absent on old
+  backups). Taken manually, and while `Config::auto_backup` is on (Settings,
+  default on) before a resort (`apply_resort` in `lib.rs`) and before a
+  restore. Every action that writes game files (Fix via config, restore,
+  binding profile import) and Backup now / delete ask via `ConfirmDialog`.
 - `diff.rs` — compares the joystick bindings of two sources (live
   `actionmaps.xml`, a binding profile, or a backup) by SC token: per token, the
   `(actionmap, action)` set bound to it in A vs B (a label-only difference is
@@ -135,7 +139,11 @@ See `HANDOFF.md` for the current working state.
 - **Logging**: the `log` crate everywhere (never `println!`/`eprintln!`),
   `tauri-plugin-log` writes to stdout and `<app_log_dir>/bindsight.log`
   (2 MB, 3 files kept; Linux `~/.local/share/com.w00zla.bindsight/logs/`).
-  Our crate logs down to DEBUG, dependencies from WARN. The webview console
+  Our crate logs down to DEBUG only while Settings "Enable debug logging"
+  is on (`Config::debug_logging`, default off, applied at start and on Save
+  via `log::set_max_level`; INFO otherwise), dependencies from WARN. The
+  plugin's `log` command bypasses that cap, so `src/logging.ts` drops webview
+  debug records itself (`setDebugLogging`). The webview console
   (`console.*`, uncaught errors, unhandled rejections) is forwarded by
   `src/logging.ts` via the plugin's `log` command with the plain `webview`
   target (the JS package would tag a source location the level filter
@@ -148,7 +156,7 @@ See `HANDOFF.md` for the current working state.
   the app log**: no enumeration lines, no axis
   derivation results, no input events — only real failures (hidapi init,
   joystick open, thread death). All of it lives in the Devices mode's
-  device log instead (`DeviceInfo` carries every SDL/HID fact, events carry
+  Device Info view instead (`DeviceInfo` carries every SDL/HID fact, events carry
   SDL timestamp + instance id).
 
 ## Image-map data model (`imagemap.json`, format 3)
@@ -261,6 +269,13 @@ file libappindicator-gtk3-devel librsvg2-devel libxdo-devel SDL2-devel`, plus th
 - **SDL order is not SC order** (Windows: reversed, Linux: unrelated). `jsN`
   comes from `Game.log` only; never derive it from SDL's enumeration.
 - **+1 button offset**: SC `js_button1` == SDL button 0 (verified under Wine).
+- **Windows RawInput pads need `SDL_JOYSTICK_THREAD=1`** (`input::init_sdl`):
+  SDL's RawInput driver (e.g. an Xbox pad over Bluetooth, SDL GUID ending
+  `72`) gets device arrival/removal and input only as messages to SDL's
+  hidden window, which nothing pumps without SDL's video subsystem. Without
+  the hint such a pad turned on after start never appeared (DirectInput
+  sticks were fine: their hot-plug comes from a `CM_Register_Notification`
+  callback).
 - **SC knows exactly one keyboard (`kb1`) and one gamepad (`gp1`)**: no
   `kb2_`/`gp2_` anywhere, no instance logic, no order clash. Key names are
   DirectInput scancode names (physical, layout independent): on a German
@@ -269,13 +284,6 @@ file libappindicator-gtk3-devel librsvg2-devel libxdo-devel SDL2-devel`, plus th
   buttons/wheel (`kb1_mouse1`, `kb1_mwheel_up`); mouse is not supported.
 - **Keyboard capture needs the BindSight window focused** (webview keydown;
   SDL2 delivers key events only to its own window). It runs in every mode
-- **Windows RawInput pads need `SDL_JOYSTICK_THREAD=1`** (`input::init_sdl`):
-  SDL's RawInput driver (e.g. an Xbox pad over Bluetooth, SDL GUID ending
-  `72`) gets device arrival/removal and input only as messages to SDL's
-  hidden window, which nothing pumps without SDL's video subsystem. Without
-  the hint such a pad turned on after start never appeared (DirectInput
-  sticks were fine: their hot-plug comes from a `CM_Register_Notification`
-  callback).
   and `preventDefault`s every mapped key (deliberate: a rebind flow must own
   the keyboard); only text fields and open dialogs (`[role="dialog"]`) are
   skipped. PrintScreen / Meta never arrive.

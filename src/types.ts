@@ -29,7 +29,7 @@ export interface DeviceInfo {
   // axes_error set when it could not be derived.
   axes: string[];
   axes_error: string | null;
-  // Troubleshooting detail for the device log (input.rs `DeviceInfo`).
+  // Troubleshooting detail for the Device Info view (input.rs `DeviceInfo`).
   sdl_instance_id: number;
   sdl_vendor: number;
   sdl_product: number;
@@ -76,8 +76,9 @@ export type JoyInput =
   | (JoyInputBase & { kind: "padaxis"; name: string; value: number })
   | (JoyInputBase & { kind: "key"; name: string; pressed: boolean });
 
-// A JoyInput as kept in the device log, with the wall-clock time it arrived.
-export type LoggedInput = JoyInput & { at: number };
+// A JoyInput as kept in the Device Info view, with the wall-clock time it
+// arrived and the SC token it stood for then (null when SC cannot bind it).
+export type LoggedInput = JoyInput & { at: number; token: string | null };
 
 // Top-level GUI mode.
 export type Mode = "live" | "tools" | "devices";
@@ -99,6 +100,10 @@ export interface Config {
   active_env: string;
   ignored_devices: string[];
   imagemap_choices: Record<string, string>;
+  // Back up actionmaps.xml before BindSight overwrites it.
+  auto_backup: boolean;
+  // Write DEBUG records to bindsight.log (else INFO and up).
+  debug_logging: boolean;
 }
 
 export interface Action {
@@ -252,6 +257,8 @@ export interface BackupSummary {
   // Unix seconds.
   created: number;
   reason: string;
+  // SC version label at backup time; null for older backups.
+  game_version: string | null;
   bindings: number;
 }
 

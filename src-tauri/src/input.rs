@@ -69,7 +69,7 @@ pub struct HidInterface {
 }
 
 /// A connected device as BindSight sees it. Everything below `axes_error`
-/// is troubleshooting detail for the device log.
+/// is troubleshooting detail for the Device Info view.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct DeviceInfo {
     /// Joystick, gamepad, or the synthetic keyboard.
@@ -148,7 +148,7 @@ pub enum InputEvent {
 }
 
 /// SC's name for an SDL controller button. `Guide`, `Misc1`, `Paddle1..4` and
-/// `Touchpad` have no SC token — they are still reported so the device log and
+/// `Touchpad` have no SC token — they are still reported so the Device Info view and
 /// the image-map editor see every press.
 fn pad_button_name(button: Button) -> &'static str {
     match button {
@@ -641,7 +641,7 @@ fn reopen_all(
     list.push(keyboard_device());
 
     // Device details stay out of the app log by design (the Devices mode's
-    // device log has them all); only failures are logged above.
+    // Device Info view has them all); only failures are logged above.
 
     if let Ok(mut shared) = devices.lock() {
         *shared = list;

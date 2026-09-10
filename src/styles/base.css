@@ -3,6 +3,8 @@
 
 :root {
   color-scheme: dark;
+  /* WebView2 otherwise paints its own dark-scheme scrollbars (brownish track). */
+  scrollbar-color: var(--bg-surface-3) transparent;
 }
 
 html,

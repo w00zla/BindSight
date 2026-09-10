@@ -36,6 +36,8 @@ const props = defineProps<{
   keyInput: JoyInput | null;
   // The image-map the Monitor shows for a device (the user's pick or the default).
   chosenMapId: (d: DeviceInfo) => string | null;
+  // SC's label for an input token; echoes the token when there is none.
+  tokenLabel: (token: string | null) => string;
 }>();
 const emit = defineEmits<{
   notify: [message: string, type: "ok" | "error"];
@@ -1104,34 +1106,50 @@ function deviceRows(d: DeviceInfo): [string, string][] {
   ];
 }
 
-function eventLine(ev: LoggedInput): string {
-  const d = deviceOfGuid(ev.guid);
-  return `${clock(ev.at)}  sdl+${ev.timestamp}ms  #${d?.index ?? "?"} ${shortGuid(ev.guid)} ${nameOfGuid(ev.guid)}  ${eventText(ev)}`;
+// SC side of an event: "js2_button5 · Button 5 (Input 2)", the bare token
+// when SC has no label for it, "—" when SC cannot bind the input.
+function tokenText(ev: LoggedInput): string {
+  if (!ev.token) return "—";
+  const label = props.tokenLabel(ev.token);
+  return label === ev.token ? ev.token : `${ev.token} · ${label}`;
 }
 
-function logText(): string {
-  const lines = [`BindSight device log ${new Date().toISOString()}`, "", "Devices"];
+function eventLine(ev: LoggedInput): string {
+  const d = deviceOfGuid(ev.guid);
+  return `${clock(ev.at)}  #${d?.index ?? "?"} ${shortGuid(ev.guid)} ${nameOfGuid(ev.guid)}  ${eventText(ev)}  ${tokenText(ev)}`;
+}
+
+// Text dump of the Device List tile.
+function listText(): string {
+  const lines = [`BindSight device list ${new Date().toISOString()}`, ""];
   for (const d of props.devices) {
     lines.push(`#${d.index} ${deviceName(d)}`);
     for (const [k, v] of deviceRows(d)) lines.push(`    ${k.padEnd(15)} ${v}`);
   }
   if (!props.devices.length) lines.push("    none");
-  lines.push("", "Events (newest first)");
+  return lines.join("\n") + "\n";
+}
+
+// Text dump of the Device Events tile, newest first.
+function eventsText(): string {
+  const lines = [`BindSight device events ${new Date().toISOString()} (newest first)`, ""];
   for (const ev of props.events) lines.push(eventLine(ev));
   if (!props.events.length) lines.push("    none");
   return lines.join("\n") + "\n";
 }
 
-async function saveLog() {
+// Save one tile's dump via the save dialog. The text is built after the
+// dialog closes, so events that arrived meanwhile are included.
+async function saveText(name: string, text: () => string, done: string) {
   try {
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
     const dest = await save({
-      defaultPath: `bindsight-devices-${stamp}.txt`,
+      defaultPath: `bindsight-${name}-${stamp}.txt`,
       filters: [{ name: "Text", extensions: ["txt"] }],
     });
     if (!dest) return;
-    await invoke("write_text_file", { path: dest, text: logText() });
-    emit("notify", "Log saved", "ok");
+    await invoke("write_text_file", { path: dest, text: text() });
+    emit("notify", done, "ok");
   } catch (e) {
     emit("notify", String(e), "error");
   }
@@ -1164,7 +1182,7 @@ function noMaps(d: DeviceInfo): boolean {
       <section class="panel grow">
         <div class="head">
           <Icon name="image" :size="15" />
-          <span class="head-title">Image-maps</span>
+          <span class="head-title">Image-Maps</span>
         </div>
         <div class="dev-list">
           <template v-for="d in props.devices" :key="d.index">
@@ -1223,7 +1241,7 @@ function noMaps(d: DeviceInfo): boolean {
         <div class="foot">
           <button type="button" class="btn wide" :class="showLog ? 'primary' : 'outline'" @click="showLog = !showLog">
             <Icon name="log" :size="14" />
-            Device log
+            Device Info
           </button>
         </div>
       </section>
@@ -1302,44 +1320,67 @@ function noMaps(d: DeviceInfo): boolean {
     </div>
 
     <!-- centre: the canvas -->
-    <section class="col-centre">
+    <section class="col-centre" :class="{ split: showLog }">
       <template v-if="showLog">
-        <div class="centre-head">
-          <Icon name="log" :size="16" />
-          <span class="log-title">Device log</span>
-          <div class="grow" />
-          <button type="button" class="btn outline small" :disabled="!props.events.length" @click="emit('clearLog')">
-            <Icon name="trash" :size="13" />
-            Clear
-          </button>
-          <button type="button" class="btn primary small" @click="saveLog">
-            <Icon name="save" :size="13" />
-            Save
-          </button>
-        </div>
-        <div class="log mono">
-          <div class="log-section">Devices</div>
-          <div v-for="d in props.devices" :key="d.index" class="log-dev">
-            <div class="log-line">
-              <span class="log-key">#{{ d.index }}</span>
-              <span class="log-name">{{ deviceName(d) }}</span>
-            </div>
-            <div v-for="[k, v] in deviceRows(d)" :key="k" class="log-kv">
-              <span class="log-dim">{{ k }}</span>
-              <span class="log-val">{{ v }}</span>
-            </div>
+        <section class="panel log-tile">
+          <div class="head">
+            <Icon name="list" :size="15" />
+            <span class="head-title">Device List</span>
+            <span class="head-count">{{ props.devices.length }}</span>
+            <div class="grow" />
+            <button
+              type="button"
+              class="btn primary small"
+              @click="saveText('device-list', listText, 'Device list saved')"
+            >
+              <Icon name="save" :size="13" />
+              Save
+            </button>
           </div>
-          <div v-if="!props.devices.length" class="log-line log-dim">None</div>
-          <div class="log-section log-events">Events</div>
-          <div v-for="(ev, i) in props.events" :key="i" class="log-line">
-            <span class="log-time">{{ clock(ev.at) }}</span>
-            <span class="log-dim">sdl+{{ ev.timestamp }}ms</span>
-            <span class="log-key">#{{ deviceOfGuid(ev.guid)?.index ?? "?" }} {{ shortGuid(ev.guid) }}</span>
-            <span class="log-device">{{ nameOfGuid(ev.guid) }}</span>
-            <span>{{ eventText(ev) }}</span>
+          <div class="log mono">
+            <div v-for="d in props.devices" :key="d.index" class="log-dev">
+              <div class="log-line">
+                <span class="log-key">#{{ d.index }}</span>
+                <span class="log-name">{{ deviceName(d) }}</span>
+              </div>
+              <div v-for="[k, v] in deviceRows(d)" :key="k" class="log-kv">
+                <span class="log-dim">{{ k }}</span>
+                <span class="log-val">{{ v }}</span>
+              </div>
+            </div>
+            <div v-if="!props.devices.length" class="log-line log-dim">None</div>
           </div>
-          <div v-if="!props.events.length" class="log-line log-dim">None</div>
-        </div>
+        </section>
+
+        <section class="panel log-tile">
+          <div class="head">
+            <Icon name="log" :size="15" />
+            <span class="head-title">Device Events</span>
+            <div class="grow" />
+            <button type="button" class="btn outline small" :disabled="!props.events.length" @click="emit('clearLog')">
+              <Icon name="trash" :size="13" />
+              Clear
+            </button>
+            <button
+              type="button"
+              class="btn primary small"
+              @click="saveText('device-events', eventsText, 'Device events saved')"
+            >
+              <Icon name="save" :size="13" />
+              Save
+            </button>
+          </div>
+          <div class="log mono">
+            <div v-for="(ev, i) in props.events" :key="i" class="log-line">
+              <span class="log-time">{{ clock(ev.at) }}</span>
+              <span class="log-key">#{{ deviceOfGuid(ev.guid)?.index ?? "?" }} {{ shortGuid(ev.guid) }}</span>
+              <span class="log-device">{{ nameOfGuid(ev.guid) }}</span>
+              <span>{{ eventText(ev) }}</span>
+              <span class="log-token">{{ tokenText(ev) }}</span>
+            </div>
+            <div v-if="!props.events.length" class="log-line log-dim">None</div>
+          </div>
+        </section>
       </template>
       <template v-else-if="map">
         <div v-if="editing" class="centre-head">
@@ -1955,9 +1996,21 @@ function noMaps(d: DeviceInfo): boolean {
 
 /* --- raw log --- */
 
-.log-title {
-  font-weight: 600;
-  font-size: 14px;
+/* Device Info: the centre column holds two stacked tiles instead of being one. */
+.col-centre.split {
+  background: transparent;
+  border-radius: 0;
+  gap: 16px;
+}
+
+.log-tile {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Count next to the title, the buttons pushed right by the spacer. */
+.log-tile .head-title {
+  flex: none;
 }
 
 .log {
@@ -1966,19 +2019,6 @@ function noMaps(d: DeviceInfo): boolean {
   overflow-y: auto;
   padding: 12px 16px;
   font-size: 12px;
-}
-
-.log-section {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-2);
-  margin-bottom: 4px;
-}
-
-.log-events {
-  margin-top: 12px;
 }
 
 .log-line {
@@ -2014,6 +2054,11 @@ function noMaps(d: DeviceInfo): boolean {
 
 .log-time {
   color: var(--text-2);
+}
+
+/* The SC side of an event (token · label), set apart from the SDL facts. */
+.log-token {
+  color: var(--accent);
 }
 
 .log-dim {

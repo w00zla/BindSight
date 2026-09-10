@@ -50,7 +50,7 @@ The core loop is closed end-to-end:
    Copy button) and the out-of-game "Rewrite actionmaps.xml" button
    (`resort.rs`: textual rewrite of joystick `<options>` instances and `jsN_`
    prefixes in `input="..."`, re-emitting the joystick blocks in slot order;
-   backed up via `backups.rs` first, reason "before Fix via config"; profile
+   backed up via `backups.rs` first, reason "before order fix"; profile
    reloaded).
 7. **Exclude**: a per-device "Exclude always" (`ignored_devices` in the per-OS
    `config.json`) declares a device SC never sees (e.g. a keyboard Wine hides);
@@ -86,7 +86,7 @@ The core loop is closed end-to-end:
     config; then SC version + extraction/cache, the profile's `<options>`
     and what `Game.log` says, plus user actions (environments, exclusions,
     resort). Device runtime detail is deliberately absent (only hidapi /
-    joystick-open failures): the Devices mode's device log has it all. The
+    joystick-open failures): the Devices mode's Device Info view has it all. The
     webview console and uncaught frontend errors are forwarded too
     (`src/logging.ts`, target `webview`). Severity rules in `CLAUDE.md`.
 
@@ -135,14 +135,14 @@ Mono bundled locally, tokens in `src/styles/tokens.css`, icons in
 `components/Icon.vue`): top bar with modes **Monitor / Bindings / Devices**
 (renamed 2026-09-09 from Live / Tools; code ids `live` / `tools` unchanged),
 environment chip (active slug, dropdown to switch), version chip, Refresh,
-gear (Settings dialog). Monitor = "Connected devices" panel (status dot,
+gear (Settings dialog). Monitor = "Connected Devices" panel (status dot,
 name, `jsN` chip, counts; a `None` tile when empty) next to a
-"Status" panel (`No issues`, or one tile per issue: load error, `No device order
+"Status" panel (`No issues`, or one tile per issue: load error, `No joystick order
 found`, `<name> jsN missing`, `Order clash` with `Fix via config` /
 `Fix via console` and slot chips); an image stage with one tile per device
 (image-map or `No image-map` placeholder, move left/right buttons, draggable
 splitters, shares/order remembered in localStorage); a row splitter; the
-"Last input" card (label big, device, one row per bound action + category);
+"Last Input" card (label big, device, one row per bound action + category);
 the bindings deck ("Bindings" panel title, only bindings of connected
 devices (2026-09-10), toggle chips kb1 / gp1 / jsN (none = all), search over
 input + action, columns DEVICE / INPUT (SC's label, else the bare token in
@@ -154,17 +154,17 @@ Browse), excluded devices as chips; nothing applies before Save
 (`set_environments`, reload only when the active one changed). The top-bar
 chip shows the active environment and opens a dropdown to switch it
 (`set_active_env`, reload). Bindings =
-`ToolsView`: on the left the "Game bindings" panel (SC's action list grouped
+`ToolsView`: on the left the "Game Bindings" panel (SC's action list grouped
 by category, capped at 40 % of the column), binding profiles and backups
 (Import / Export / New, Backup now, restore and delete behind
 `ConfirmDialog`), the Compare panel on the right (A/B source chips, kind and
 diff-kind and device toggle chips with counts (none toggled = all, like
 the deck),
 search, one tinted row per differing token). Devices =
-`ImageMapEditor` (reworked 2026-09-10): left the "Image-maps" panel —
+`ImageMapEditor` (reworked 2026-09-10): left the "Image-Maps" panel —
 devices + their image-maps sorted by name, one row = check (the map the
 Monitor shows, live colour) / name / lock (bundled), New under the rows,
-Import / Export in the foot — and the "System" panel with the "Device log"
+Import / Export in the foot — and the "System" panel with the "Device Info"
 toggle; an action tile spanning the centre and right columns with what
 can be done with the open map (view: Use for device | Edit (disabled for
 bundled), Clone, Delete; edit: Use for device | Cancel, Save | Choose image
@@ -179,15 +179,18 @@ filter. A map opens in view mode
 or a fresh map enter edit mode, Cancel / Save leave it (the Save / Discard
 question only comes when switching map or device while dirty). "New image-map" opens the empty state (`Choose image…` in the canvas
 area) with only Choose image, which creates the map (name = device name) and
-opens it in edit mode. Unsaved changes are guarded by `ConfirmDialog`. The Device log
-toggle swaps the canvas (and the right column) for the raw log with Clear
-and Save (text file via the `write_text_file` command): per device every
+opens it in edit mode. Unsaved changes are guarded by `ConfirmDialog`. The Device Info
+toggle swaps the canvas (and the right column) for two stacked tiles, each
+with its own Save (text file via the `write_text_file` command). Device List:
+per device every
 SDL fact (names, GUIDs, index / instance / type / path, vendor / product /
 version, power, counts, rumble / led), the derived SC axes or the error,
 the HID input fields in report order, every hidapi interface of the
 vendor/product (usage, bus, release, strings, path) and the raw report
-descriptor; then the last 500 input events from every mode with wall-clock
-time, SDL timestamp, device, SC axis name, raw and normalised axis value,
+descriptor. Device Events (Clear): the last 500 input events from every mode, each with
+the SC token it stood for (jsN from actionmaps.xml, like the Last Input card)
+and SC's label for it, with wall-clock
+time, device, SC axis name, raw and normalised axis value,
 raw hat state.
 
 **Tables** (2026-09-09): the bindings deck and Compare share

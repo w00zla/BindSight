@@ -7,10 +7,18 @@ import Dropdown from "./Dropdown.vue";
 import { ENVIRONMENTS, type DeviceInfo, type Environment } from "../types";
 import { deviceName } from "../devices";
 
-const props = defineProps<{ environments: Record<string, Environment>; devices: DeviceInfo[]; ignored: string[] }>();
+const props = defineProps<{
+  environments: Record<string, Environment>;
+  devices: DeviceInfo[];
+  ignored: string[];
+  autoBackup: boolean;
+  debugLogging: boolean;
+}>();
 const emit = defineEmits<{
   close: [];
-  save: [settings: { environments: Record<string, Environment>; ignored: string[] }];
+  save: [
+    settings: { environments: Record<string, Environment>; ignored: string[]; autoBackup: boolean; debugLogging: boolean },
+  ];
   notify: [message: string, type: "ok" | "error"];
 }>();
 
@@ -24,6 +32,8 @@ const envs = ref<Record<string, Environment>>(
   ),
 );
 const excluded = ref<string[]>([...props.ignored]);
+const autoBackup = ref(props.autoBackup);
+const debugLogging = ref(props.debugLogging);
 const withGuid = computed(() => props.devices.filter((d): d is DeviceInfo & { sc_product_guid: string } => !!d.sc_product_guid));
 const isExcluded = (guid: string) => excluded.value.some((g) => g.toLowerCase() === guid.toLowerCase());
 const addable = computed(() => withGuid.value.filter((d) => !isExcluded(d.sc_product_guid)));
@@ -45,6 +55,15 @@ function add(guid: string) {
 async function openLogDir() {
   try {
     await invoke("open_log_dir");
+  } catch (e) {
+    emit("notify", String(e), "error");
+  }
+}
+
+// Immediate as well: the folder holding every backup.
+async function openBackupsDir() {
+  try {
+    await invoke("open_backups_dir");
   } catch (e) {
     emit("notify", String(e), "error");
   }
@@ -104,7 +123,7 @@ async function browseIni(slug: string) {
         </section>
 
         <section>
-          <div class="panel-title">Excluded devices</div>
+          <div class="panel-title">Excluded Devices</div>
           <div class="chips">
             <span v-for="g in excluded" :key="g" class="chip">
               {{ nameFor(g) }}
@@ -124,8 +143,17 @@ async function browseIni(slug: string) {
         </section>
 
         <section>
-          <div class="panel-title">Other</div>
-          <div class="row">
+          <div class="panel-title">Backups</div>
+          <div class="row between">
+            <label class="check"><input v-model="autoBackup" type="checkbox" /> Enable auto-backups</label>
+            <button type="button" class="btn outline" @click="openBackupsDir">Open backup folder</button>
+          </div>
+        </section>
+
+        <section>
+          <div class="panel-title">Logging</div>
+          <div class="row between">
+            <label class="check"><input v-model="debugLogging" type="checkbox" /> Enable debug logging</label>
             <button type="button" class="btn outline" @click="openLogDir">Open log folder</button>
           </div>
         </section>
@@ -133,7 +161,7 @@ async function browseIni(slug: string) {
 
       <div class="foot">
         <button type="button" class="btn outline" @click="emit('close')">Cancel</button>
-        <button type="button" class="btn primary" @click="emit('save', { environments: envs, ignored: excluded })">
+        <button type="button" class="btn primary" @click="emit('save', { environments: envs, ignored: excluded, autoBackup, debugLogging })">
           <Icon name="save" :size="14" />
           Save
         </button>
@@ -231,7 +259,6 @@ async function browseIni(slug: string) {
 .input:disabled {
   opacity: 0.4;
 }
-
 .check {
   white-space: nowrap;
 }
@@ -245,6 +272,12 @@ section {
 .row {
   display: flex;
   gap: 8px;
+}
+
+/* Setting on the left, its action pushed to the right edge. */
+.row.between {
+  justify-content: space-between;
+  align-items: center;
 }
 
 .input {

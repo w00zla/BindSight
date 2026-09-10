@@ -23,7 +23,7 @@ const bigLabel = computed(() => {
 
 <template>
   <div class="card" :class="{ bordered: bound }">
-    <div class="panel-title">Last input</div>
+    <div class="panel-title">Last Input</div>
     <div class="row1">
       <Icon
         name="bolt"

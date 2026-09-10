@@ -1,10 +1,19 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import Icon from "./Icon.vue";
+import ConfirmDialog from "./ConfirmDialog.vue";
 import type { ClashReport, ScStatus } from "../types";
 
 const props = defineProps<{ report: ClashReport | null; loadError: string | null; sc: ScStatus | null }>();
 const emit = defineEmits<{ apply: []; copy: [] }>();
+
+// Fix via config overwrites the game's actionmaps.xml: ask first.
+const confirmApply = ref(false);
+
+function onConfirmApply(value: string) {
+  confirmApply.value = false;
+  if (value === "rewrite") emit("apply");
+}
 
 const logErrorTitle = computed(() => {
   const le = props.report?.log_error;
@@ -59,7 +68,7 @@ const hasIssue = computed(
 
       <div v-if="report?.log_error" class="tile issue" :title="logErrorTitle">
         <Icon name="warning" :size="16" />
-        <span>No device order found</span>
+        <span>No joystick order found</span>
       </div>
 
       <div v-for="m in report?.missing ?? []" :key="m.stored_instance" class="tile issue">
@@ -74,7 +83,7 @@ const hasIssue = computed(
           <Icon name="warning" :size="16" />
           <span class="name">Order clash</span>
           <span class="spacer" />
-          <button type="button" class="fix-btn" @click="emit('apply')">
+          <button type="button" class="fix-btn" @click="confirmApply = true">
             <Icon name="rotate" :size="14" />
             Fix via config
           </button>
@@ -95,6 +104,16 @@ const hasIssue = computed(
         </div>
       </div>
     </div>
+
+    <ConfirmDialog
+      v-if="confirmApply"
+      title="Rewrite actionmaps.xml?"
+      :buttons="[
+        { label: 'Rewrite', kind: 'primary', value: 'rewrite' },
+        { label: 'Cancel', kind: 'outline', value: 'cancel' },
+      ]"
+      @choose="onConfirmApply"
+    />
   </div>
 </template>
 

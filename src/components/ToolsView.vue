@@ -76,10 +76,11 @@ function shortDate(unixSecs: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-// "2026-09-09 13:40", local time.
+// "2026-09-09 13:40:05", local time.
 function stamp(unixSecs: number): string {
   const d = new Date(unixSecs * 1000);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `${date} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 // --- compare sources -------------------------------------------------------
@@ -171,6 +172,13 @@ async function importProfile() {
   try {
     const src = await open({ multiple: false, filters: [{ name: "Binding profile", extensions: ["xml"] }] });
     if (!src) return;
+    // Import writes into the game's controls/mappings folder: ask first.
+    const name = src.split(/[\\/]/).pop() ?? src;
+    const choice = await ask(`Import ${name}?`, [
+      { label: "Import", kind: "primary", value: "import" },
+      { label: "Cancel", kind: "outline", value: "cancel" },
+    ]);
+    if (choice !== "import") return;
     const s = await invoke<BindingProfileSummary>("import_binding_profile", { sourcePath: src });
     await loadProfiles();
     bKey.value = `${PROFILE_PREFIX}${s.file}`;
@@ -251,6 +259,15 @@ async function deleteBackup(b: BackupSummary) {
     emit("notify", String(e), "error");
   } finally {
     busy.value = false;
+  }
+}
+
+// Immediate: opens the backup's folder in the file manager.
+async function openBackupDir(b: BackupSummary) {
+  try {
+    await invoke("open_backup_dir", { id: b.id });
+  } catch (e) {
+    emit("notify", String(e), "error");
   }
 }
 
@@ -399,7 +416,7 @@ onMounted(async () => {
       <section class="panel game">
         <div class="head">
           <Icon name="list" :size="15" />
-          <span class="head-title">Game bindings</span>
+          <span class="head-title">Game Bindings</span>
           <span class="head-count">{{ actionCount }}</span>
         </div>
         <div class="rows scroll actions">
@@ -415,7 +432,7 @@ onMounted(async () => {
       <section class="panel">
         <div class="head">
           <Icon name="file" :size="15" />
-          <span class="head-title">Binding profiles</span>
+          <span class="head-title">Binding Profiles</span>
           <span class="head-count">{{ profiles.length }}</span>
         </div>
         <div class="rows">
@@ -473,9 +490,12 @@ onMounted(async () => {
           >
             <div class="lines">
               <span class="mono line-stamp">{{ stamp(b.created) }}</span>
-              <span class="line-sub">{{ b.reason }}</span>
+              <span class="line-sub">{{ b.reason }} · <span class="mono">{{ b.game_version ?? "—" }}</span></span>
             </div>
             <span class="line-sub">{{ b.bindings }}</span>
+            <button type="button" class="icon-btn" title="Open folder" @click.stop="openBackupDir(b)">
+              <Icon name="folder" :size="14" />
+            </button>
             <button type="button" class="icon-btn" title="Restore" :disabled="busy" @click.stop="restoreBackup(b)">
               <Icon name="rotate" :size="14" />
             </button>
@@ -688,7 +708,7 @@ onMounted(async () => {
 
 .row-item.backup {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
   gap: 10px;
   align-items: center;
 }

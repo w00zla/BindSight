@@ -25,7 +25,16 @@ function fmt(args: unknown[]): string {
     .join(" ");
 }
 
+// Settings "Enable debug logging". The backend caps its own level, but the
+// plugin's log command bypasses that cap, so debug records are dropped here.
+let debugEnabled = false;
+
+export function setDebugLogging(enabled: boolean) {
+  debugEnabled = enabled;
+}
+
 function send(level: Level, message: string) {
+  if (LEVEL[level] < LEVEL.info && !debugEnabled) return;
   // Never let a logging failure surface (it would recurse into console.error).
   invoke("plugin:log|log", { level: LEVEL[level], message }).catch(() => {});
 }
