@@ -44,7 +44,7 @@ onUnmounted(() => {
   <header class="topbar" data-tauri-drag-region>
     <div class="brand" data-tauri-drag-region>
       <img class="logo" :src="logo" alt="" />
-      <span class="wordmark">BINDSIGHT</span>
+      <span class="wordmark">BIND<span class="sight">SIGHT</span></span>
     </div>
     <div class="tabs">
       <button
@@ -128,6 +128,11 @@ onUnmounted(() => {
   font-size: 16px;
   letter-spacing: 0.22em;
   color: var(--text);
+}
+
+/* The name is two-tone: BIND white, SIGHT blue. */
+.wordmark .sight {
+  color: var(--accent);
 }
 
 .tabs {

@@ -2,7 +2,7 @@
 import { computed } from "vue";
 import Icon from "./Icon.vue";
 import type { DeviceInfo, SlotStatus } from "../types";
-import { deviceName } from "../devices";
+import { deviceIcon, deviceName } from "../devices";
 import { KEY_COUNT } from "../keyboard";
 
 const props = defineProps<{
@@ -20,7 +20,10 @@ const emit = defineEmits<{ toggleMap: [] }>();
 const noSlot = computed(() => props.device.kind === "gamepad" && props.device.gamepad_slot === null);
 const dimmed = computed(() => props.ignored || props.unseen || noSlot.value);
 
-// dot: filled ok = seen with no clash, filled warn = clash, hollow otherwise.
+// Device kind icon at the start of the tile.
+const kindIcon = computed(() => deviceIcon(props.device));
+
+// Colour of the kind icon: ok = seen with no clash, warn = clash, dim otherwise.
 const dotState = computed<"ok" | "warn" | "hollow">(() => {
   if (dimmed.value) return "hollow";
   if (props.device.kind !== "joystick") return "ok";
@@ -41,7 +44,7 @@ const state = computed(() => {
   const d = props.device;
   if (props.ignored) return "excluded";
   if (noSlot.value) return "no slot";
-  if (props.unseen) return "not seen by SC";
+  if (props.unseen) return "not seen by game";
   const counts =
     d.kind === "keyboard" ? [`${KEY_COUNT} keys`] : [`${d.num_buttons} btns`, `${d.num_axes} axes`, `${d.num_hats} hats`];
   return [`${props.bindingCount} bindings`, ...counts].join(" · ");
@@ -52,7 +55,7 @@ const state = computed(() => {
 <template>
   <div class="tile" :class="{ clash: slot?.clash }" :style="{ opacity: dimmed ? 0.55 : 1 }">
     <div class="row1">
-      <span class="dot" :class="dotState" />
+      <Icon :name="kindIcon" :size="16" class="kind" :class="dotState" />
       <span class="name">{{ name }}</span>
       <template v-if="device.kind === 'joystick'">
         <span v-if="slot?.clash" class="chip clash-chip mono">js{{ slot.stored_instance }} → js{{ slot.effective_instance }}</span>
@@ -65,7 +68,7 @@ const state = computed(() => {
         v-if="device.hardware_id"
         type="button"
         class="eye"
-        :title="hidden ? 'Show on stage' : 'Hide from stage'"
+        :title="hidden ? 'Show image-map' : 'Hide image-map'"
         @click="emit('toggleMap')"
       >
         <Icon :name="hidden ? 'image-off' : 'image'" :size="14" />
@@ -101,25 +104,18 @@ const state = computed(() => {
   gap: 8px;
 }
 
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: inline-block;
-  box-sizing: border-box;
+/* Device kind icon in the status colour. */
+.kind {
   flex-shrink: 0;
+  color: var(--text-3);
 }
 
-.dot.ok {
-  background: var(--ok);
+.kind.ok {
+  color: var(--ok);
 }
 
-.dot.warn {
-  background: var(--warn);
-}
-
-.dot.hollow {
-  border: 1px solid var(--text-2);
+.kind.warn {
+  color: var(--warn);
 }
 
 .name {

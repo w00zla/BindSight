@@ -1,5 +1,11 @@
 <script lang="ts">
-// One question, a row of buttons, one answer. The caller decides the wording.
+// One question, a row of buttons, one answer. The caller decides the wording
+// and the icon; optional body content (default slot) sits between title and
+// buttons.
+import type { IconName } from "./Icon.vue";
+
+export type ConfirmIcon = IconName;
+
 export interface ConfirmButton {
   label: string;
   kind: "primary" | "outline" | "danger";
@@ -9,8 +15,9 @@ export interface ConfirmButton {
 
 <script setup lang="ts">
 import { computed } from "vue";
+import Icon from "./Icon.vue";
 
-const props = defineProps<{ title: string; buttons: ConfirmButton[] }>();
+const props = defineProps<{ title: string; icon: ConfirmIcon; buttons: ConfirmButton[] }>();
 const emit = defineEmits<{ choose: [value: string] }>();
 
 // A click on the backdrop answers with the first outline button (the way out),
@@ -24,9 +31,13 @@ function onBackdrop() {
 
 <template>
   <div class="backdrop" @click.self="onBackdrop">
-    <div class="dialog" role="dialog" :aria-label="title">
+    <div class="dialog" :class="{ wide: !!$slots.default }" role="dialog" :aria-label="title">
       <div class="head">
+        <Icon :name="icon" :size="18" />
         <span class="title">{{ title }}</span>
+      </div>
+      <div v-if="$slots.default" class="body">
+        <slot />
       </div>
       <div class="foot">
         <button
@@ -65,6 +76,11 @@ function onBackdrop() {
   overflow: hidden;
 }
 
+/* A dialog with body content gets more room. */
+.dialog.wide {
+  width: 560px;
+}
+
 .head,
 .foot {
   display: flex;
@@ -73,7 +89,15 @@ function onBackdrop() {
 }
 
 .head {
+  gap: 10px;
   border-bottom: 1px solid var(--border-dim);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 24px;
 }
 
 .foot {

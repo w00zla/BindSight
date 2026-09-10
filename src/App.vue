@@ -15,6 +15,7 @@ import WindowEdges from "./components/WindowEdges.vue";
 import { deviceKey, deviceName } from "./devices";
 import Splitter from "./components/Splitter.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
+import StartupTile from "./components/StartupTile.vue";
 import { setDebugLogging } from "./logging";
 import type {
   DeviceKind,
@@ -103,6 +104,19 @@ const keyInput = ref<JoyInput | null>(null);
 const clash = ref<ClashReport | null>(null);
 // The install's version and game-data load state (updated via `scdata-changed`).
 const scStatus = ref<ScStatus | null>(null);
+// The first game-data load after start is still running: the startup tile
+// covers every mode until it ends, whatever its outcome.
+const starting = ref(true);
+// The startup tile stays up at least this long, so it does not just flash by.
+const STARTUP_MIN_MS = 3000;
+const startedAt = Date.now();
+
+// End the startup tile, but not before it has been up STARTUP_MIN_MS.
+function endStartup() {
+  const left = STARTUP_MIN_MS - (Date.now() - startedAt);
+  if (left > 0) setTimeout(() => (starting.value = false), left);
+  else starting.value = false;
+}
 // Set while a base-path change is being loaded, so its result gets a toast.
 let awaitingPathLoad = false;
 // SC Product GUIDs the user marked "SC doesn't see this device" (persisted per OS).
@@ -588,12 +602,12 @@ async function loadClash() {
 
 // Whether the clash panel has anything to show (a clash, or no usable order source).
 
-// Put the pp_resortdevices commands on the clipboard, one per line.
-async function copyResortCommands() {
-  const text = (clash.value?.resort_commands ?? []).join("\n");
+// Put the pp_resortdevices command line from the Fix via console dialog on the
+// clipboard.
+async function copyResortCommands(command: string) {
   try {
-    await navigator.clipboard.writeText(text);
-    notify("Commands copied", "ok");
+    await navigator.clipboard.writeText(command);
+    notify("Command copied", "ok");
   } catch (e) {
     notify(`Copy failed: ${String(e)}`, "error");
   }
@@ -606,7 +620,7 @@ async function applyResort() {
     takeStatus(s);
     await loadClash();
     if (s.loaded) {
-      notify("actionmaps.xml resorted", "ok");
+      notify("Bindings resorted", "ok");
     } else {
       notify(s.error ?? "Reload failed", "error");
     }
@@ -798,6 +812,7 @@ async function awaitScLoad() {
 
 // The install's game data (re)loaded: pick up actions, tokens, bindings.
 async function onScDataChanged(s: LoadStatus) {
+  endStartup();
   scStatus.value = s.sc;
   actionMaps.value = await invoke<ActionMap[]>("get_actions");
   tokens.value = await invoke<Record<string, string>>("get_tokens");
@@ -913,6 +928,8 @@ onMounted(async () => {
 
   try {
     scStatus.value = await invoke<ScStatus>("get_sc_status");
+    // The first load may have ended before the scdata-changed listener was up.
+    if (!scStatus.value.loading) endStartup();
     actionMaps.value = await invoke<ActionMap[]>("get_actions");
     tokens.value = await invoke<Record<string, string>>("get_tokens");
     const cfg = await invoke<Config>("get_config");
@@ -926,6 +943,8 @@ onMounted(async () => {
     bindings.value = await invoke<ResolvedBinding[]>("get_bindings");
   } catch (e) {
     error.value = String(e);
+    // Never leave the startup tile up: the other features work regardless.
+    endStartup();
   }
   await reloadMaps();
 });
@@ -966,7 +985,11 @@ onUnmounted(() => {
       @notify="notify"
     />
 
-    <div v-if="mode === 'live'" class="content">
+    <div v-if="starting" class="content">
+      <StartupTile :sc="scStatus" />
+    </div>
+
+    <div v-else-if="mode === 'live'" class="content">
       <div class="top-row">
       <div class="devices-panel">
         <div class="panel-title">Connected Devices</div>

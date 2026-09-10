@@ -165,11 +165,12 @@ fn apply_resort(
 ) -> Result<LoadStatus, String> {
     let mut data = data.lock().unwrap();
     let report = clash_report(&data, devices.inner());
-    if let Some(err) = report.log_error {
-        return Err(format!("no device order from Game.log: {err:?}"));
+    // GUI messages: the Status panel's tooltip already names the Game.log problem.
+    if report.log_error.is_some() {
+        return Err("No joystick order found".into());
     }
     if report.resort.is_empty() {
-        return Err("nothing to resort".into());
+        return Err("Nothing to fix".into());
     }
 
     let path = config::actionmaps_path(data.config.base_path());

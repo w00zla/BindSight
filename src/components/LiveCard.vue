@@ -7,7 +7,7 @@ const props = defineProps<{
   input: CurrentInput | null;
   state: "unseen" | "bound" | "none";
   // Extra distinction the plain state does not carry: "excluded" (user marked
-  // it) vs "not seen by SC" (SC's device order never listed it) both show as "unseen".
+  // it) vs "not seen by game" (SC's device order never listed it) both show as "unseen".
   excluded: boolean;
   tokenLabel: (token: string) => string;
   categoryLabel: (actionmap: string) => string;
@@ -35,7 +35,7 @@ const bigLabel = computed(() => {
     </div>
     <div v-if="input" class="row2">
       <span>{{ input.device }}</span>
-      <span v-if="state === 'unseen'" class="chip">{{ excluded ? "excluded" : "not seen by SC" }}</span>
+      <span v-if="state === 'unseen'" class="chip">{{ excluded ? "excluded" : "not seen by game" }}</span>
     </div>
     <div v-if="input?.actions.length" class="actions">
       <div v-for="(a, i) in input.actions" :key="i" class="action-row">

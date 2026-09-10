@@ -122,7 +122,7 @@ pub fn sc_axis_names(usages: &[(u16, u16)]) -> Result<Vec<String>, String> {
         }
     }
     if sliders.len() > 2 {
-        return Err(format!("{} sliders/dials in HID descriptor, SC knows two", sliders.len()));
+        return Err(format!("{} sliders/dials in HID descriptor, the game knows two", sliders.len()));
     }
     // Linux orders Slider (ABS_THROTTLE) before Dial (ABS_RUDDER) regardless of
     // report order, DirectInput keeps report order: only unambiguous when they

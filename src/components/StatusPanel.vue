@@ -5,10 +5,15 @@ import ConfirmDialog from "./ConfirmDialog.vue";
 import type { ClashReport, ScStatus } from "../types";
 
 const props = defineProps<{ report: ClashReport | null; loadError: string | null; sc: ScStatus | null }>();
-const emit = defineEmits<{ apply: []; copy: [] }>();
+const emit = defineEmits<{ apply: []; copy: [command: string] }>();
 
 // Fix via config overwrites the game's actionmaps.xml: ask first.
 const confirmApply = ref(false);
+
+// Fix via console: the swaps as one console line. The engine's console splits
+// a line on ";" (Lumberyard XConsole), so SC runs them in order.
+const showConsole = ref(false);
+const consoleCommand = computed(() => (props.report?.resort_commands ?? []).join("; "));
 
 function onConfirmApply(value: string) {
   confirmApply.value = false;
@@ -38,7 +43,7 @@ const hasIssue = computed(
       <div v-if="sc?.loading" class="tile loading">
         <div class="row">
           <Icon name="clock" :size="16" />
-          <span>Reading SC data…</span>
+          <span>Reading game data…</span>
         </div>
         <div class="steps">
           <span v-for="i in sc.steps" :key="i" class="step" :class="{ done: i <= sc.progress }" />
@@ -53,7 +58,7 @@ const hasIssue = computed(
       <div v-if="sc?.error" class="tile error detail">
         <div class="row">
           <Icon name="warning" :size="16" />
-          <span class="name">No SC data</span>
+          <span class="name">No game data</span>
         </div>
         <div class="error mono">{{ sc.error }}</div>
       </div>
@@ -81,25 +86,26 @@ const hasIssue = computed(
       <div v-if="report?.has_clash" class="tile issue clash">
         <div class="row">
           <Icon name="warning" :size="16" />
-          <span class="name">Order clash</span>
+          <span class="name">Joystick order clash!</span>
           <span class="spacer" />
           <button type="button" class="fix-btn" @click="confirmApply = true">
-            <Icon name="rotate" :size="14" />
+            <Icon name="file" :size="14" />
             Fix via config
           </button>
-          <button type="button" class="copy-btn" @click="emit('copy')">
-            <Icon name="copy" :size="14" />
+          <button type="button" class="copy-btn" @click="showConsole = true">
+            <Icon name="terminal" :size="14" />
             Fix via console
           </button>
         </div>
+        <!-- Moves without a saved device only shuffle empty slots to close the
+             swap cycle: nothing to show, the console commands still carry them. -->
         <div class="moves">
-          <div v-for="m in report.resort" :key="m.from" class="move">
-            <span class="dot" :class="{ filled: m.name }" />
-            <span v-if="m.name" class="name">{{ m.name }}</span>
-            <span v-else class="unplugged">unplugged</span>
-            <span class="chip mono" :class="{ dim: !m.name }">js{{ m.from }}</span>
+          <div v-for="m in report.resort.filter((r) => r.name)" :key="m.from" class="move">
+            <span class="dot filled" />
+            <span class="name">{{ m.name }}</span>
+            <span class="chip mono">js{{ m.from }}</span>
             <Icon name="arrow-right" :size="16" />
-            <span class="chip mono" :class="{ dim: !m.name }">js{{ m.to }}</span>
+            <span class="chip mono">js{{ m.to }}</span>
           </div>
         </div>
       </div>
@@ -107,13 +113,42 @@ const hasIssue = computed(
 
     <ConfirmDialog
       v-if="confirmApply"
-      title="Rewrite actionmaps.xml?"
+      title="Rewrite bindings configuration?"
+      icon="file"
       :buttons="[
         { label: 'Rewrite', kind: 'primary', value: 'rewrite' },
         { label: 'Cancel', kind: 'outline', value: 'cancel' },
       ]"
       @choose="onConfirmApply"
-    />
+    >
+      <p class="dialog-note">Restart the game afterwards for the changes to take effect.</p>
+    </ConfirmDialog>
+
+    <ConfirmDialog
+      v-if="showConsole"
+      title="Fix via console"
+      icon="terminal"
+      :buttons="[{ label: 'Close', kind: 'outline', value: 'close' }]"
+      @choose="showConsole = false"
+    >
+      <ol class="console-steps">
+        <li>Open the Star Citizen console in-game with <span class="console-key mono">^</span></li>
+        <li>Paste the command and press Enter</li>
+      </ol>
+      <div class="cmd-row">
+        <input
+          class="cmd-input mono"
+          :value="consoleCommand"
+          readonly
+          spellcheck="false"
+          @focus="($event.target as HTMLInputElement).select()"
+        />
+        <button type="button" class="cmd-copy" @click="emit('copy', consoleCommand)">
+          <Icon name="copy" :size="14" />
+          Copy
+        </button>
+      </div>
+    </ConfirmDialog>
   </div>
 </template>
 
@@ -235,11 +270,6 @@ const hasIssue = computed(
   font-size: 13px;
 }
 
-.chip.dim {
-  border-color: rgba(242, 179, 76, 0.35);
-  color: rgba(242, 179, 76, 0.6);
-}
-
 .fix-btn,
 .copy-btn {
   height: var(--h-chip-sm);
@@ -291,7 +321,63 @@ const hasIssue = computed(
   border-color: var(--warn);
 }
 
-.unplugged {
-  color: rgba(173, 211, 235, 0.7);
+/* Fix via config dialog body (slot content of ConfirmDialog). */
+.dialog-note {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-2);
+}
+
+/* Fix via console dialog body (slot content of ConfirmDialog). */
+.console-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.console-key {
+  padding: 1px 8px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border);
+  background: var(--bg-surface-2);
+}
+
+.cmd-row {
+  display: flex;
+  gap: 8px;
+}
+
+.cmd-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--h-control);
+  box-sizing: border-box;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--radius-control);
+  background: var(--bg-surface-2);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+
+.cmd-copy {
+  height: var(--h-control);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  border: none;
+  border-radius: var(--radius-control);
+  background: var(--accent);
+  color: var(--accent-text);
+  font-family: inherit;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
 }
 </style>

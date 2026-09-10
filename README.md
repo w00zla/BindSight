@@ -16,8 +16,9 @@ joystick input.
   in a different order (from `Game.log`) and fixes it — via
   `pp_resortdevices` console commands or by rewriting `actionmaps.xml`.
 - **Devices**: an editor for image-maps (rectangles, ellipses, polygons and
-  arrow/rotation symbols per input), with zip export/import, plus a raw
-  device / input-event log you can save as text.
+  arrow/rotation symbols per input), with zip export/import, plus Device
+  Info: every fact about your devices and a live input-event log, each
+  savable as text.
 
 Game data (action list, labels, input token names) is pulled out of your own
 install's `Data.p4k` at runtime with the bundled [StarBreaker](https://github.com/diogotr7/StarBreaker)
@@ -44,6 +45,9 @@ attach it when reporting a problem:
 - Windows: `%LOCALAPPDATA%\com.w00zla.bindsight\logs\bindsight.log`
 - macOS: `~/Library/Logs/com.w00zla.bindsight/bindsight.log`
 
+For more detail, switch on **Enable debug logging** in Settings → Logging;
+**Open log folder** next to it opens the folder.
+
 ## Building
 
 Tauri v2 + Rust backend, Vue 3 + TypeScript frontend.
@@ -58,7 +62,8 @@ Tauri v2 + Rust backend, Vue 3 + TypeScript frontend.
      openssl-devel curl wget file libappindicator-gtk3-devel librsvg2-devel
      libxdo-devel SDL2-devel` plus the `c-development` group.
    - **Windows**: `rustup` with the MSVC toolchain, Visual Studio Build Tools
-     2022 (*Desktop development with C++*), CMake on `PATH` (SDL2 is built
+     2022 or a newer Visual Studio (2026 works; *Desktop development with
+     C++*), CMake on `PATH` (SDL2 is built
      from source and statically linked), `pnpm`, WebView2 runtime.
 3. Build and run:
    ```sh

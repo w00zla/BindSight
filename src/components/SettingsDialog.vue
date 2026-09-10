@@ -90,6 +90,7 @@ async function browseIni(slug: string) {
   <div class="backdrop" @click.self="emit('close')">
     <div class="dialog" role="dialog" aria-label="Settings">
       <div class="head">
+        <Icon name="settings" :size="18" />
         <span class="title">Settings</span>
         <button type="button" class="icon-btn" title="Close" @click="emit('close')">
           <Icon name="close" :size="18" />
@@ -199,6 +200,7 @@ async function browseIni(slug: string) {
 }
 
 .head {
+  gap: 10px;
   border-bottom: 1px solid var(--border-dim);
 }
 

@@ -12,9 +12,9 @@ import type { Ellipse } from "konva/lib/shapes/Ellipse";
 import type { Transformer } from "konva/lib/shapes/Transformer";
 import type { VueKonvaRef } from "vue-konva";
 import Icon, { type IconName } from "./Icon.vue";
-import ConfirmDialog, { type ConfirmButton } from "./ConfirmDialog.vue";
+import ConfirmDialog, { type ConfirmButton, type ConfirmIcon } from "./ConfirmDialog.vue";
 import type { DeviceInfo, JoyInput, LoggedInput } from "../types";
-import { deviceName } from "../devices";
+import { deviceIcon, deviceName } from "../devices";
 import { KEY_COUNT } from "../keyboard";
 import {
   SYMBOL_PATHS,
@@ -207,11 +207,11 @@ function newId(): string {
 
 // --- confirm dialog --------------------------------------------------------
 
-const confirm = ref<{ title: string; buttons: ConfirmButton[] } | null>(null);
+const confirm = ref<{ title: string; icon: ConfirmIcon; buttons: ConfirmButton[] } | null>(null);
 let confirmResolve: ((value: string) => void) | null = null;
 
-function ask(title: string, buttons: ConfirmButton[]): Promise<string> {
-  confirm.value = { title, buttons };
+function ask(title: string, icon: ConfirmIcon, buttons: ConfirmButton[]): Promise<string> {
+  confirm.value = { title, icon, buttons };
   return new Promise((resolve) => {
     confirmResolve = resolve;
   });
@@ -228,7 +228,7 @@ function onConfirm(value: string) {
 // Discard, or the save went through.
 async function requestLeave(): Promise<boolean> {
   if (!dirty.value) return true;
-  const choice = await ask("Unsaved changes", [
+  const choice = await ask("Unsaved changes", "save", [
     { label: "Discard", kind: "danger", value: "discard" },
     { label: "Save", kind: "primary", value: "save" },
     { label: "Keep editing", kind: "outline", value: "keep" },
@@ -479,7 +479,7 @@ async function finishEdit() {
 }
 
 async function deleteMap(s: ImageMapSummary) {
-  const choice = await ask("Delete image-map?", [
+  const choice = await ask("Delete image-map?", "trash", [
     { label: "Delete", kind: "danger", value: "delete" },
     { label: "Cancel", kind: "outline", value: "cancel" },
   ]);
@@ -1085,7 +1085,7 @@ function deviceRows(d: DeviceInfo): [string, string][] {
     ["kind", d.kind === "gamepad" ? `gamepad · slot ${d.gamepad_slot ?? "—"} · ${d.controller_name ?? "—"}` : d.kind],
     ["sdl name", d.sdl_name],
     ["sdl guid", d.sdl_guid],
-    ["sc product", d.sc_product_guid ?? "—"],
+    ["game product", d.sc_product_guid ?? "—"],
     ["hardware id", d.hardware_id ?? "—"],
     ["sdl", `index ${d.index} · instance ${d.sdl_instance_id} · type ${d.sdl_type} · path ${d.sdl_path ?? "—"}`],
     ["usb", `vid ${hex4(d.sdl_vendor)} · pid ${hex4(d.sdl_product)} · version ${hex4(d.sdl_product_version)} · power ${d.power_level}`],
@@ -1093,7 +1093,7 @@ function deviceRows(d: DeviceInfo): [string, string][] {
       "io",
       `${d.num_buttons} buttons · ${d.num_axes} axes · ${d.num_hats} hats · ${d.num_balls} balls · rumble ${d.has_rumble ? "yes" : "no"} · led ${d.has_led ? "yes" : "no"}`,
     ],
-    ["sc axes", axesText(d)],
+    ["game axes", axesText(d)],
     ["hid usages", d.hid_usages.length ? compactUsages(d.hid_usages) : "—"],
     ...d.hid_interfaces.map(
       (h, i): [string, string] => [
@@ -1165,7 +1165,7 @@ function deviceLine(d: DeviceInfo): string {
     if (d.num_axes) parts.push(`${d.num_axes} axes`);
     if (d.num_hats) parts.push(`${d.num_hats} hats`);
   }
-  if (!d.hardware_id) parts.push("no SC id");
+  if (!d.hardware_id) parts.push("no game id");
   return parts.join(" · ");
 }
 
@@ -1191,7 +1191,10 @@ function noMaps(d: DeviceInfo): boolean {
               :class="{ on: d.sdl_guid === selectedGuid, dim: !d.hardware_id }"
               @click="selectDevice(d)"
             >
-              <div class="dev-name">{{ deviceName(d) }}</div>
+              <div class="dev-name">
+                <Icon :name="deviceIcon(d)" :size="15" class="dev-kind" />
+                <span>{{ deviceName(d) }}</span>
+              </div>
               <div class="dev-line">
                 {{ deviceLine(d) }}
                 <span v-if="noMaps(d)" class="chip small">No image-map</span>
@@ -1208,7 +1211,7 @@ function noMaps(d: DeviceInfo): boolean {
               >
                 <span class="map-name">{{ s.name }}</span>
                 <span class="map-mark" :title="s.id === props.chosenMapId(d) ? 'Shown on stage' : undefined">
-                  <Icon v-if="s.id === props.chosenMapId(d)" name="check" :size="13" />
+                  <Icon v-if="s.id === props.chosenMapId(d)" name="check" :size="15" />
                 </span>
                 <span v-if="s.source === 'bundled'" class="ro" title="Read-only">
                   <Icon name="lock" :size="13" />
@@ -1569,7 +1572,7 @@ function noMaps(d: DeviceInfo): boolean {
       </div>
     </aside>
 
-    <ConfirmDialog v-if="confirm" :title="confirm.title" :buttons="confirm.buttons" @choose="onConfirm" />
+    <ConfirmDialog v-if="confirm" :title="confirm.title" :icon="confirm.icon" :buttons="confirm.buttons" @choose="onConfirm" />
   </section>
 </template>
 
@@ -1775,8 +1778,17 @@ function noMaps(d: DeviceInfo): boolean {
 }
 
 .dev-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 600;
   font-size: 14px;
+}
+
+/* Device kind icon, like the Monitor's device tiles (no status colour here). */
+.dev-kind {
+  flex-shrink: 0;
+  color: var(--text-2);
 }
 
 .dev-line {
@@ -1792,11 +1804,15 @@ function noMaps(d: DeviceInfo): boolean {
   font-size: 11px;
 }
 
+/* The selected device's image-maps: indented under a guide line, set off from
+   the device row above and the next device below. */
 .maps {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-left: 14px;
+  gap: 6px;
+  margin: 4px 0 10px 10px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
 }
 
 .map,
@@ -1804,7 +1820,7 @@ function noMaps(d: DeviceInfo): boolean {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border-radius: 6px;
   font-family: inherit;
   cursor: pointer;
@@ -1812,11 +1828,12 @@ function noMaps(d: DeviceInfo): boolean {
 
 .map {
   color: var(--text-2);
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
 }
 
 .map.open {
   background: var(--bg-surface-2);
+  border-color: var(--accent);
   color: var(--text);
 }
 
@@ -1828,9 +1845,14 @@ function noMaps(d: DeviceInfo): boolean {
 .map-mark {
   display: flex;
   align-items: center;
-  width: 13px;
+  width: 15px;
   flex-shrink: 0;
   color: var(--live);
+}
+
+/* A bolder check than the icon default. */
+.map-mark svg {
+  stroke-width: 3;
 }
 
 .map-name {

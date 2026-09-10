@@ -6,7 +6,7 @@ import Icon from "./Icon.vue";
 import Dropdown from "./Dropdown.vue";
 import ColumnHead from "./ColumnHead.vue";
 import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
-import ConfirmDialog, { type ConfirmButton } from "./ConfirmDialog.vue";
+import ConfirmDialog, { type ConfirmButton, type ConfirmIcon } from "./ConfirmDialog.vue";
 import { KIND_RANK } from "../devices";
 import type {
   ActionMap,
@@ -34,8 +34,6 @@ const emit = defineEmits<{
   restored: [status: LoadStatus];
 }>();
 
-const actionCount = computed(() => props.actionMaps.reduce((n, m) => n + m.actions.length, 0));
-
 const profiles = ref<BindingProfileSummary[]>([]);
 const backups = ref<BackupSummary[]>([]);
 const report = ref<DiffReport | null>(null);
@@ -44,11 +42,11 @@ const busy = ref(false);
 
 // --- confirm dialog --------------------------------------------------------
 
-const confirm = ref<{ title: string; buttons: ConfirmButton[] } | null>(null);
+const confirm = ref<{ title: string; icon: ConfirmIcon; buttons: ConfirmButton[] } | null>(null);
 let confirmResolve: ((value: string) => void) | null = null;
 
-function ask(title: string, buttons: ConfirmButton[]): Promise<string> {
-  confirm.value = { title, buttons };
+function ask(title: string, icon: ConfirmIcon, buttons: ConfirmButton[]): Promise<string> {
+  confirm.value = { title, icon, buttons };
   return new Promise((resolve) => {
     confirmResolve = resolve;
   });
@@ -65,15 +63,6 @@ function onConfirm(value: string) {
 
 function pad(n: number): string {
   return String(n).padStart(2, "0");
-}
-
-// "Sep 06" within the current year, "2025-08-21" before it. Local time.
-function shortDate(unixSecs: number): string {
-  const d = new Date(unixSecs * 1000);
-  if (d.getFullYear() === new Date().getFullYear()) {
-    return d.toLocaleDateString("en-US", { month: "short", day: "2-digit" });
-  }
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 // "2026-09-09 13:40:05", local time.
@@ -174,7 +163,7 @@ async function importProfile() {
     if (!src) return;
     // Import writes into the game's controls/mappings folder: ask first.
     const name = src.split(/[\\/]/).pop() ?? src;
-    const choice = await ask(`Import ${name}?`, [
+    const choice = await ask(`Import ${name}?`, "download", [
       { label: "Import", kind: "primary", value: "import" },
       { label: "Cancel", kind: "outline", value: "cancel" },
     ]);
@@ -223,7 +212,7 @@ async function createBackup() {
 }
 
 async function restoreBackup(b: BackupSummary) {
-  const choice = await ask("Restore backup?", [
+  const choice = await ask("Restore backup?", "rotate", [
     { label: "Restore", kind: "primary", value: "restore" },
     { label: "Cancel", kind: "outline", value: "cancel" },
   ]);
@@ -244,7 +233,7 @@ async function restoreBackup(b: BackupSummary) {
 }
 
 async function deleteBackup(b: BackupSummary) {
-  const choice = await ask("Delete backup?", [
+  const choice = await ask("Delete backup?", "trash", [
     { label: "Delete", kind: "danger", value: "delete" },
     { label: "Cancel", kind: "outline", value: "cancel" },
   ]);
@@ -417,7 +406,6 @@ onMounted(async () => {
         <div class="head">
           <Icon name="list" :size="15" />
           <span class="head-title">Game Bindings</span>
-          <span class="head-count">{{ actionCount }}</span>
         </div>
         <div class="rows scroll actions">
           <div v-for="m in actionMaps" :key="m.name" class="action-group">
@@ -433,14 +421,13 @@ onMounted(async () => {
         <div class="head">
           <Icon name="file" :size="15" />
           <span class="head-title">Binding Profiles</span>
-          <span class="head-count">{{ profiles.length }}</span>
         </div>
         <div class="rows">
           <div v-if="hasCurrent" class="row-item" :class="{ a: aKey === CURRENT, b: bKey === CURRENT }" @click="bKey = CURRENT">
             <span class="dot" />
             <div class="lines">
               <span class="line-title">Current</span>
-              <span class="mono line-sub">actionmaps.xml · {{ bindings.length }}</span>
+              <span class="line-sub">Active profile</span>
             </div>
           </div>
           <div
@@ -450,10 +437,9 @@ onMounted(async () => {
             :class="{ a: aKey === `${PROFILE_PREFIX}${m.file}`, b: bKey === `${PROFILE_PREFIX}${m.file}` }"
             @click="bKey = `${PROFILE_PREFIX}${m.file}`"
           >
-            <Icon name="file" :size="14" />
             <div class="lines">
               <span class="line-title">{{ m.name }}</span>
-              <span class="mono line-sub">{{ m.file }} · {{ m.bindings }} · {{ shortDate(m.modified) }}</span>
+              <span class="mono line-sub">{{ m.file }} · {{ stamp(m.modified) }}</span>
             </div>
           </div>
           <div v-if="!profiles.length && !hasCurrent" class="row-none">None</div>
@@ -492,7 +478,6 @@ onMounted(async () => {
               <span class="mono line-stamp">{{ stamp(b.created) }}</span>
               <span class="line-sub">{{ b.reason }} · <span class="mono">{{ b.game_version ?? "—" }}</span></span>
             </div>
-            <span class="line-sub">{{ b.bindings }}</span>
             <button type="button" class="icon-btn" title="Open folder" @click.stop="openBackupDir(b)">
               <Icon name="folder" :size="14" />
             </button>
@@ -585,7 +570,7 @@ onMounted(async () => {
       </div>
     </section>
 
-    <ConfirmDialog v-if="confirm" :title="confirm.title" :buttons="confirm.buttons" @choose="onConfirm" />
+    <ConfirmDialog v-if="confirm" :title="confirm.title" :icon="confirm.icon" :buttons="confirm.buttons" @choose="onConfirm" />
   </div>
 </template>
 
@@ -675,10 +660,13 @@ onMounted(async () => {
 
 /* --- left column rows --- */
 
+/* Row lists styled like the Devices mode's image-map rows: outlined items
+   with a little air between them. */
 .rows {
   display: flex;
   flex-direction: column;
-  padding: 6px;
+  gap: 6px;
+  padding: 8px;
 }
 
 .rows.scroll {
@@ -691,9 +679,9 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 10px;
+  padding: 10px 12px;
   border-radius: 6px;
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
   color: var(--text-2);
   cursor: pointer;
 }
@@ -708,7 +696,7 @@ onMounted(async () => {
 
 .row-item.backup {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   gap: 10px;
   align-items: center;
 }
