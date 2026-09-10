@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
 import Dropdown from "./Dropdown.vue";
@@ -13,25 +14,36 @@ import type {
   ActionRef,
   BackupSummary,
   BindingProfileSummary,
+  BoundAction,
+  DeviceKind,
   DiffKind,
   DiffReport,
   DiffRow,
   DiffSource,
+  JoyInput,
   LoadStatus,
+  ProfileInfo,
+  RebindChange,
   ResolvedBinding,
 } from "../types";
 
-// `hasCurrent`: the live actionmaps.xml is loaded (else there is no Current source).
+// `hasCurrent`: the live actionmaps.xml is loaded (else there is no Current
+// source and no list). `keyInput`: the last captured key (only the webview
+// sees keys). `inputToken`: the full SC token a keyboard / gamepad press
+// stands for, modifiers included; joystick inputs are resolved by the backend.
 const props = defineProps<{
   bindings: ResolvedBinding[];
   actionMaps: ActionMap[];
   hasCurrent: boolean;
+  keyInput: JoyInput | null;
   // SC's label for an input token; echoes the token when there is none.
   tokenLabel: (token: string) => string;
+  inputToken: (p: JoyInput) => string | null;
 }>();
 const emit = defineEmits<{
   notify: [message: string, type: "ok" | "error"];
   restored: [status: LoadStatus];
+  saved: [status: LoadStatus];
 }>();
 
 const profiles = ref<BindingProfileSummary[]>([]);
@@ -39,6 +51,10 @@ const backups = ref<BackupSummary[]>([]);
 const report = ref<DiffReport | null>(null);
 // A command is running; the action buttons stay out of the way until it is done.
 const busy = ref(false);
+
+// The right-hand tile: the bindings list (Current) or Compare (any other
+// source picked on the left).
+const view = ref<"list" | "compare">("list");
 
 // --- confirm dialog --------------------------------------------------------
 
@@ -376,10 +392,393 @@ function inputText(token: string): string {
 
 const sameSource = computed(() => aKey.value === bKey.value);
 
+// --- bindings list ---------------------------------------------------------
+
+// Facts about the live file; null while nothing is loaded.
+const info = ref<ProfileInfo | null>(null);
+
+async function loadInfo() {
+  try {
+    info.value = await invoke<ProfileInfo | null>("get_profile_info");
+  } catch (e) {
+    info.value = null;
+    emit("notify", String(e), "error");
+  }
+}
+
+// "12.3 KB"
+function fmtSize(bytes: number): string {
+  return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
+}
+
+// One column per device the file knows: the keyboard and the gamepad (SC
+// has exactly one of each), then every joystick slot named in <options>.
+interface DeviceCol {
+  key: string;
+  kind: DeviceKind;
+  instance: number;
+  label: string;
+}
+
+const deviceCols = computed<DeviceCol[]>(() => [
+  { key: "kb1", kind: "keyboard", instance: 1, label: "kb1" },
+  { key: "gp1", kind: "gamepad", instance: 1, label: "gp1" },
+  ...[...(info.value?.joysticks ?? [])]
+    .sort((a, b) => a.instance - b.instance)
+    .map((j) => ({
+      key: `js${j.instance}`,
+      kind: "joystick" as DeviceKind,
+      instance: j.instance,
+      label: `js${j.instance} · ${j.product_name}`,
+    })),
+]);
+
+// The list is in the game's order and not sortable; the last device column
+// is the filler.
+const listColumns = computed<ColumnSpec[]>(() => [
+  { key: "action", label: "ACTION", width: 320, sortable: false },
+  ...deviceCols.value.map((d, i, all) => ({
+    key: d.key,
+    label: d.label.toUpperCase(),
+    width: i === all.length - 1 ? null : 200,
+    sortable: false,
+  })),
+]);
+const listCols = useTableColumns("bindsight.columns.bindings", listColumns, { key: "action", dir: "asc" });
+
+interface ListRow {
+  actionmap: string;
+  action: string;
+  label: string;
+}
+
+// The game's category: actionmaps sharing a label are one group in its
+// keybinding screen too (the four "On Foot - All" maps).
+interface ListGroup {
+  key: string;
+  label: string;
+  rows: ListRow[];
+}
+
+const groups = computed<ListGroup[]>(() => {
+  const out: ListGroup[] = [];
+  const byLabel = new Map<string, ListGroup>();
+  for (const m of props.actionMaps) {
+    const label = m.label ?? m.name;
+    let g = byLabel.get(label);
+    if (!g) {
+      g = { key: label, label, rows: [] };
+      byLabel.set(label, g);
+      out.push(g);
+    }
+    for (const a of m.actions) g.rows.push({ actionmap: m.name, action: a.name, label: a.label ?? a.name });
+  }
+  return out;
+});
+
+const rowCount = computed(() => groups.value.reduce((n, g) => n + g.rows.length, 0));
+
+// Expanded categories; everything starts collapsed like in the game.
+const expanded = ref(new Set<string>());
+
+function toggleGroup(key: string) {
+  const next = new Set(expanded.value);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  expanded.value = next;
+}
+
+const listSearch = ref("");
+
+// While searching: only the matching rows (label, internal name, category,
+// any cell text), their groups forced open.
+const shownGroups = computed<ListGroup[]>(() => {
+  const q = listSearch.value.trim().toLowerCase();
+  if (!q) return groups.value;
+  return groups.value
+    .map((g) => ({
+      ...g,
+      rows: g.rows.filter((r) =>
+        [r.label, r.action, g.label, ...deviceCols.value.map((c) => bindText(r, c))].join(" ").toLowerCase().includes(q),
+      ),
+    }))
+    .filter((g) => g.rows.length);
+});
+
+function isOpen(g: ListGroup): boolean {
+  return listSearch.value.trim() !== "" || expanded.value.has(g.key);
+}
+
+const allExpanded = computed(() => groups.value.length > 0 && groups.value.every((g) => expanded.value.has(g.key)));
+
+function expandAll() {
+  expanded.value = new Set(groups.value.map((g) => g.key));
+}
+
+function collapseAll() {
+  expanded.value = new Set();
+}
+
+function rowKey(actionmap: string, action: string): string {
+  return `${actionmap}\u0000${action}`;
+}
+
+// The file's tokens per action and device column.
+const fileTokens = computed(() => {
+  const m = new Map<string, string[]>();
+  for (const b of props.bindings) {
+    const key = `${rowKey(b.actionmap, b.action)}\u0000${deviceKeyOf(b.device_kind, b.instance)}`;
+    const list = m.get(key);
+    if (list) list.push(b.token);
+    else m.set(key, [b.token]);
+  }
+  return m;
+});
+
+function deviceKeyOf(kind: DeviceKind, instance: number): string {
+  return kind === "keyboard" ? "kb1" : kind === "gamepad" ? "gp1" : `js${instance}`;
+}
+
+// Device kind and instance from a full SC token (`js2_button5` -> joystick 2).
+function parseToken(token: string): { kind: DeviceKind; instance: number } | null {
+  const m = /^(js|kb|gp)(\d+)_/.exec(token);
+  if (!m) return null;
+  const kind: DeviceKind = m[1] === "js" ? "joystick" : m[1] === "kb" ? "keyboard" : "gamepad";
+  return { kind, instance: Number(m[2]) };
+}
+
+// SC's "deliberately unbound" rebind for a kind: a blank token on instance 1.
+function blankToken(kind: DeviceKind): string {
+  return `${kind === "keyboard" ? "kb" : kind === "gamepad" ? "gp" : "js"}1_ `;
+}
+
+function isBlank(token: string): boolean {
+  return /^(js|kb|gp)\d+_\s*$/.test(token);
+}
+
+// Unsaved rebinds, keyed by action and device kind: SC keeps one binding
+// per kind, so a rebind replaces whatever the kind had, on any instance.
+const pending = ref(new Map<string, RebindChange>());
+const dirty = computed(() => pending.value.size > 0);
+
+function pendingKey(actionmap: string, action: string, kind: DeviceKind): string {
+  return `${rowKey(actionmap, action)}\u0000${kind}`;
+}
+
+// What a cell shows: the pending rebind of that kind when it lands on this
+// device (nothing on the kind's other devices), else the file's tokens.
+function cellTokens(row: ListRow, col: DeviceCol): { tokens: string[]; pending: boolean } {
+  const p = pending.value.get(pendingKey(row.actionmap, row.action, col.kind));
+  if (p) {
+    const target = parseToken(p.input);
+    // A pending unbind empties every column of the kind.
+    return { tokens: target?.instance === col.instance && !isBlank(p.input) ? [p.input] : [], pending: true };
+  }
+  return { tokens: fileTokens.value.get(`${rowKey(row.actionmap, row.action)}\u0000${col.key}`) ?? [], pending: false };
+}
+
+function bindText(row: ListRow, col: DeviceCol): string {
+  const tokens = cellTokens(row, col).tokens;
+  return tokens.length ? tokens.map(inputText).join(", ") : "";
+}
+
+// --- rebind dialog ---------------------------------------------------------
+
+// Past half travel an axis counts as pressed.
+const AXIS_PRESS = 16384;
+
+interface RebindState {
+  row: ListRow;
+  category: string;
+  // The captured input, once one arrived.
+  after: { token: string; kind: DeviceKind; instance: number } | null;
+}
+
+const rebind = ref<RebindState | null>(null);
+
+function openRebind(row: ListRow, group: ListGroup) {
+  if (!props.hasCurrent) return;
+  rebind.value = { row, category: group.label, after: null };
+}
+
+// Current bindings of the action (pending ones included): every device
+// until an input arrived, then only the kind that input replaces.
+const rebindBefore = computed(() => {
+  const r = rebind.value;
+  if (!r) return [];
+  return deviceCols.value.flatMap((col) => {
+    if (r.after && col.kind !== r.after.kind) return [];
+    return cellTokens(r.row, col).tokens.map((t) => ({ device: col.key, text: inputText(t) }));
+  });
+});
+
+const rebindAfter = computed(() => {
+  const a = rebind.value?.after;
+  return a ? { device: deviceKeyOf(a.kind, a.instance), text: inputText(a.token) } : null;
+});
+
+// One Unbind per device that has a binding in the Before list (one per kind,
+// so the device names the kind), then Confirm / Cancel.
+const rebindButtons = computed<ConfirmButton[]>(() => {
+  const unbinds = new Map<DeviceKind, string>();
+  for (const b of rebindBefore.value) {
+    const kind = parseToken(`${b.device}_`)?.kind;
+    if (kind && !unbinds.has(kind)) unbinds.set(kind, b.device);
+  }
+  return [
+    ...[...unbinds].map(([kind, device]) => ({ label: `Unbind ${device}`, kind: "danger" as const, value: `unbind:${kind}` })),
+    { label: "Confirm", kind: "primary", value: "confirm", disabled: !rebind.value?.after },
+    { label: "Cancel", kind: "outline", value: "cancel" },
+  ];
+});
+
+function setAfter(token: string | null) {
+  const r = rebind.value;
+  const target = token ? parseToken(token) : null;
+  if (!r || !token || !target) return;
+  r.after = { token, ...target };
+}
+
+// A press while the dialog is open becomes the new binding: buttons and keys
+// on the way down, hats off centre, axes past half travel. Joystick inputs
+// take their jsN from the file (the backend resolves them), keyboard and
+// gamepad tokens come with the held modifiers folded in. Escape cancels
+// the dialog instead (so it cannot be bound here).
+async function takeInput(p: JoyInput) {
+  if (!rebind.value) return;
+  switch (p.kind) {
+    case "key":
+      if (!p.pressed) return;
+      if (p.name === "escape") rebind.value = null;
+      else setAfter(props.inputToken(p));
+      return;
+    case "padbutton":
+      if (p.pressed) setAfter(props.inputToken(p));
+      return;
+    case "padaxis":
+      if (Math.abs(p.value) >= AXIS_PRESS) setAfter(props.inputToken(p));
+      return;
+    case "button":
+      if (!p.pressed) return;
+      break;
+    case "hat":
+      if (p.direction === "centered") return;
+      break;
+    case "axis":
+      if (Math.abs(p.value) < AXIS_PRESS) return;
+      break;
+  }
+  try {
+    const res = await invoke<{ token: string | null; actions: BoundAction[] }>("resolve_input", {
+      guid: p.guid,
+      kind: p.kind,
+      index: p.index,
+      direction: p.kind === "hat" ? p.direction : null,
+    });
+    setAfter(res.token);
+  } catch {
+    /* ignore transient resolve errors */
+  }
+}
+
+function onRebindChoose(value: string) {
+  const r = rebind.value;
+  rebind.value = null;
+  if (!r) return;
+  let change: { kind: DeviceKind; input: string } | null = null;
+  if (value === "confirm" && r.after) change = { kind: r.after.kind, input: r.after.token };
+  const unbind = value.startsWith("unbind:") ? (value.slice(7) as DeviceKind) : null;
+  if (unbind) change = { kind: unbind, input: blankToken(unbind) };
+  if (!change) return;
+  const { actionmap, action } = r.row;
+  const key = pendingKey(actionmap, action, change.kind);
+  // Back to what the file has: no change to keep.
+  const inFile = props.bindings.filter((b) => b.actionmap === actionmap && b.action === action && b.device_kind === change!.kind);
+  const same = unbind ? inFile.length === 0 : inFile.length === 1 && inFile[0].token === change.input;
+  if (same) {
+    pending.value.delete(key);
+    return;
+  }
+  pending.value.set(key, { actionmap, action, kind: change.kind, input: change.input });
+}
+
+// --- save / discard --------------------------------------------------------
+
+function changesText(): string {
+  const n = pending.value.size;
+  return `${n} change${n === 1 ? "" : "s"}`;
+}
+
+// Write the pending rebinds into the file (auto-backup first, backend side).
+async function writeChanges(): Promise<boolean> {
+  busy.value = true;
+  try {
+    const s = await invoke<LoadStatus>("save_rebinds", { changes: [...pending.value.values()] });
+    pending.value.clear();
+    emit("saved", s);
+    await Promise.all([loadBackups(), loadInfo()]);
+    ensureKeys();
+    return true;
+  } catch (e) {
+    emit("notify", String(e), "error");
+    return false;
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function saveChanges() {
+  const choice = await ask(`Save ${changesText()}?`, "save", [
+    { label: "Save", kind: "primary", value: "save" },
+    { label: "Cancel", kind: "outline", value: "cancel" },
+  ]);
+  if (choice === "save") await writeChanges();
+}
+
+async function discardChanges() {
+  const choice = await ask(`Discard ${changesText()}?`, "trash", [
+    { label: "Discard", kind: "danger", value: "discard" },
+    { label: "Cancel", kind: "outline", value: "cancel" },
+  ]);
+  if (choice === "discard") pending.value.clear();
+}
+
+// True when it is fine to leave the mode: nothing pending, or the user chose
+// Discard, or the save went through.
+async function requestLeave(): Promise<boolean> {
+  if (!dirty.value) return true;
+  const choice = await ask("Unsaved changes", "save", [
+    { label: "Discard", kind: "danger", value: "discard" },
+    { label: "Save", kind: "primary", value: "save" },
+    { label: "Keep editing", kind: "outline", value: "keep" },
+  ]);
+  if (choice === "keep") return false;
+  if (choice === "save") return await writeChanges();
+  pending.value.clear();
+  return true;
+}
+
+defineExpose({ requestLeave });
+
 // --- wiring ----------------------------------------------------------------
 
 watch([aKey, bKey], runCompare);
 watch(() => props.hasCurrent, ensureKeys);
+// The file changed underneath (reload, restore, resort, save): re-read its facts.
+watch(() => props.bindings, loadInfo);
+watch(
+  () => props.keyInput,
+  (p) => {
+    if (p) takeInput(p);
+  },
+);
+
+let unlisten: UnlistenFn[] = [];
+
+onUnmounted(() => {
+  unlisten.forEach((fn) => fn());
+  unlisten = [];
+});
 
 // The live bindings changed (reload, restore, resort) — re-diff if a side is Current.
 watch(
@@ -390,12 +789,23 @@ watch(
 );
 
 onMounted(async () => {
-  await Promise.all([loadProfiles(), loadBackups()]);
-  // B starts on the newest layout, so the first view says something.
+  unlisten.push(await listen<JoyInput>("joy-input", (e) => takeInput(e.payload)));
+  await Promise.all([loadProfiles(), loadBackups(), loadInfo()]);
+  // B starts on the newest layout, so Compare says something when opened.
   const newest = [...profiles.value].sort((a, b) => b.modified - a.modified)[0];
   if (newest) bKey.value = `${PROFILE_PREFIX}${newest.file}`;
   else await runCompare();
 });
+
+// Left-hand rows: Current shows the list, anything else compares against it.
+function showList() {
+  view.value = "list";
+}
+
+function compareWith(key: string) {
+  bKey.value = key;
+  view.value = "compare";
+}
 </script>
 
 <template>
@@ -423,19 +833,24 @@ onMounted(async () => {
           <span class="head-title">Binding Profiles</span>
         </div>
         <div class="rows">
-          <div v-if="hasCurrent" class="row-item" :class="{ a: aKey === CURRENT, b: bKey === CURRENT }" @click="bKey = CURRENT">
+          <div
+            v-if="hasCurrent"
+            class="row-item"
+            :class="{ a: view === 'compare' && aKey === CURRENT, b: view === 'list' || bKey === CURRENT }"
+            @click="showList"
+          >
             <span class="dot" />
             <div class="lines">
               <span class="line-title">Current</span>
-              <span class="line-sub">Active profile</span>
+              <span class="mono line-sub">{{ bindings.length }} bindings · {{ info ? stamp(info.modified) : "—" }}</span>
             </div>
           </div>
           <div
             v-for="m in profiles"
             :key="m.file"
             class="row-item"
-            :class="{ a: aKey === `${PROFILE_PREFIX}${m.file}`, b: bKey === `${PROFILE_PREFIX}${m.file}` }"
-            @click="bKey = `${PROFILE_PREFIX}${m.file}`"
+            :class="{ a: view === 'compare' && aKey === `${PROFILE_PREFIX}${m.file}`, b: view === 'compare' && bKey === `${PROFILE_PREFIX}${m.file}` }"
+            @click="compareWith(`${PROFILE_PREFIX}${m.file}`)"
           >
             <div class="lines">
               <span class="line-title">{{ m.name }}</span>
@@ -471,8 +886,8 @@ onMounted(async () => {
             v-for="b in backups"
             :key="b.id"
             class="row-item backup"
-            :class="{ a: aKey === `backup:${b.id}`, b: bKey === `backup:${b.id}` }"
-            @click="bKey = `backup:${b.id}`"
+            :class="{ a: view === 'compare' && aKey === `backup:${b.id}`, b: view === 'compare' && bKey === `backup:${b.id}` }"
+            @click="compareWith(`backup:${b.id}`)"
           >
             <div class="lines">
               <span class="mono line-stamp">{{ stamp(b.created) }}</span>
@@ -493,8 +908,86 @@ onMounted(async () => {
       </section>
     </div>
 
+    <div class="right">
+    <!-- the live file: facts and the pending rebinds -->
+    <div v-if="view === 'list'" class="action-tile">
+      <div class="tile-name">
+        <Icon name="file" :size="14" />
+        <span class="name-text">Current</span>
+        <span v-if="info" class="tile-facts">
+          {{ stamp(info.modified) }} · {{ fmtSize(info.size) }} · {{ info.rebinds }} rebinds · {{ info.joysticks.length }} joysticks
+        </span>
+      </div>
+      <div class="tile-btns">
+        <span class="mono tile-path" :title="info?.path">{{ info?.path ?? "—" }}</span>
+        <span v-if="dirty" class="tile-dirty">{{ changesText() }}</span>
+        <button type="button" class="btn danger small" :disabled="!dirty || busy" @click="discardChanges">
+          <Icon name="close" :size="14" />
+          Discard
+        </button>
+        <button type="button" class="btn primary small" :disabled="!dirty || busy" @click="saveChanges">
+          <Icon name="save" :size="14" />
+          Save
+        </button>
+      </div>
+    </div>
+
+    <!-- bindings list: the game's keybinding screen, every device at once -->
+    <section
+      v-if="view === 'list'"
+      class="panel compare"
+      :style="{ '--cols': listCols.template.value, '--cols-min': `${listCols.minWidth.value}px` }"
+    >
+      <div class="head compare-head">
+        <Icon name="bindings" :size="16" />
+        <span class="head-title no-grow">Bindings List</span>
+        <span class="head-count">{{ rowCount }}</span>
+        <div class="spacer" />
+        <button type="button" class="btn outline small" :disabled="allExpanded" @click="expandAll">
+          <Icon name="chevron-down" :size="14" />Expand all
+        </button>
+        <button type="button" class="btn outline small" :disabled="!expanded.size" @click="collapseAll">
+          <Icon name="chevron-up" :size="14" />Collapse all
+        </button>
+        <div class="search">
+          <Icon name="search" :size="14" />
+          <input v-model="listSearch" placeholder="Find…" />
+        </div>
+      </div>
+
+      <div class="table">
+        <ColumnHead
+          :columns="listColumns"
+          :sort="listCols.sort.value"
+          @sort="() => {}"
+          @resize="listCols.startResize"
+          @reset="listCols.resetWidth"
+        />
+        <template v-for="g in shownGroups" :key="g.key">
+          <div class="group-row" @click="toggleGroup(g.key)">
+            <Icon :name="isOpen(g) ? 'chevron-down' : 'chevron-right'" :size="14" />
+            <span class="group-label">{{ g.label }}</span>
+            <span class="head-count">{{ g.rows.length }}</span>
+          </div>
+          <template v-if="isOpen(g)">
+            <div v-for="r in g.rows" :key="r.action" class="row list-row" @dblclick="openRebind(r, g)">
+              <span class="action-cell" :title="r.action">{{ r.label }}</span>
+              <span
+                v-for="c in deviceCols"
+                :key="c.key"
+                class="bind-cell"
+                :class="{ pending: cellTokens(r, c).pending, empty: !bindText(r, c) }"
+                :title="cellTokens(r, c).tokens.join(', ')"
+              >{{ bindText(r, c) || "—" }}</span>
+            </div>
+          </template>
+        </template>
+        <div v-if="!shownGroups.length" class="empty-line">{{ groups.length ? "No matches" : "No game data" }}</div>
+      </div>
+    </section>
+
     <!-- compare -->
-    <section class="panel compare" :style="{ '--cols': cols.template.value, '--cols-min': `${cols.minWidth.value}px` }">
+    <section v-else class="panel compare" :style="{ '--cols': cols.template.value, '--cols-min': `${cols.minWidth.value}px` }">
       <div class="head compare-head">
         <Icon name="compare" :size="16" />
         <span class="head-title no-grow">Compare</span>
@@ -569,8 +1062,30 @@ onMounted(async () => {
         </div>
       </div>
     </section>
+    </div>
 
     <ConfirmDialog v-if="confirm" :title="confirm.title" :icon="confirm.icon" :buttons="confirm.buttons" @choose="onConfirm" />
+
+    <!-- rebind: the next input pressed becomes the action's binding -->
+    <ConfirmDialog v-if="rebind" :title="rebind.row.label" icon="edit" :buttons="rebindButtons" captureKeys @choose="onRebindChoose">
+      <div class="rb-category">{{ rebind.category }}</div>
+      <div class="rb-block">
+        <span class="rb-label">Before</span>
+        <div v-for="b in rebindBefore" :key="`${b.device}:${b.text}`" class="rb-line">
+          <span class="mono dim">{{ b.device }}</span>
+          <span>{{ b.text }}</span>
+        </div>
+        <div v-if="!rebindBefore.length" class="rb-line dim">—</div>
+      </div>
+      <div class="rb-block">
+        <span class="rb-label">After</span>
+        <div v-if="rebindAfter" class="rb-line">
+          <span class="mono dim">{{ rebindAfter.device }}</span>
+          <span class="rb-new">{{ rebindAfter.text }}</span>
+        </div>
+        <div v-else class="rb-line dim">Press an input…</div>
+      </div>
+    </ConfirmDialog>
   </div>
 </template>
 
@@ -584,11 +1099,78 @@ onMounted(async () => {
   min-height: 0;
 }
 
-.left {
+.left,
+.right {
   display: flex;
   flex-direction: column;
   gap: 16px;
   min-height: 0;
+}
+
+.right {
+  min-width: 0;
+}
+
+/* --- action tile (mirrors the Devices mode) --- */
+
+.action-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px 16px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-panel);
+}
+
+.tile-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--h-chip-sm);
+  min-width: 0;
+  color: var(--text);
+}
+
+.name-text {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.tile-facts {
+  font-size: 12px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tile-btns {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tile-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tile-dirty {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warn);
+  white-space: nowrap;
+}
+
+.btn.danger {
+  background: transparent;
+  color: var(--err);
+  border: 1px solid color-mix(in srgb, var(--err) 60%, transparent);
 }
 
 .panel {
@@ -1003,5 +1585,97 @@ onMounted(async () => {
   padding: 24px 16px;
   text-align: center;
   color: var(--text-3);
+}
+
+/* --- bindings list --- */
+
+.group-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  min-width: var(--cols-min);
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid var(--border-dim);
+}
+
+.group-row:hover {
+  background: var(--bg-surface-2);
+}
+
+.group-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list-row {
+  cursor: default;
+  user-select: none;
+}
+
+.list-row:hover {
+  background: var(--bg-surface-2);
+}
+
+.list-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-cell {
+  padding-left: 22px;
+}
+
+.bind-cell.empty {
+  color: var(--text-3);
+}
+
+.bind-cell.pending {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+/* --- rebind dialog --- */
+
+.rb-category {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-2);
+}
+
+.rb-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rb-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.rb-line {
+  display: flex;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.rb-line .mono {
+  width: 40px;
+  flex-shrink: 0;
+}
+
+.rb-new {
+  color: var(--warn);
+  font-weight: 600;
 }
 </style>

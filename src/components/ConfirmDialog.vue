@@ -10,6 +10,7 @@ export interface ConfirmButton {
   label: string;
   kind: "primary" | "outline" | "danger";
   value: string;
+  disabled?: boolean;
 }
 </script>
 
@@ -17,7 +18,9 @@ export interface ConfirmButton {
 import { computed } from "vue";
 import Icon from "./Icon.vue";
 
-const props = defineProps<{ title: string; icon: ConfirmIcon; buttons: ConfirmButton[] }>();
+// `captureKeys`: the keyboard capture stays on while this dialog is open
+// (see keyboard.ts) — for a dialog that waits for a key press.
+const props = defineProps<{ title: string; icon: ConfirmIcon; buttons: ConfirmButton[]; captureKeys?: boolean }>();
 const emit = defineEmits<{ choose: [value: string] }>();
 
 // A click on the backdrop answers with the first outline button (the way out),
@@ -31,7 +34,13 @@ function onBackdrop() {
 
 <template>
   <div class="backdrop" @click.self="onBackdrop">
-    <div class="dialog" :class="{ wide: !!$slots.default }" role="dialog" :aria-label="title">
+    <div
+      class="dialog"
+      :class="{ wide: !!$slots.default }"
+      role="dialog"
+      :aria-label="title"
+      :data-capture-keys="captureKeys ? '' : undefined"
+    >
       <div class="head">
         <Icon :name="icon" :size="18" />
         <span class="title">{{ title }}</span>
@@ -46,6 +55,7 @@ function onBackdrop() {
           type="button"
           class="btn"
           :class="b.kind"
+          :disabled="b.disabled"
           @click="emit('choose', b.value)"
         >
           {{ b.label }}
@@ -140,5 +150,10 @@ function onBackdrop() {
   background: transparent;
   color: var(--err);
   border: 1px solid color-mix(in srgb, var(--err) 60%, transparent);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 </style>

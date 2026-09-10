@@ -41,6 +41,7 @@ export const ICONS = {
   restore: '<rect x="4" y="8" width="12" height="12" rx="1"/><path d="M8 8V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-3"/>',
   'chevron-down': '<path d="m6 9 6 6 6-6"/>',
   'chevron-up': '<path d="m6 15 6-6 6 6"/>',
+  'chevron-right': '<path d="m9 6 6 6-6 6"/>',
   swap: '<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>',
   upload: '<path d="M12 15V3M7 8l5-5 5 5"/><path d="M4 21h16"/>',
   download: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 21h16"/>',

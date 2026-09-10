@@ -79,9 +79,10 @@ function isTextTarget(target: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
 }
 
-// Any open dialog (Settings, Confirm) owns the keyboard.
+// Any open dialog (Settings, Confirm) owns the keyboard — unless it asks
+// for the capture itself (the rebind dialog, `data-capture-keys`).
 function dialogOpen(): boolean {
-  return document.querySelector('[role="dialog"]') !== null;
+  return document.querySelector('[role="dialog"]:not([data-capture-keys])') !== null;
 }
 
 function keyEvent(name: string, pressed: boolean): JoyInput {

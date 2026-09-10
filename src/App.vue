@@ -300,12 +300,17 @@ async function onMapsSaved() {
   await reloadMaps();
 }
 
-// The editor guards its unsaved changes; leaving Devices can be refused.
+// The editor and the Bindings mode guard their unsaved changes; leaving
+// Devices or Bindings can be refused.
 const editor = ref<InstanceType<typeof ImageMapEditor> | null>(null);
+const tools = ref<InstanceType<typeof ToolsView> | null>(null);
 
 async function setMode(m: Mode) {
   if (mode.value === "devices" && m !== "devices") {
     if ((await editor.value?.requestLeave()) === false) return;
+  }
+  if (mode.value === "tools" && m !== "tools") {
+    if ((await tools.value?.requestLeave()) === false) return;
   }
   mode.value = m;
   // Inputs released while the editor was open were never seen here.
@@ -699,6 +704,18 @@ function applyResolution(p: JoyInput, key: string, res: InputResolution) {
   }
 }
 
+// The full SC token a press stands for when it is meant as a new binding:
+// `eventToken` plus the other held keys / pad buttons folded in as modifiers
+// (`kb1_lalt+x`), the way SC stores a combo.
+function rebindToken(p: JoyInput): string | null {
+  const token = eventToken(p);
+  if (!token || (p.kind !== "key" && p.kind !== "padbutton")) return token;
+  const others = (heldNames.get(p.guid) ?? []).filter((n) => n !== p.name);
+  if (!others.length) return token;
+  const prefix = p.kind === "key" ? "kb1" : "gp1";
+  return `${prefix}_${[...others].reverse().join("+")}+${p.name}`;
+}
+
 // The SC token an input event stands for, with the jsN from actionmaps.xml
 // (like the Last Input card); null when SC cannot bind it (device not in the
 // profile, pad without a slot, unknown axis name, hat diagonal or centre).
@@ -785,6 +802,17 @@ function takeStatus(s: LoadStatus) {
   bindings.value = s.bindings;
   profileLoaded.value = s.loaded;
   error.value = s.loaded ? null : s.error;
+}
+
+// Rebinds were written into actionmaps.xml — same follow-up as a reload.
+async function onSaved(s: LoadStatus) {
+  takeStatus(s);
+  await loadClash();
+  if (s.loaded) {
+    notify("Saved", "ok");
+  } else {
+    notify(s.error ?? "Load failed", "error");
+  }
 }
 
 // A backup was written back over actionmaps.xml — same follow-up as a reload.
@@ -1052,12 +1080,16 @@ onUnmounted(() => {
 
     <ToolsView
       v-else-if="mode === 'tools'"
+      ref="tools"
       :bindings="bindings"
       :actionMaps="actionMaps"
       :hasCurrent="profileLoaded"
+      :keyInput="keyInput"
       :tokenLabel="tokenLabel"
+      :inputToken="rebindToken"
       @notify="notify"
       @restored="onRestored"
+      @saved="onSaved"
     />
 
     <ImageMapEditor

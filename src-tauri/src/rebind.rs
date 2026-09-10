@@ -286,6 +286,14 @@ mod tests {
     }
 
     #[test]
+    fn unbinds_with_a_blank_rebind() {
+        let out = apply_rebinds(XML, &[change("spaceship_general", "v_boost", DeviceKind::Joystick, "js1_ ")]).unwrap();
+        assert!(out.contains("   <action name=\"v_boost\">\n    <rebind input=\"js1_ \"/>\n   </action>\n"));
+        let profile = parse_user_profile(&out).unwrap();
+        assert!(profile.rebinds.iter().any(|r| r.action == "v_boost" && r.input == "js1_ "));
+    }
+
+    #[test]
     fn keeps_crlf() {
         let crlf = XML.replace('\n', "\r\n");
         let out = apply_rebinds(&crlf, &[change("player", "pl_jump", DeviceKind::Gamepad, "gp1_a")]).unwrap();

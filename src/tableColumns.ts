@@ -1,6 +1,6 @@
 // Resizable, sortable column state for the grid-based tables (Bindings deck,
 // Compare). Widths and the sort choice persist per table in localStorage.
-import { computed, ref, watch } from "vue";
+import { computed, ref, toValue, watch, type MaybeRefOrGetter } from "vue";
 
 export type SortDir = "asc" | "desc";
 export interface SortState {
@@ -36,24 +36,35 @@ function load(storageKey: string): Stored {
 
 const GAP = 12;
 
-export function useTableColumns(storageKey: string, columns: ColumnSpec[], defaultSort: SortState) {
+// `columns` may be reactive (a getter or ref): columns that appear later
+// start at their default width, or the stored one if the key was seen before.
+export function useTableColumns(storageKey: string, columns: MaybeRefOrGetter<ColumnSpec[]>, defaultSort: SortState) {
   const stored = load(storageKey);
   const widths = ref<Record<string, number>>({});
-  for (const c of columns) {
-    if (c.width === null) continue;
-    const w = stored.widths?.[c.key];
-    widths.value[c.key] = typeof w === "number" && w >= MIN_WIDTH ? w : c.width;
-  }
-  const storedSort = columns.some((c) => c.key === stored.sort?.key) ? stored.sort! : defaultSort;
+  const cols = computed(() => toValue(columns));
+  watch(
+    cols,
+    (list) => {
+      for (const c of list) {
+        if (c.width === null || widths.value[c.key] !== undefined) continue;
+        const w = stored.widths?.[c.key];
+        widths.value[c.key] = typeof w === "number" && w >= MIN_WIDTH ? w : c.width;
+      }
+    },
+    { immediate: true },
+  );
+  const storedSort = cols.value.some((c) => c.key === stored.sort?.key) ? stored.sort! : defaultSort;
   const sort = ref<SortState>({ ...storedSort });
 
   const template = computed(() =>
-    columns.map((c) => (c.width === null ? "minmax(0, 1fr)" : `${widths.value[c.key]}px`)).join(" "),
+    cols.value.map((c) => (c.width === null ? "minmax(0, 1fr)" : `${widths.value[c.key]}px`)).join(" "),
   );
   // Fixed columns plus gaps: the row width below which the table scrolls
   // horizontally instead of squeezing the filler column further.
   const minWidth = computed(
-    () => Object.values(widths.value).reduce((a, b) => a + b, 0) + GAP * (columns.length - 1),
+    () =>
+      cols.value.reduce((sum, c) => sum + (c.width === null ? 0 : (widths.value[c.key] ?? 0)), 0) +
+      GAP * (cols.value.length - 1),
   );
 
   function toggleSort(key: string) {
@@ -80,7 +91,7 @@ export function useTableColumns(storageKey: string, columns: ColumnSpec[], defau
   }
 
   function resetWidth(key: string) {
-    const c = columns.find((x) => x.key === key);
+    const c = cols.value.find((x) => x.key === key);
     if (c && c.width !== null) widths.value[key] = c.width;
   }
 

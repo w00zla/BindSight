@@ -44,8 +44,12 @@ presentational components:
   start runs, whatever its outcome.
 - Monitor: `DeviceTile`, `StatusPanel`, `ImageStage` (+ `Splitter`),
   `LiveCard`, `BindingsDeck`.
-- `ToolsView` — the whole Bindings mode: game bindings, binding profiles,
-  backups, Compare.
+- `ToolsView` — the whole Bindings mode: game bindings, binding profiles
+  (with the live file as "Current"), backups, and on the right either the
+  Bindings List (Current: the game's keybinding screen as a table, one
+  column per device the file names, categories collapsible, double-click
+  = rebind dialog, pending rebinds kept until Save / Discard in the action
+  tile above it) or Compare (any other source picked on the left).
 - `ImageMapEditor` — the Devices mode (Konva via `vue-konva`, three columns:
   devices + image-maps, canvas, live input + areas); also hosts Device Info
   (Device List and Device Events tiles, each with its own Save).
@@ -117,6 +121,11 @@ presentational components:
 - `resort.rs` — textual `actionmaps.xml` rewrite applying a resort (joystick
   `<options>` instances + `jsN_` prefixes in `input="..."`), the out-of-game
   counterpart of `pp_resortdevices`.
+- `rebind.rs` — textual `actionmaps.xml` rewrite writing rebinds (one
+  binding per action and device kind, like SC: every `<rebind>` of that kind
+  under the action is replaced; missing `<action>` / `<actionmap>` elements
+  are created in SC's layout), the out-of-game counterpart of the keybinding
+  screen. `lib.rs::save_rebinds` backs up first (reason "before rebind").
 - `config.rs` — JSON in the app config dir: the SC environments
   (`ENVIRONMENTS` = LIVE / HOTFIX / PTU / EPTU, each a base path + optional
   `global.ini` override; Windows default paths), the active one
@@ -266,7 +275,8 @@ The game data cache lives per version under `~/.cache/com.w00zla.bindsight/
   SDL2 delivers key events only to its own window). It runs in every mode
   and `preventDefault`s every mapped key (deliberate: a rebind flow must own
   the keyboard); only text fields and open dialogs (`[role="dialog"]`) are
-  skipped. PrintScreen / Meta never arrive.
+  skipped — except a dialog carrying `data-capture-keys` (`ConfirmDialog`
+  `captureKeys`, the rebind dialog). PrintScreen / Meta never arrive.
 - **Axes**: SC names axes by HID usage (X->`x` … Rz->`rotz`, Slider/Dial->
   `slider1`/`slider2`); SDL numbers them in canonical usage order (Linux:
   evdev ABS code order, Windows: DirectInput offset order), NOT report

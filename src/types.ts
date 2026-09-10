@@ -262,6 +262,32 @@ export interface BackupSummary {
   bindings: number;
 }
 
+// One joystick named in the profile's <options> block.
+export interface JoystickDevice {
+  instance: number;
+  product_name: string;
+  product_guid: string | null;
+}
+
+// Facts about the loaded actionmaps.xml (lib.rs `ProfileInfo`).
+export interface ProfileInfo {
+  path: string;
+  // Unix seconds; 0 if unknown.
+  modified: number;
+  size: number;
+  rebinds: number;
+  joysticks: JoystickDevice[];
+}
+
+// One rebind to write: the full SC input as SC stores it (`js2_button5`,
+// `kb1_lalt+x`, `gp1_a`); it replaces the action's binding of that kind.
+export interface RebindChange {
+  actionmap: string;
+  action: string;
+  kind: DeviceKind;
+  input: string;
+}
+
 // One side of a comparison.
 export type DiffSource =
   | { kind: "current" }
