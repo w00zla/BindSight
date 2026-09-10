@@ -15,6 +15,11 @@ body,
   font-family: var(--font-ui);
 }
 
+/* The app has a minimum size; a smaller window scrolls instead. */
+#app {
+  overflow: auto;
+}
+
 .mono {
   font-family: var(--font-mono);
 }

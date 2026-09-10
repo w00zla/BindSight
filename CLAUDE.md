@@ -271,6 +271,15 @@ file libappindicator-gtk3-devel librsvg2-devel libxdo-devel SDL2-devel`, plus th
   Verified on a VKB EVO whose report order is X Y Rz Z Rx Ry: SDL 5 = twist =
   `rotz`, SDL 2 = `z`. `hid.rs` derives it and cross-checks the count against
   SDL; anything it cannot place is an `axes_error`, never a guess.
+- **The window is undecorated** (`decorations: false` in `tauri.conf.json`):
+  the top bar is the title bar (`data-tauri-drag-region`, double-click
+  toggles maximize) with its own minimize / maximize / close buttons, and
+  `components/WindowEdges.vue` draws the eight invisible resize strips
+  (`startResizeDragging`) because an undecorated window has no edge resize
+  on Linux. The window permissions live in `capabilities/default.json`.
+  The app runs native Wayland on Linux (the old `GDK_BACKEND=x11` override
+  is gone): a dev build then shows no taskbar icon, because Plasma looks it
+  up by app id + `.desktop` file, which only an installed bundle has.
 - **Wayland**: `run()` sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` on Linux (fixes
   WebKitGTK "Error 71"), unless the user overrode it.
 - **Dark mode + native controls**: `:root { color-scheme: dark }` in the dark

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { onMounted, onUnmounted, ref } from "vue";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 import Icon from "./Icon.vue";
 import Dropdown from "./Dropdown.vue";
 import logo from "../assets/logo.png";
@@ -14,11 +17,32 @@ const TABS: { mode: Mode; label: string; icon: "live" | "bindings" | "devices" }
 ];
 
 const ENV_OPTIONS = ENVIRONMENTS.map((slug) => ({ value: slug, label: slug }));
+
+// Window controls: the window has no native frame, the bar is the title bar.
+const win = getCurrentWindow();
+const maximized = ref(false);
+let unlisten: UnlistenFn | null = null;
+
+async function refreshMaximized() {
+  try {
+    maximized.value = await win.isMaximized();
+  } catch {
+    maximized.value = false;
+  }
+}
+
+onMounted(async () => {
+  await refreshMaximized();
+  unlisten = await win.onResized(refreshMaximized);
+});
+onUnmounted(() => {
+  unlisten?.();
+});
 </script>
 
 <template>
-  <header class="topbar">
-    <div class="brand">
+  <header class="topbar" data-tauri-drag-region>
+    <div class="brand" data-tauri-drag-region>
       <img class="logo" :src="logo" alt="" />
       <span class="wordmark">BINDSIGHT</span>
     </div>
@@ -35,7 +59,7 @@ const ENV_OPTIONS = ENVIRONMENTS.map((slug) => ({ value: slug, label: slug }));
         {{ t.label }}
       </button>
     </div>
-    <div class="spacer" />
+    <div class="spacer" data-tauri-drag-region />
     <Dropdown
       variant="mono"
       :modelValue="activeEnv"
@@ -48,7 +72,7 @@ const ENV_OPTIONS = ENVIRONMENTS.map((slug) => ({ value: slug, label: slug }));
       type="button"
       class="refresh-btn"
       :disabled="loading"
-      title="Devices, actionmaps.xml, Game.log"
+      title="Devices, bindings, device order"
       @click="emit('refresh')"
     >
       <Icon name="refresh" :size="16" />
@@ -57,11 +81,26 @@ const ENV_OPTIONS = ENVIRONMENTS.map((slug) => ({ value: slug, label: slug }));
     <button type="button" class="gear-btn" @click="emit('settings')">
       <Icon name="settings" :size="18" />
     </button>
+    <div class="divider" />
+    <div class="win-btns">
+      <button type="button" class="win-btn" title="Minimize" @click="win.minimize()">
+        <Icon name="minimize" :size="16" />
+      </button>
+      <button type="button" class="win-btn" :title="maximized ? 'Restore' : 'Maximize'" @click="win.toggleMaximize()">
+        <Icon :name="maximized ? 'restore' : 'maximize'" :size="14" />
+      </button>
+      <button type="button" class="win-btn close" title="Close" @click="win.close()">
+        <Icon name="close" :size="16" />
+      </button>
+    </div>
   </header>
 </template>
 
 <style scoped>
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
   height: 56px;
   flex-shrink: 0;
   display: flex;
@@ -167,5 +206,42 @@ const ENV_OPTIONS = ENVIRONMENTS.map((slug) => ({ value: slug, label: slug }));
   background: transparent;
   color: var(--text-2);
   cursor: pointer;
+}
+.divider {
+  width: 1px;
+  height: 24px;
+  background: var(--border-dim);
+}
+
+/* Stick to the viewport's right edge while the bar scrolls sideways. */
+.win-btns {
+  position: sticky;
+  right: 16px;
+  display: flex;
+  gap: 2px;
+  background: var(--bg-surface);
+}
+
+.win-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.win-btn:hover {
+  background: var(--bg-surface-2);
+  color: var(--text);
+}
+
+.win-btn.close:hover {
+  background: var(--err);
+  color: var(--accent-text);
 }
 </style>

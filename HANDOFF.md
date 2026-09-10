@@ -117,6 +117,18 @@ The core loop is closed end-to-end:
     `None`, so `scdata.json` now carries a `format` stamp (`CACHE_FORMAT` =
     2, 2026-09-10) and an older or stampless cache is re-extracted once.
 
+12. **Own window frame** (2026-09-10): `decorations: false`, the top bar
+    drags the window and carries minimize / maximize (restore when
+    maximized, tracked via `onResized`) / close; `WindowEdges.vue` supplies
+    the resize strips. The `GDK_BACKEND=x11` override is gone, the app runs
+    native Wayland; a dev build then has no taskbar icon (Plasma needs a
+    `.desktop` file for the app id `bindsight`, only bundles ship one — a
+    local `~/.local/share/applications/bindsight.desktop` pointing at the
+    debug binary and `src-tauri/icons/128x128.png` fixes the dev box).
+    Verified on KDE: frame gone, buttons drawn, restore icon while
+    maximized. **Unverified**: dragging, edge resizing,
+    minimize / close clicks, and all of it on Windows.
+
 GUI (redesigned 2026-09-09, phases 0-2 of the plan in the design session;
 look = RSI Pledge-Store palette + cyan live accent, Bai Jamjuree / Share Tech
 Mono bundled locally, tokens in `src/styles/tokens.css`, icons in
@@ -217,6 +229,17 @@ memory `gui-naming-decisions` and the plan below.
 
 ## Open items / next steps
 
+- **RESPONSIVENESS — the big one (2026-09-10).** The layout is built for a
+  maximized 1080p+ window and nothing else. Today's stopgap: `.app` has
+  `min-width: 1280px` / `min-height: 720px`, a smaller window scrolls
+  (`#app { overflow: auto }`), the top bar is sticky at the top and the
+  window controls stick to the right edge (they slide over Refresh and
+  the gear when narrow). Fixed-width tiles (device tiles 340 px), the
+  stage's px shares, the three fixed columns of the Devices mode, the
+  splitters' px layout in localStorage, the 40 % cap of the Game-bindings
+  panel and every hard-coded panel width are unreviewed for anything but
+  that one size. Needs a real pass: breakpoints or fluid columns, what
+  collapses first, what the minimum really is.
 - **Keyboard + gamepad (2026-09-10), partly GUI-verified**: the app starts,
   lists the `Keyboard` tile with its `kb1` chip, shows the eye buttons and
   the bundled DE keyboard map in the stage (screenshot). **Not verified**:

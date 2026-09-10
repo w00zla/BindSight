@@ -11,6 +11,7 @@ import LiveCard from "./components/LiveCard.vue";
 import BindingsDeck from "./components/BindingsDeck.vue";
 import ToolsView from "./components/ToolsView.vue";
 import Toasts from "./components/Toasts.vue";
+import WindowEdges from "./components/WindowEdges.vue";
 import { deviceKey, deviceName } from "./devices";
 import Splitter from "./components/Splitter.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
@@ -968,15 +969,20 @@ onUnmounted(() => {
     />
 
     <Toasts :toasts="toasts" />
+    <WindowEdges />
   </main>
 </template>
 
 <style scoped>
+/* Below this size the content stops shrinking and the window scrolls. */
 .app {
   display: flex;
   flex-direction: column;
   height: 100%;
-  overflow: hidden;
+  min-width: 1280px;
+  min-height: 720px;
+  /* No overflow clipping here: #app is the scroll container, and the sticky
+     top bar needs it to be the nearest one. */
   background: var(--bg-base);
 }
 
