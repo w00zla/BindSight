@@ -176,9 +176,16 @@ See `HANDOFF.md` for the current working state.
   Keyboard DE, Xbox controller, PlayStation controller — generated, never
   hand-edited: `scripts/gen-imagemaps.py` holds the geometry once and writes
   both `image.png` and `imagemap.json` (fixed ids `4b7a2c1e-…-000000000001`
-  to `…0004`). `App.vue`'s `DEFAULT_MAPS` picks the US keyboard and the Xbox
-  pad by default (PlayStation for Sony's vendor id); without a match the
-  first map wins.
+  to `…0004`).
+- **Default map per device** (`App.vue`, `chosenMapId`): the user's choice,
+  else the first fitting rule from the hard-coded `BUNDLED_RULES` — they
+  exist only for the four bundled maps and are NOT part of the image-map
+  model: gamepads by case-insensitive wildcards (`*`/`?`) against the
+  controller name (`*xbox*`, `*playstation*` …), keyboards by the OS
+  keyboard layout (xkb codes `de`, `us` …, from the `keyboard_layout`
+  command in `kblayout.rs`: `localectl` / `vconsole.conf` on Linux,
+  `GetKeyboardLayoutNameW` on Windows) — else `DEFAULT_MAPS` (US keyboard,
+  Xbox pad), else the first map. Joysticks match by hardware id only.
 
 ## Commands / how to work
 

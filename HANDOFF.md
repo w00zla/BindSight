@@ -229,6 +229,19 @@ memory `gui-naming-decisions` and the plan below.
 
 ## Open items / next steps
 
+- **DUPLICATE JOYSTICKS — the other big one (2026-09-10).** Two or more
+  joysticks of the same type share the SC Product GUID (vendor/product), so
+  everything keyed by GUID — the Game.log slot match, `imagemap_choices`,
+  `ignored_devices`, the stage order and hidden set, `hardware_id` — cannot
+  tell them apart. The root problem is SDL's enumeration order: it looks
+  random across replugs and reboots on Linux, while Windows and SC keep a
+  stable order. So "the first VKB in SDL order = js1" holds nowhere on
+  Linux, and on Windows only by luck. Nothing in the app handles this today
+  (the HANDOFF's "Duplicate identical devices … known limitation" note is
+  this). Candidates: the serial number (empty on many sticks), the SDL
+  device path (`/dev/input/event*`, USB port bound on Linux, unstable on
+  Windows), or a manual assignment in Settings that survives via
+  path/serial. Needs a design pass with two identical sticks on the desk.
 - **RESPONSIVENESS — the big one (2026-09-10).** The layout is built for a
   maximized 1080p+ window and nothing else. Today's stopgap: `.app` has
   `min-width: 1280px` / `min-height: 720px`, a smaller window scrolls
@@ -246,15 +259,18 @@ memory `gui-naming-decisions` and the plan below.
   any key press (no input-injection tool on the dev box), everything
   gamepad (no pad was connected: `is_game_controller`, the double open, the
   `Joy*` drop, `padbutton`/`padaxis`, derived buttons, `gp1` tile, the
-  PlayStation default by vendor `054C`), the hide toggle, kb/gp chips in
+  PlayStation pick by controller name), the hide toggle, kb/gp chips in
   Deck and Compare, the editor with the keyboard/pad selected. Known
   rough edges: the capture `preventDefault`s webview shortcuts in every
   mode, by design (the editor has no key shortcuts any more — polygon by
   double-click, delete by button — so a keyboard map can be edited without
   side effects; only the top bar's Escape still closes the environment
-  dropdown, harmless); the bundled defaults per kind
-  (`DEFAULT_MAPS` in `App.vue`: US keyboard, Xbox pad, PlayStation pad for
-  vendor `054C`, else the first matching map) are unverified; the keyboard cannot be
+  dropdown, harmless); the default-map rules (2026-09-10: hard-coded
+  `BUNDLED_RULES` in `App.vue` for the four bundled maps only — pad name
+  wildcards, OS keyboard layout via `kblayout.rs`; the Linux `localectl`
+  path returns `de` on the dev box, the Windows `GetKeyboardLayoutNameW`
+  path is written but never compiled here — then `DEFAULT_MAPS`, then the
+  first map) are GUI-unverified; the keyboard cannot be
   excluded, only hidden; the Status panel says nothing about an unseen pad
   (tile + live card do); a `Game.log` with only `xinput` lines now yields
   `missing` for every saved joystick instead of "no device order"; extra

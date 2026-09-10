@@ -39,6 +39,8 @@ os_info = { version = "3", default-features = false }
 # system SDL2 (see the SDL2-devel prerequisite), which stays the lean default.
 [target.'cfg(windows)'.dependencies]
 sdl2 = { version = "0.37", features = ["bundled", "static-link"] }
+# GetKeyboardLayoutNameW for the default keyboard image-map (kblayout.rs).
+windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation"] }
 
 [target.'cfg(not(windows))'.dependencies]
 sdl2 = "0.37"

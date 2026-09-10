@@ -45,19 +45,47 @@ import { startKeyboardCapture } from "./keyboard";
 
 const MAX_EVENTS = 500;
 
-// Bundled image-map picked by default per device kind, when the user has not
-// chosen one: the US keyboard and the Xbox controller; a Sony pad gets the
-// PlayStation map. Anything else falls back to the first matching map.
-const DEFAULT_MAPS: Partial<Record<DeviceKind, string>> = {
-  keyboard: "4b7a2c1e-0001-4000-8000-000000000001",
-  gamepad: "4b7a2c1e-0001-4000-8000-000000000003",
-};
-const PAD_MAP_PS = "4b7a2c1e-0001-4000-8000-000000000004";
-const SONY_VENDOR = 0x054c;
+// The image-map shown while the user has not chosen one. Hard-coded rules
+// for the bundled keyboard and gamepad maps, nothing in the image-maps
+// themselves: pads match wildcard patterns against the controller name,
+// keyboards the OS keyboard layout (xkb code). First fitting rule wins,
+// else the default per kind, else the first map for the hardware id.
+// Joysticks match by hardware id only.
+const MAP_US = "4b7a2c1e-0001-4000-8000-000000000001";
+const MAP_DE = "4b7a2c1e-0001-4000-8000-000000000002";
+const MAP_XBOX = "4b7a2c1e-0001-4000-8000-000000000003";
+const MAP_PS = "4b7a2c1e-0001-4000-8000-000000000004";
 
-function defaultMapId(d: DeviceInfo): string | undefined {
-  if (d.kind === "gamepad" && d.sdl_vendor === SONY_VENDOR) return PAD_MAP_PS;
-  return DEFAULT_MAPS[d.kind];
+const BUNDLED_RULES: { id: string; layouts?: string[]; names?: string[] }[] = [
+  { id: MAP_US, layouts: ["us", "gb", "au", "ca"] },
+  { id: MAP_DE, layouts: ["de", "at", "ch"] },
+  { id: MAP_XBOX, names: ["*xbox*", "*x-box*", "*microsoft*", "*8bitdo*"] },
+  { id: MAP_PS, names: ["*playstation*", "*dualshock*", "*dualsense*", "*sony*", "*ps3*", "*ps4*", "*ps5*"] },
+];
+
+const DEFAULT_MAPS: Partial<Record<DeviceKind, string>> = { keyboard: MAP_US, gamepad: MAP_XBOX };
+
+// OS keyboard layout (xkb code such as `de`), null when unknown.
+const keyboardLayout = ref<string | null>(null);
+
+// Case-insensitive glob: `*` any run, `?` one char.
+function wildcard(pattern: string, text: string): boolean {
+  const re = new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`, "i");
+  return re.test(text);
+}
+
+function ruleFits(r: (typeof BUNDLED_RULES)[number], d: DeviceInfo): boolean {
+  if (d.kind === "gamepad") return !!r.names?.some((p) => wildcard(p, deviceName(d)));
+  if (d.kind === "keyboard") {
+    const l = keyboardLayout.value?.toLowerCase();
+    return !!l && !!r.layouts?.some((x) => x === l);
+  }
+  return false;
+}
+
+function defaultMapId(d: DeviceInfo, list: ImageMapSummary[]): string | undefined {
+  const hit = BUNDLED_RULES.find((r) => list.some((s) => s.id === r.id) && ruleFits(r, d));
+  return hit?.id ?? DEFAULT_MAPS[d.kind];
 }
 
 const devices = ref<DeviceInfo[]>([]);
@@ -113,7 +141,7 @@ function chosenMapId(d: DeviceInfo | null | undefined): string | null {
   const pick = hardwareId ? mapChoices.value[hardwareId.toLowerCase()] : undefined;
   const chosen = list.find((s) => s.id === pick);
   if (chosen) return chosen.id;
-  const fallback = d ? defaultMapId(d) : undefined;
+  const fallback = d ? defaultMapId(d, list) : undefined;
   return list.find((s) => s.id === fallback)?.id ?? list[0].id;
 }
 
@@ -815,6 +843,11 @@ function clearHeld() {
 
 onMounted(async () => {
   stopKeyboard = startKeyboardCapture(onInput, keyboardActive);
+  try {
+    keyboardLayout.value = await invoke<string | null>("keyboard_layout");
+  } catch {
+    keyboardLayout.value = null;
+  }
   window.addEventListener("blur", clearHeld);
   unlisten.push(await listen<JoyInput>("joy-input", (e) => onInput(e.payload)));
   unlisten.push(

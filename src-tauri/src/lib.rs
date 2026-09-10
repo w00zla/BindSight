@@ -14,6 +14,7 @@ pub mod guid;
 pub mod hid;
 pub mod imagemap;
 pub mod input;
+pub mod kblayout;
 pub mod binding_profiles;
 pub mod resort;
 pub mod scdata;
@@ -629,6 +630,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_devices,
+            kblayout::keyboard_layout,
             get_actions,
             get_tokens,
             get_sc_status,
