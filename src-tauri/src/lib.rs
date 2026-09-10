@@ -16,6 +16,7 @@ pub mod imagemap;
 pub mod input;
 pub mod kblayout;
 pub mod binding_profiles;
+pub mod rebind;
 pub mod resort;
 pub mod scdata;
 pub mod scinstall;
@@ -190,6 +191,77 @@ fn apply_resort(
     info!("resort applied to {}: {} ({backup})", path.display(), moves.join(" "));
 
     Ok(reload_profile(&mut data))
+}
+
+/// Write rebinds into the live `actionmaps.xml` — what the in-game keybinding
+/// screen does, applied from outside. The game must not be running (it would
+/// overwrite the file on exit). While auto-backups are on, a backup of the
+/// original is taken first (reason "before rebind"). Reloads the profile
+/// afterwards and returns the load status, like `apply_resort`.
+#[tauri::command]
+fn save_rebinds(
+    changes: Vec<rebind::RebindChange>,
+    app: AppHandle,
+    data: State<Mutex<AppData>>,
+) -> Result<LoadStatus, String> {
+    let mut data = data.lock().unwrap();
+    if data.profile.is_none() {
+        return Err("No bindings loaded".into());
+    }
+    let path = config::actionmaps_path(data.config.base_path());
+    let xml = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let rewritten = rebind::apply_rebinds(&xml, &changes)?;
+
+    let backup = if data.config.auto_backup {
+        let version = data.sc.version.as_ref().map(|v| v.label.as_str());
+        let root = backups::backups_root(&app)?;
+        Some(backups::create(&root, &path, "before rebind", version, &data.sc.data.actions)?.id)
+    } else {
+        None
+    };
+    std::fs::write(&path, rewritten).map_err(|e| format!("write {}: {e}", path.display()))?;
+    let summary: Vec<String> = changes
+        .iter()
+        .map(|c| format!("{}/{}={}", c.actionmap, c.action, c.input.trim()))
+        .collect();
+    let backup = backup.map_or_else(|| "auto-backup off".to_string(), |id| format!("backup {id}"));
+    info!("rebinds written to {}: {} ({backup})", path.display(), summary.join(" "));
+
+    Ok(reload_profile(&mut data))
+}
+
+/// Facts about the loaded `actionmaps.xml` for the Bindings mode: where it
+/// is, its size and mtime, how many rebinds it holds and which joysticks its
+/// `<options>` name.
+#[derive(Serialize)]
+struct ProfileInfo {
+    path: String,
+    /// Unix seconds; 0 if unknown.
+    modified: u64,
+    size: u64,
+    rebinds: usize,
+    joysticks: Vec<scdata::JoystickDevice>,
+}
+
+/// `None` while no profile is loaded.
+#[tauri::command]
+fn get_profile_info(data: State<Mutex<AppData>>) -> Option<ProfileInfo> {
+    let data = data.lock().unwrap();
+    let profile = data.profile.as_ref()?;
+    let path = config::actionmaps_path(data.config.base_path());
+    let meta = std::fs::metadata(&path).ok();
+    let modified = meta
+        .as_ref()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs());
+    Some(ProfileInfo {
+        path: path.display().to_string(),
+        modified,
+        size: meta.map_or(0, |m| m.len()),
+        rebinds: profile.rebinds.len(),
+        joysticks: profile.joysticks.clone(),
+    })
 }
 
 /// Re-read everything from the SC install (actionmaps.xml and Game.log)
@@ -686,6 +758,8 @@ pub fn run() {
             reload,
             get_clash_report,
             apply_resort,
+            save_rebinds,
+            get_profile_info,
             set_ignored_devices,
             set_environments,
             set_active_env,
