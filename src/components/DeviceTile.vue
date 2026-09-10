@@ -68,7 +68,7 @@ const state = computed(() => {
         :title="hidden ? 'Show on stage' : 'Hide from stage'"
         @click="emit('toggleMap')"
       >
-        <Icon :name="hidden ? 'eye-off' : 'eye'" :size="14" />
+        <Icon :name="hidden ? 'image-off' : 'image'" :size="14" />
       </button>
       <span class="status">{{ state }}</span>
     </div>

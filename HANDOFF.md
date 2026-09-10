@@ -177,8 +177,8 @@ card with Add area / Delete (edit mode only) and the areas list with
 filter. A map opens in view mode
 (canvas inert, areas still light up for the live key); Edit, a fresh clone
 or a fresh map enter edit mode, Cancel / Save leave it (the Save / Discard
-question only comes when switching map or device while dirty). "New image-map" opens the empty state with a yellow `No image-map`
-chip and only Choose image, which creates the map (name = device name) and
+question only comes when switching map or device while dirty). "New image-map" opens the empty state (`Choose image…` in the canvas
+area) with only Choose image, which creates the map (name = device name) and
 opens it in edit mode. Unsaved changes are guarded by `ConfirmDialog`. The Device log
 toggle swaps the canvas (and the right column) for the raw log with Clear
 and Save (text file via the `write_text_file` command): per device every

@@ -1165,7 +1165,6 @@ function noMaps(d: DeviceInfo): boolean {
         <div class="head">
           <Icon name="image" :size="15" />
           <span class="head-title">Image-maps</span>
-          <span class="head-count">{{ summaries.length }}</span>
         </div>
         <div class="dev-list">
           <template v-for="d in props.devices" :key="d.index">
@@ -1259,7 +1258,10 @@ function noMaps(d: DeviceInfo): boolean {
         <div class="divider" />
       </template>
       <template v-if="editing">
-        <button type="button" class="btn outline small" @click="cancelEdit">Cancel</button>
+        <button type="button" class="btn outline small" @click="cancelEdit">
+          <Icon name="close" :size="14" />
+          Cancel
+        </button>
         <button type="button" class="btn primary small" @click="finishEdit">
           <Icon name="save" :size="14" />
           Save
@@ -1303,6 +1305,7 @@ function noMaps(d: DeviceInfo): boolean {
     <section class="col-centre">
       <template v-if="showLog">
         <div class="centre-head">
+          <Icon name="log" :size="16" />
           <span class="log-title">Device log</span>
           <div class="grow" />
           <button type="button" class="btn outline small" :disabled="!props.events.length" @click="emit('clearLog')">
@@ -1474,9 +1477,7 @@ function noMaps(d: DeviceInfo): boolean {
         </div>
       </template>
       <template v-else-if="isNew">
-        <div class="none">
-          <span class="chip">No image-map</span>
-        </div>
+        <div class="none">Choose image…</div>
       </template>
       <div v-else class="none">{{ props.devices.length ? "No image-map" : "No device" }}</div>
     </section>
@@ -1486,7 +1487,8 @@ function noMaps(d: DeviceInfo): boolean {
       <div v-if="editing" class="input-card">
         <div class="ic-key">
           <Icon name="bolt" :size="22" />
-          <span class="mono key" :class="{ idle: !currentKey }">{{ currentKey ?? "—" }}</span>
+          <span v-if="currentKey" class="mono key">{{ currentKey }}</span>
+          <span v-else class="key idle">Trigger input…</span>
         </div>
         <div class="ic-sub">{{ selectedName }} · {{ currentCountText }}</div>
         <div class="ic-btns">
@@ -1537,11 +1539,11 @@ function noMaps(d: DeviceInfo): boolean {
 .devices {
   flex: 1;
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr) 380px;
+  grid-template-columns: 300px 380px minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
     "left tile tile"
-    "left centre right";
+    "left right centre";
   column-gap: 16px;
   padding: 12px 16px 16px;
   min-height: 0;
@@ -1567,17 +1569,20 @@ function noMaps(d: DeviceInfo): boolean {
 }
 
 /* The image-map's name as the tile title; an input while editing. */
+/* Same height as text or input, so the tile does not jump between modes. */
 .tile-name {
   display: flex;
   align-items: center;
   gap: 8px;
+  height: var(--h-chip-sm);
   max-width: 390px;
   min-width: 0;
   color: var(--text);
 }
 
 .tile-name .name {
-  padding: 4px 8px;
+  height: 100%;
+  padding: 0 8px;
   border-radius: var(--radius-control);
   background: var(--bg-surface-2);
 }
@@ -2060,6 +2065,7 @@ function noMaps(d: DeviceInfo): boolean {
 }
 
 .key.idle {
+  font-size: 18px;
   color: var(--text-3);
 }
 
