@@ -19,8 +19,12 @@ export const ICONS = {
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5-9 9"/>',
   'image-plus': '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 12h8M12 8v8"/>',
+  // An open folder: pick a file from disk.
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v1"/><path d="M3 7v11a2 2 0 0 0 2 2h13a2 2 0 0 0 1.9-1.4L22 11H7.5a2 2 0 0 0-1.9 1.4L3 19"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
   clone: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>',
+  // Hand-drawn: a pencil over its stroke, for entering the editor.
+  edit: '<path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
@@ -30,6 +34,8 @@ export const ICONS = {
   upload: '<path d="M12 15V3M7 8l5-5 5 5"/><path d="M4 21h16"/>',
   download: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 21h16"/>',
   check: '<path d="m5 12 5 5L20 7"/>',
+  // A floppy disk, because saving.
+  save: '<path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h8V3"/><rect x="8" y="14" width="8" height="7"/>',
   'arrow-left': '<path d="M19 12H5"/><path d="m11 18-6-6 6-6"/>',
   'swap-circle': '<path d="M20 12a8 8 0 0 1-14 5.3"/><path d="M4 12a8 8 0 0 1 14-5.3"/><path d="M18 3v4h-4"/><path d="M6 21v-4h4"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/>',

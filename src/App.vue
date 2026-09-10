@@ -133,7 +133,7 @@ const mapViews = computed<ImageMapView[]>(() =>
     if (!onStage(d)) return [];
     const id = chosenMapId(d);
     const p = id ? loadedMaps.value[id] : null;
-    return p ? [{ device: d, map: p, options: mapsFor(d.hardware_id) }] : [];
+    return p ? [{ device: d, map: p }] : [];
   }),
 );
 
@@ -918,7 +918,6 @@ onUnmounted(() => {
         :height="stageHeight"
         :imgSrc="imgSrc"
         :activeFor="activeFor"
-        @choose="setMapChoice"
       />
       <Splitter direction="row" @drag="dragStage" @end="saveLayout" @reset="resetStage" />
 
@@ -950,6 +949,7 @@ onUnmounted(() => {
       :bindings="bindings"
       :actionMaps="actionMaps"
       :hasCurrent="profileLoaded"
+      :tokenLabel="tokenLabel"
       @notify="notify"
       @restored="onRestored"
     />
@@ -960,6 +960,8 @@ onUnmounted(() => {
       :devices="orderedDevices"
       :events="events"
       :keyInput="keyInput"
+      :chosenMapId="chosenMapId"
+      @choose="setMapChoice"
       @notify="notify"
       @saved="onMapsSaved"
       @clear-log="events = []"

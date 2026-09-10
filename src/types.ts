@@ -1,6 +1,6 @@
 // Shared frontend types for data coming from the Rust backend.
 
-import type { ImageMap, ImageMapSummary } from "./imagemap";
+import type { ImageMap } from "./imagemap";
 
 // What a device is: SC binds one keyboard (kb1) and one gamepad (gp1) plus
 // any number of joysticks (jsN).
@@ -295,5 +295,4 @@ export interface DiffReport {
 export interface ImageMapView {
   device: DeviceInfo;
   map: ImageMap;
-  options: ImageMapSummary[];
 }

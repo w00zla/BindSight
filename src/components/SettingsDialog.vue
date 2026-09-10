@@ -87,7 +87,7 @@ async function browseIni(slug: string) {
                 <input v-model="envs[slug].path" class="input mono" :placeholder="`…/StarCitizen/${slug}`" />
                 <button type="button" class="btn outline" @click="browse(slug)">Browse</button>
               </div>
-              <div class="row">
+              <div class="row sub">
                 <label class="check"><input v-model="envs[slug].global_ini_override" type="checkbox" /> Override global.ini</label>
                 <input
                   v-model="envs[slug].global_ini"
@@ -133,7 +133,10 @@ async function browseIni(slug: string) {
 
       <div class="foot">
         <button type="button" class="btn outline" @click="emit('close')">Cancel</button>
-        <button type="button" class="btn primary" @click="emit('save', { environments: envs, ignored: excluded })">Save</button>
+        <button type="button" class="btn primary" @click="emit('save', { environments: envs, ignored: excluded })">
+          <Icon name="save" :size="14" />
+          Save
+        </button>
       </div>
     </div>
   </div>
@@ -207,12 +210,22 @@ async function browseIni(slug: string) {
   color: var(--text);
 }
 
+/* Path | Browse on the first row; the override row stays inside the path
+   column, so its Browse ends where the path field ends. */
 .env-fields {
   flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 1fr auto;
   gap: 8px;
+}
+
+.env-fields > .row:not(.sub) {
+  display: contents;
+}
+
+.env-fields > .row.sub {
+  grid-column: 1;
 }
 
 .input:disabled {
@@ -254,6 +267,38 @@ section {
   font-size: 14px;
 }
 
+/* The global.ini override is an exotic option: a smaller, muted row. */
+.row.sub {
+  align-items: center;
+}
+
+.row.sub .check {
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.row.sub .check input {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+}
+
+.row.sub .input {
+  height: var(--h-chip-sm);
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
+.row.sub .btn {
+  height: var(--h-chip-sm);
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 
 .chips {
   display: flex;
@@ -278,6 +323,7 @@ section {
   height: var(--h-control);
   display: flex;
   align-items: center;
+  gap: 8px;
   padding: 0 16px;
   border-radius: var(--radius-control);
   font-family: inherit;
@@ -290,6 +336,12 @@ section {
   background: transparent;
   color: var(--text);
   border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.btn.outline:disabled {
+  color: var(--text-3);
+  border-color: var(--border-dim);
+  cursor: default;
 }
 
 .btn.primary {

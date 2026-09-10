@@ -13,8 +13,9 @@ const props = withDefaults(
     // Shown while no option matches the value (e.g. an "Add …" picker).
     placeholder?: string;
     // chip: a full-height chip with a bold name (Compare); small: a compact
-    // chip (stage caption); dashed: a transparent, dashed "add" chip.
-    variant?: "chip" | "small" | "dashed";
+    // chip (stage caption); dashed: a transparent, dashed "add" chip; mono:
+    // an uppercase mono slug (the top bar's environment).
+    variant?: "chip" | "small" | "dashed" | "mono";
     title?: string;
   }>(),
   { placeholder: "", variant: "chip", title: undefined },
@@ -52,8 +53,8 @@ onUnmounted(() => {
 <template>
   <div ref="root" class="dd" :class="variant">
     <button type="button" class="dd-btn" :title="title" @click="open = !open">
-      <span class="dd-name" :class="{ empty: !current }">{{ current?.label ?? placeholder }}</span>
-      <Icon name="chevron-down" :size="12" />
+      <span class="dd-name" :class="{ empty: !current, mono: variant === 'mono' }">{{ current?.label ?? placeholder }}</span>
+      <Icon name="chevron-down" :size="variant === 'mono' ? 14 : 12" />
     </button>
     <div v-if="open" class="dd-menu">
       <button
@@ -61,7 +62,7 @@ onUnmounted(() => {
         :key="o.value"
         type="button"
         class="dd-item"
-        :class="{ active: o.value === modelValue }"
+        :class="{ active: o.value === modelValue, mono: variant === 'mono' }"
         @click="pick(o.value)"
       >
         {{ o.label }}
@@ -130,6 +131,22 @@ onUnmounted(() => {
 
 .dashed .dd-btn:hover {
   background: var(--bg-surface-2);
+}
+
+.mono .dd-btn {
+  gap: 6px;
+  padding: 0 10px 0 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.mono .dd-name {
+  font-weight: 700;
+}
+
+.dd-item.mono {
+  font-weight: 700;
+  letter-spacing: 0.08em;
 }
 
 .dd-menu {

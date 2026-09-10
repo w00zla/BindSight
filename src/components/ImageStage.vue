@@ -3,7 +3,6 @@ import { computed, ref, watch } from "vue";
 import DeviceImage from "./DeviceImage.vue";
 import { deviceKey, deviceName } from "../devices";
 import Icon from "./Icon.vue";
-import Dropdown from "./Dropdown.vue";
 import Splitter from "./Splitter.vue";
 import type { DeviceInfo, ImageMapView } from "../types";
 import type { HighlightClass } from "../imagemap";
@@ -20,7 +19,6 @@ const props = defineProps<{
   imgSrc: (id: string, file: string) => string;
   activeFor: (sdlGuid: string) => Map<string, HighlightClass>;
 }>();
-const emit = defineEmits<{ choose: [hardwareId: string | null, id: string] }>();
 
 type Tile = { device: DeviceInfo; view: ImageMapView | null };
 
@@ -131,18 +129,7 @@ function onReset(i: number) {
       <Splitter v-if="i > 0" direction="col" @drag="onDrag(i - 1, $event)" @end="onEnd" @reset="onReset(i - 1)" />
       <div class="tile" :class="{ placeholder: !t.view }" :style="{ flexGrow: shares[i] ?? 1 }">
         <div class="caption">
-          <Icon name="image" :size="13" />
-          <template v-if="t.view">
-            <Dropdown
-              v-if="t.view.options.length > 1"
-              variant="small"
-              :modelValue="t.view.map.id"
-              :options="t.view.options.map((s) => ({ value: s.id, label: s.name }))"
-              @update:modelValue="emit('choose', t.device.hardware_id, $event)"
-            />
-            <span v-else class="name">{{ t.view.map.name }}</span>
-          </template>
-          <span v-else class="name">{{ deviceName(t.device) }}</span>
+          <span class="name">{{ deviceName(t.device) }}</span>
           <button v-if="i > 0" type="button" class="move" title="Move left" @click="swap(i - 1)">
             <Icon name="arrow-left" :size="14" />
           </button>
@@ -220,10 +207,6 @@ function onReset(i: number) {
 
 .name {
   font-weight: 600;
-  color: var(--text);
-}
-
-.placeholder .name {
   color: var(--text-2);
 }
 

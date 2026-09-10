@@ -15,6 +15,7 @@ import Icon, { type IconName } from "./Icon.vue";
 import ConfirmDialog, { type ConfirmButton } from "./ConfirmDialog.vue";
 import type { DeviceInfo, JoyInput, LoggedInput } from "../types";
 import { deviceName } from "../devices";
+import { KEY_COUNT } from "../keyboard";
 import {
   SYMBOL_PATHS,
   symbolPx,
@@ -29,8 +30,19 @@ import {
 
 // `keyInput`: the last key captured in the webview — the backend never sees
 // keys, so App hands them over instead of an event.
-const props = defineProps<{ devices: DeviceInfo[]; events: LoggedInput[]; keyInput: JoyInput | null }>();
-const emit = defineEmits<{ notify: [message: string, type: "ok" | "error"]; saved: []; clearLog: [] }>();
+const props = defineProps<{
+  devices: DeviceInfo[];
+  events: LoggedInput[];
+  keyInput: JoyInput | null;
+  // The image-map the Monitor shows for a device (the user's pick or the default).
+  chosenMapId: (d: DeviceInfo) => string | null;
+}>();
+const emit = defineEmits<{
+  notify: [message: string, type: "ok" | "error"];
+  saved: [];
+  clearLog: [];
+  choose: [hardwareId: string | null, id: string];
+}>();
 
 // No active tool == select/move mode.
 type Tool = "rect" | "ellipse" | "polygon" | SymbolKind;
@@ -101,7 +113,14 @@ function mapsFor(d: DeviceInfo): ImageMapSummary[] {
   return summaries.value.filter((s) => sameHardware(s.hardware_id, d.hardware_id));
 }
 
-const deviceMaps = computed(() => (device.value ? mapsFor(device.value) : []));
+// Listed alphabetically by name — bundled and user maps in one order.
+const deviceMaps = computed(() =>
+  device.value
+    ? mapsFor(device.value)
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+    : [],
+);
 
 const openId = ref("");
 const map = ref<ImageMap | null>(null);
@@ -111,6 +130,17 @@ const dirty = computed(() => !!map.value && JSON.stringify(map.value) !== savedJ
 const openSummary = computed(() => summaries.value.find((s) => s.id === openId.value) ?? null);
 // Bundled image-maps are read-only, and so is everything without a map.
 const locked = computed(() => !map.value || openSummary.value?.source === "bundled");
+
+// A map opens read-only; "edit" is entered from the action tile, a fresh clone
+// or a fresh new map. "new" is the map that does not exist yet (no image yet).
+type EditorState = "view" | "edit" | "new";
+const state = ref<EditorState>("view");
+const editing = computed(() => state.value === "edit" && !locked.value);
+const isNew = computed(() => state.value === "new");
+// The map the Monitor shows for the selected device is the one open here.
+const isChosen = computed(
+  () => !!device.value && !!openId.value && props.chosenMapId(device.value) === openId.value,
+);
 
 // --- canvas state ----------------------------------------------------------
 
@@ -136,7 +166,7 @@ const H = computed(() => Math.round(natH.value * fit.value * zoom.value));
 
 const tool = ref<Tool | null>(null);
 const selectMode = computed(() => tool.value === null);
-const canDrag = computed(() => selectMode.value && !locked.value);
+const canDrag = computed(() => selectMode.value && editing.value);
 const selectedId = ref<string | null>(null);
 const selectedArea = computed(() => areas.value.find((a) => a.id === selectedId.value) ?? null);
 const hover = ref<{ x: number; y: number; text: string } | null>(null);
@@ -233,6 +263,8 @@ async function loadMap(id: string) {
   selectedId.value = null;
   tool.value = null;
   zoom.value = 1;
+  // A map always opens read-only; the callers that want the editor say so.
+  state.value = "view";
 }
 
 function closeMap() {
@@ -241,6 +273,7 @@ function closeMap() {
   savedJson.value = "";
   selectedId.value = null;
   tool.value = null;
+  state.value = "view";
 }
 
 // Data URLs of image-map images, keyed by `<map id>/<file>`.
@@ -275,18 +308,22 @@ async function loadCanvasImage() {
   }
 }
 
+// Breathing room between the canvas and the panel edges (`.stage-box`
+// padding); clientWidth includes it, so the fit must not.
+const STAGE_PAD = 16;
+
 // The canvas only exists once an image-map is open; follow the element.
 let ro: ResizeObserver | null = null;
 watch(stageBox, (el) => {
   ro?.disconnect();
   ro = null;
   if (!el) return;
-  boxW.value = el.clientWidth;
-  boxH.value = el.clientHeight;
-  ro = new ResizeObserver(() => {
-    boxW.value = el.clientWidth;
-    boxH.value = el.clientHeight;
-  });
+  const measure = () => {
+    boxW.value = el.clientWidth - 2 * STAGE_PAD;
+    boxH.value = el.clientHeight - 2 * STAGE_PAD;
+  };
+  measure();
+  ro = new ResizeObserver(measure);
   ro.observe(el);
 });
 
@@ -350,10 +387,20 @@ async function pickImage(): Promise<string | null> {
   return src ?? null;
 }
 
+// The empty slot for a map that does not exist yet: nothing is loaded, the
+// image is still missing. "Choose image" turns it into a real map.
 async function newMap() {
   const d = device.value;
   if (!d?.hardware_id) return;
+  showLog.value = false;
   if (!(await requestLeave())) return;
+  closeMap();
+  state.value = "new";
+}
+
+async function createMap() {
+  const d = device.value;
+  if (!d?.hardware_id) return;
   try {
     const imagePath = await pickImage();
     if (!imagePath) return;
@@ -365,11 +412,19 @@ async function newMap() {
     });
     await loadSummaries();
     await loadMap(m.id);
+    state.value = "edit";
     focusName();
     emit("notify", "Image-map created", "ok");
   } catch (e) {
     emit("notify", String(e), "error");
   }
+}
+
+// One button, two jobs: create the map around its image, or swap the image of
+// the map being edited.
+async function chooseImage() {
+  if (isNew.value) await createMap();
+  else await replaceImage();
 }
 
 async function cloneMap(s: ImageMapSummary) {
@@ -378,12 +433,47 @@ async function cloneMap(s: ImageMapSummary) {
     const m = await invoke<ImageMap>("clone_imagemap", { id: s.id, name: `${s.name} copy` });
     await loadSummaries();
     await loadMap(m.id);
+    state.value = "edit";
     focusName();
     emit("saved");
     emit("notify", "Image-map cloned", "ok");
   } catch (e) {
     emit("notify", String(e), "error");
   }
+}
+
+function startEdit() {
+  if (locked.value) return;
+  state.value = "edit";
+}
+
+function useForDevice() {
+  const d = device.value;
+  if (!d || !openId.value || isChosen.value) return;
+  emit("choose", d.hardware_id, openId.value);
+}
+
+// Leaving edit mode: the same Save/Discard/Cancel question as switching away,
+// but a discard has to put the saved state back on screen.
+// Back to view mode; the caller has settled the changes.
+function leaveEdit() {
+  state.value = "view";
+  selectedId.value = null;
+  tool.value = null;
+  zoom.value = 1;
+  cancelDraw();
+}
+
+// Cancel drops the unsaved changes without asking — that is what the button
+// says.
+async function cancelEdit() {
+  if (dirty.value && openId.value) await loadMap(openId.value);
+  leaveEdit();
+}
+
+async function finishEdit() {
+  if (dirty.value && !(await saveMap())) return;
+  leaveEdit();
 }
 
 async function deleteMap(s: ImageMapSummary) {
@@ -394,6 +484,7 @@ async function deleteMap(s: ImageMapSummary) {
   if (choice !== "delete") return;
   try {
     await invoke("delete_imagemap", { id: s.id });
+    for (const key of [...imgCache.keys()]) if (key.startsWith(`${s.id}/`)) imgCache.delete(key);
     const wasOpen = s.id === openId.value;
     if (wasOpen) closeMap();
     await loadSummaries();
@@ -420,11 +511,6 @@ async function saveMap(): Promise<boolean> {
     emit("notify", String(e), "error");
     return false;
   }
-}
-
-async function discard() {
-  if (!openId.value) return;
-  await loadMap(openId.value);
 }
 
 async function exportMap() {
@@ -467,7 +553,7 @@ async function importMap() {
 // keeps them useful); the old file is removed once the new one is in.
 async function replaceImage() {
   const m = map.value;
-  if (!m || locked.value) return;
+  if (!m || locked.value || !editing.value) return;
   try {
     const src = await pickImage();
     if (!src) return;
@@ -533,7 +619,7 @@ function addArea(shape: Shape) {
 
 // "Add area": a default shape of the active tool's kind at the image centre.
 function addDefaultArea() {
-  if (!map.value || !currentKey.value || locked.value) return;
+  if (!map.value || !currentKey.value || locked.value || !editing.value) return;
   const kind = tool.value ?? "rect";
   if (kind === "rect") {
     addArea({ kind: "rect", x: 0.45, y: 0.47, w: 0.1, h: 0.06, rotation: 0 });
@@ -565,7 +651,7 @@ function addDefaultArea() {
 }
 
 function setTool(t: Tool) {
-  if (locked.value) return;
+  if (locked.value || !editing.value) return;
   cancelDraw();
   // Clicking the active tool turns it off — no tool == select/move.
   tool.value = tool.value === t ? null : t;
@@ -579,16 +665,17 @@ function cancelDraw() {
 
 function deleteSelected() {
   const m = map.value;
-  if (!m || !selectedId.value || locked.value) return;
+  if (!m || !selectedId.value || locked.value || !editing.value) return;
   m.areas = m.areas.filter((a) => a.id !== selectedId.value);
   selectedId.value = null;
 }
 
 // A row in the list, or a shape on the canvas: both select the area and make
-// its input the current one.
+// its input the current one. In view mode there is no selection — the row
+// only highlights its input.
 function pickArea(a: Area) {
-  selectedId.value = a.id;
   currentKey.value = a.input;
+  if (editing.value) selectedId.value = a.id;
 }
 
 function areaIcon(a: Area): IconName {
@@ -615,7 +702,7 @@ function stagePointer(): { x: number; y: number } | null {
 }
 
 function onStageMouseDown(e: KonvaEventObject<MouseEvent>) {
-  if (!W.value) return;
+  if (!W.value || !editing.value) return;
   const pos = stagePointer();
   if (!pos) return;
   if (selectMode.value) {
@@ -679,7 +766,7 @@ function onStageMouseUp() {
 
 function commitPolygon() {
   const pts = draftPoly.value;
-  if (pts.length < 6 || !W.value) return;
+  if (pts.length < 6 || !W.value || !editing.value) return;
   const points: [number, number][] = [];
   for (let i = 0; i < pts.length; i += 2) {
     // A double-click lands two mousedowns on the same spot — drop the repeat.
@@ -780,7 +867,7 @@ function symbolCfg(a: Area) {
 // --- shape edits -----------------------------------------------------------
 
 function onAreaClick(a: Area) {
-  if (!selectMode.value) return;
+  if (!selectMode.value || !editing.value) return;
   pickArea(a);
 }
 
@@ -1053,18 +1140,20 @@ async function saveLog() {
 function deviceLine(d: DeviceInfo): string {
   if (d.kind === "gamepad" && d.gamepad_slot === null) return "no slot";
   const parts: string[] = [];
-  if (d.kind !== "keyboard") {
-    if (d.num_buttons) parts.push(`${d.num_buttons} btn`);
-    if (d.num_axes) parts.push(`${d.num_axes} ${d.num_axes === 1 ? "axis" : "axes"}`);
-    if (d.num_hats) parts.push(`${d.num_hats} ${d.num_hats === 1 ? "hat" : "hats"}`);
+  if (d.kind === "keyboard") {
+    parts.push(`${KEY_COUNT} keys`);
+  } else {
+    if (d.num_buttons) parts.push(`${d.num_buttons} btns`);
+    if (d.num_axes) parts.push(`${d.num_axes} axes`);
+    if (d.num_hats) parts.push(`${d.num_hats} hats`);
   }
-  if (!d.hardware_id) {
-    parts.push("no SC id");
-  } else if (d.sdl_guid !== selectedGuid.value) {
-    const n = mapsFor(d).length;
-    parts.push(n === 0 ? "no image" : `${n} ${n === 1 ? "image" : "images"}`);
-  }
+  if (!d.hardware_id) parts.push("no SC id");
   return parts.join(" · ");
+}
+
+// A device that has no image-map yet, shown as a chip.
+function noMaps(d: DeviceInfo): boolean {
+  return !!d.hardware_id && mapsFor(d).length === 0;
 }
 </script>
 
@@ -1086,7 +1175,10 @@ function deviceLine(d: DeviceInfo): string {
               @click="selectDevice(d)"
             >
               <div class="dev-name">{{ deviceName(d) }}</div>
-              <div class="dev-line">{{ deviceLine(d) }}</div>
+              <div class="dev-line">
+                {{ deviceLine(d) }}
+                <span v-if="noMaps(d)" class="chip small">No image-map</span>
+              </div>
             </div>
 
             <div v-if="d.sdl_guid === selectedGuid && d.hardware_id" class="maps">
@@ -1097,17 +1189,13 @@ function deviceLine(d: DeviceInfo): string {
                 :class="{ open: s.id === openId }"
                 @click="openMap(s.id)"
               >
-                <Icon name="image" :size="13" />
                 <span class="map-name">{{ s.name }}</span>
-                <button type="button" class="icon-btn" title="Clone" @click.stop="cloneMap(s)">
-                  <Icon name="clone" :size="13" />
-                </button>
+                <span class="map-mark" :title="s.id === props.chosenMapId(d) ? 'Shown on stage' : undefined">
+                  <Icon v-if="s.id === props.chosenMapId(d)" name="check" :size="13" />
+                </span>
                 <span v-if="s.source === 'bundled'" class="ro" title="Read-only">
                   <Icon name="lock" :size="13" />
                 </span>
-                <button v-else type="button" class="icon-btn" title="Delete image-map" @click.stop="deleteMap(s)">
-                  <Icon name="trash" :size="13" />
-                </button>
               </div>
               <button type="button" class="map-new" @click="newMap">
                 <Icon name="plus" :size="13" />
@@ -1142,18 +1230,87 @@ function deviceLine(d: DeviceInfo): string {
       </section>
     </aside>
 
+    <!-- what can be done with the open (or not yet created) image-map -->
+    <div v-if="!showLog && (map || isNew)" class="action-tile">
+      <div class="tile-name">
+        <Icon :name="editing ? 'edit' : 'image'" :size="14" />
+        <input
+          v-if="editing && map"
+          ref="nameInput"
+          v-model="map.name"
+          class="name"
+          spellcheck="false"
+          placeholder="Name"
+        />
+        <span v-else class="name-text">{{ map ? map.name : selectedName }}</span>
+      </div>
+      <div class="tile-btns">
+      <template v-if="map">
+        <button
+          type="button"
+          class="btn primary small"
+          :disabled="isChosen"
+          :title="isChosen ? 'Already in use' : undefined"
+          @click="useForDevice"
+        >
+          <Icon name="check" :size="14" />
+          Use for device
+        </button>
+        <div class="divider" />
+      </template>
+      <template v-if="editing">
+        <button type="button" class="btn outline small" @click="cancelEdit">Cancel</button>
+        <button type="button" class="btn primary small" @click="finishEdit">
+          <Icon name="save" :size="14" />
+          Save
+        </button>
+        <div class="divider" />
+      </template>
+      <button v-if="isNew || editing" type="button" class="btn outline small" @click="chooseImage">
+        <Icon name="folder" :size="14" />
+        Choose image
+      </button>
+      <template v-if="map && !editing">
+        <button
+          type="button"
+          class="btn outline small"
+          :disabled="locked"
+          :title="locked ? 'Read-only' : undefined"
+          @click="startEdit"
+        >
+          <Icon name="edit" :size="14" />
+          Edit
+        </button>
+        <button type="button" class="btn outline small" @click="openSummary && cloneMap(openSummary)">
+          <Icon name="clone" :size="14" />
+          Clone
+        </button>
+        <button
+          type="button"
+          class="btn danger small"
+          :disabled="locked"
+          :title="locked ? 'Read-only' : undefined"
+          @click="openSummary && deleteMap(openSummary)"
+        >
+          <Icon name="trash" :size="14" />
+          Delete
+        </button>
+      </template>
+      </div>
+    </div>
+
     <!-- centre: the canvas -->
     <section class="col-centre">
       <template v-if="showLog">
-        <div class="head">
-          <span class="log-title">Log</span>
+        <div class="centre-head">
+          <span class="log-title">Device log</span>
           <div class="grow" />
           <button type="button" class="btn outline small" :disabled="!props.events.length" @click="emit('clearLog')">
             <Icon name="trash" :size="13" />
             Clear
           </button>
           <button type="button" class="btn primary small" @click="saveLog">
-            <Icon name="upload" :size="13" />
+            <Icon name="save" :size="13" />
             Save
           </button>
         </div>
@@ -1182,35 +1339,21 @@ function deviceLine(d: DeviceInfo): string {
         </div>
       </template>
       <template v-else-if="map">
-        <div class="head">
-          <div class="head-name">
-            <Icon name="image" :size="14" />
-            <input
-              ref="nameInput"
-              v-model="map.name"
-              class="name"
-              :readonly="locked"
-              spellcheck="false"
-              placeholder="Name"
-            />
-          </div>
-          <button
-            v-for="t in TOOLS"
-            :key="t.tool"
-            type="button"
-            class="tool"
-            :class="{ on: tool === t.tool }"
-            :title="t.title"
-            :disabled="locked"
-            @click="setTool(t.tool)"
-          >
-            <Icon :name="t.icon" :size="16" />
-          </button>
+        <div v-if="editing" class="centre-head">
+          <template v-if="editing">
+            <button
+              v-for="t in TOOLS"
+              :key="t.tool"
+              type="button"
+              class="tool"
+              :class="{ on: tool === t.tool }"
+              :title="t.title"
+              @click="setTool(t.tool)"
+            >
+              <Icon :name="t.icon" :size="16" />
+            </button>
+          </template>
           <div class="grow" />
-          <button type="button" class="btn outline small" :disabled="locked" @click="replaceImage">
-            <Icon name="image-plus" :size="14" />
-            Replace image
-          </button>
           <div class="zoom mono">
             <button type="button" title="Zoom out" @click="zoomStep(-1)">−</button>
             <button type="button" class="zoom-val" title="Reset zoom" @click="zoom = 1">
@@ -1330,28 +1473,28 @@ function deviceLine(d: DeviceInfo): string {
           </div>
         </div>
       </template>
+      <template v-else-if="isNew">
+        <div class="none">
+          <span class="chip">No image-map</span>
+        </div>
+      </template>
       <div v-else class="none">{{ props.devices.length ? "No image-map" : "No device" }}</div>
     </section>
 
     <!-- right: live input and areas -->
     <aside v-if="!showLog" class="col-right">
-      <div class="input-card">
+      <div v-if="editing" class="input-card">
         <div class="ic-key">
           <Icon name="bolt" :size="22" />
           <span class="mono key" :class="{ idle: !currentKey }">{{ currentKey ?? "—" }}</span>
         </div>
         <div class="ic-sub">{{ selectedName }} · {{ currentCountText }}</div>
         <div class="ic-btns">
-          <button
-            type="button"
-            class="btn primary small"
-            :disabled="!currentKey || locked"
-            @click="addDefaultArea"
-          >
+          <button type="button" class="btn primary small" :disabled="!currentKey" @click="addDefaultArea">
             <Icon name="plus" :size="13" />
             Add area
           </button>
-          <button type="button" class="btn danger small" :disabled="!selectedId || locked" @click="deleteSelected">
+          <button type="button" class="btn danger small" :disabled="!selectedId" @click="deleteSelected">
             <Icon name="trash" :size="13" />
             Delete
           </button>
@@ -1381,14 +1524,6 @@ function deviceLine(d: DeviceInfo): string {
           </div>
         </div>
       </div>
-
-      <div class="right-foot">
-        <button type="button" class="btn outline" :disabled="!dirty" @click="discard">Discard</button>
-        <button type="button" class="btn primary grow" :disabled="!dirty" @click="saveMap">
-          <Icon name="check" :size="14" />
-          Save
-        </button>
-      </div>
     </aside>
 
     <ConfirmDialog v-if="confirm" :title="confirm.title" :buttons="confirm.buttons" @choose="onConfirm" />
@@ -1396,11 +1531,18 @@ function deviceLine(d: DeviceInfo): string {
 </template>
 
 <style scoped>
+/* The action tile sits above the canvas and the right column; the device list
+   spans both rows. Row gap comes from the tile's margin, so the row collapses
+   cleanly when there is no tile. */
 .devices {
   flex: 1;
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr) 380px;
-  gap: 16px;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    "left tile tile"
+    "left centre right";
+  column-gap: 16px;
   padding: 12px 16px 16px;
   min-height: 0;
 }
@@ -1408,6 +1550,49 @@ function deviceLine(d: DeviceInfo): string {
 /* The log takes the canvas column and the right one. */
 .devices.log {
   grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-areas:
+    "left tile"
+    "left centre";
+}
+
+.action-tile {
+  grid-area: tile;
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px 16px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-panel);
+}
+
+/* The image-map's name as the tile title; an input while editing. */
+.tile-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 390px;
+  min-width: 0;
+  color: var(--text);
+}
+
+.tile-name .name {
+  padding: 4px 8px;
+  border-radius: var(--radius-control);
+  background: var(--bg-surface-2);
+}
+
+.tile-btns {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.action-tile .divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--border-dim);
 }
 
 .grow {
@@ -1464,24 +1649,10 @@ function deviceLine(d: DeviceInfo): string {
   cursor: default;
 }
 
-.icon-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--text-3);
-  cursor: pointer;
-}
-
-.icon-btn:hover {
-  color: var(--text);
-}
-
 /* --- left column --- */
 
 .col-left {
+  grid-area: left;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -1565,6 +1736,14 @@ function deviceLine(d: DeviceInfo): string {
 .dev-line {
   font-size: 13px;
   color: var(--text-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chip.small {
+  padding: 1px 6px;
+  font-size: 11px;
 }
 
 .maps {
@@ -1599,6 +1778,15 @@ function deviceLine(d: DeviceInfo): string {
   font-weight: 600;
 }
 
+/* The leading slot: the check for the map the Monitor shows, else empty. */
+.map-mark {
+  display: flex;
+  align-items: center;
+  width: 13px;
+  flex-shrink: 0;
+  color: var(--live);
+}
+
 .map-name {
   flex: 1;
   font-size: 13px;
@@ -1623,6 +1811,7 @@ function deviceLine(d: DeviceInfo): string {
 /* --- centre column --- */
 
 .col-centre {
+  grid-area: centre;
   background: var(--bg-surface);
   border-radius: var(--radius-panel);
   display: flex;
@@ -1632,7 +1821,8 @@ function deviceLine(d: DeviceInfo): string {
   min-height: 0;
 }
 
-.head {
+/* The centre column's head (tools / log bar): tighter than the panel heads. */
+.centre-head {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1640,17 +1830,9 @@ function deviceLine(d: DeviceInfo): string {
   border-bottom: 1px solid var(--border-dim);
 }
 
-.head-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-right: 10px;
-  margin-right: 4px;
-  border-right: 1px solid var(--border-dim);
-  max-width: 260px;
-}
-
 .name {
+  flex: 1;
+  width: 100%;
   border: none;
   background: transparent;
   color: var(--text);
@@ -1660,6 +1842,15 @@ function deviceLine(d: DeviceInfo): string {
   padding: 0;
   min-width: 0;
   outline: none;
+}
+
+.name-text {
+  font-weight: 600;
+  font-size: 14px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tool {
@@ -1687,7 +1878,7 @@ function deviceLine(d: DeviceInfo): string {
   cursor: default;
 }
 
-.head .btn.small {
+.centre-head .btn.small {
   height: 34px;
 }
 
@@ -1724,6 +1915,8 @@ function deviceLine(d: DeviceInfo): string {
   min-height: 0;
   overflow: auto;
   display: flex;
+  padding: 16px;
+  box-sizing: border-box;
   background-image:
     linear-gradient(color-mix(in srgb, var(--text-2) 6%, transparent) 1px, transparent 1px),
     linear-gradient(90deg, color-mix(in srgb, var(--text-2) 6%, transparent) 1px, transparent 1px);
@@ -1743,6 +1936,16 @@ function deviceLine(d: DeviceInfo): string {
   justify-content: center;
   color: var(--text-3);
   font-size: 14px;
+}
+
+/* The still-empty new image-map, in the place the canvas will take. */
+.chip {
+  padding: 5px 12px;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--warn);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 /* --- raw log --- */
@@ -1823,6 +2026,7 @@ function deviceLine(d: DeviceInfo): string {
 /* --- right column --- */
 
 .col-right {
+  grid-area: right;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1962,10 +2166,5 @@ function deviceLine(d: DeviceInfo): string {
 
 .akind {
   color: var(--text-2);
-}
-
-.right-foot {
-  display: flex;
-  gap: 8px;
 }
 </style>

@@ -19,7 +19,14 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ pin: [b: ResolvedBinding] }>();
 
-const deviceFilter = ref<string | "all">("all");
+// Toggled device chips; none toggled = every device.
+const deviceFilter = ref<string[]>([]);
+
+function toggleDevice(label: string) {
+  deviceFilter.value = deviceFilter.value.includes(label)
+    ? deviceFilter.value.filter((x) => x !== label)
+    : [...deviceFilter.value, label];
+}
 const search = ref("");
 
 // Same order as the device tiles, joysticks by instance.
@@ -52,7 +59,7 @@ const COLUMNS: ColumnSpec[] = [
   { key: "action", label: "ACTION", width: 320 },
   { key: "category", label: "CATEGORY", width: null },
 ];
-const cols = useTableColumns("bindsight.columns.bindings", COLUMNS, { key: "input", dir: "asc" });
+const cols = useTableColumns("bindsight.columns.bindings", COLUMNS, { key: "action", dir: "asc" });
 
 function cellValue(b: ResolvedBinding, key: string): string | number {
   switch (key) {
@@ -70,7 +77,7 @@ function cellValue(b: ResolvedBinding, key: string): string | number {
 const filteredBindings = computed(() => {
   const q = search.value.trim().toLowerCase();
   const rows = props.bindings.filter((b) => {
-    if (deviceFilter.value !== "all" && props.deviceLabel(b) !== deviceFilter.value) return false;
+    if (deviceFilter.value.length && !deviceFilter.value.includes(props.deviceLabel(b))) return false;
     return matchesSearch(b, q);
   });
   return sortRows(rows, cols.sort.value, cellValue, (a, b) => collator.compare(a.token, b.token));
@@ -105,18 +112,16 @@ function deviceTitle(b: ResolvedBinding): string | undefined {
   <div class="deck" :style="{ '--cols': cols.template.value, '--cols-min': `${cols.minWidth.value}px` }">
     <div class="header">
       <div class="panel-title">Bindings</div>
+      <span class="total">{{ bindings.length }}</span>
       <div class="divider" />
       <div class="chips">
-          <button type="button" class="chip all" :class="{ active: deviceFilter === 'all' }" @click="deviceFilter = 'all'">
-            All <span class="count">{{ bindings.length }}</span>
-          </button>
           <button
             v-for="[label, d] in deviceCounts"
             :key="label"
             type="button"
             class="chip mono"
-            :class="{ active: deviceFilter === label }"
-            @click="deviceFilter = label"
+            :class="{ active: deviceFilter.includes(label) }"
+            @click="toggleDevice(label)"
           >
             {{ label }} <span class="count">{{ d.count }}</span>
           </button>
@@ -315,4 +320,8 @@ function deviceTitle(b: ResolvedBinding): string | undefined {
   color: var(--text-2);
 }
 
+.total {
+  font-size: 12px;
+  color: var(--text-2);
+}
 </style>

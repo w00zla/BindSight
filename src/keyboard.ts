@@ -68,6 +68,9 @@ function buildCodes(): Record<string, string> {
 
 export const KEY_CODES: Record<string, string> = buildCodes();
 
+// Keys the capture knows: the keyboard's input count in the GUI.
+export const KEY_COUNT = Object.keys(KEY_CODES).length;
+
 // Typing into a field is text, not input capture.
 function isTextTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;

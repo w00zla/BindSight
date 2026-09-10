@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
 import Icon from "./Icon.vue";
+import Dropdown from "./Dropdown.vue";
 import logo from "../assets/logo.png";
 import { ENVIRONMENTS, type Mode } from "../types";
 
@@ -13,31 +13,7 @@ const TABS: { mode: Mode; label: string; icon: "live" | "bindings" | "devices" }
   { mode: "devices", label: "Devices", icon: "devices" },
 ];
 
-// Environment dropdown under the chip; closes on outside click and Esc.
-const envOpen = ref(false);
-const envRoot = ref<HTMLElement | null>(null);
-
-function pickEnv(slug: string) {
-  envOpen.value = false;
-  emit("update:env", slug);
-}
-
-function onDocDown(e: MouseEvent) {
-  if (envOpen.value && !envRoot.value?.contains(e.target as Node)) envOpen.value = false;
-}
-
-function onKey(e: KeyboardEvent) {
-  if (e.key === "Escape") envOpen.value = false;
-}
-
-onMounted(() => {
-  document.addEventListener("mousedown", onDocDown);
-  document.addEventListener("keydown", onKey);
-});
-onUnmounted(() => {
-  document.removeEventListener("mousedown", onDocDown);
-  document.removeEventListener("keydown", onKey);
-});
+const ENV_OPTIONS = ENVIRONMENTS.map((slug) => ({ value: slug, label: slug }));
 </script>
 
 <template>
@@ -60,26 +36,21 @@ onUnmounted(() => {
       </button>
     </div>
     <div class="spacer" />
-    <div ref="envRoot" class="env">
-      <button type="button" class="install-chip mono" title="Change environment" @click="envOpen = !envOpen">
-        {{ activeEnv }}
-        <Icon name="chevron-down" :size="14" />
-      </button>
-      <div v-if="envOpen" class="env-menu">
-        <button
-          v-for="slug in ENVIRONMENTS"
-          :key="slug"
-          type="button"
-          class="env-item mono"
-          :class="{ active: slug === activeEnv }"
-          @click="pickEnv(slug)"
-        >
-          {{ slug }}
-        </button>
-      </div>
-    </div>
+    <Dropdown
+      variant="mono"
+      :modelValue="activeEnv"
+      :options="ENV_OPTIONS"
+      title="Change environment"
+      @update:modelValue="emit('update:env', $event)"
+    />
     <div v-if="scVersion" class="version-chip mono">{{ scVersion }}</div>
-    <button type="button" class="refresh-btn" :disabled="loading" @click="emit('refresh')">
+    <button
+      type="button"
+      class="refresh-btn"
+      :disabled="loading"
+      title="Devices, actionmaps.xml, Game.log"
+      @click="emit('refresh')"
+    >
       <Icon name="refresh" :size="16" />
       {{ loading ? "Scanning…" : "Refresh" }}
     </button>
@@ -152,68 +123,6 @@ onUnmounted(() => {
   flex: 1;
 }
 
-.env {
-  position: relative;
-}
-
-.install-chip {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: var(--h-chip);
-  padding: 0 10px 0 12px;
-  border: none;
-  border-radius: var(--radius-control);
-  background: var(--bg-surface-2);
-  font-weight: 700;
-  font-size: 13px;
-  letter-spacing: 0.08em;
-  color: var(--text);
-  cursor: pointer;
-}
-
-.install-chip:hover {
-  background: var(--bg-surface-3);
-}
-
-.env-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  min-width: 100%;
-  display: flex;
-  flex-direction: column;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--bg-surface);
-  z-index: 20;
-}
-
-.env-item {
-  display: flex;
-  align-items: center;
-  height: var(--h-chip-sm);
-  padding: 0 12px;
-  border: none;
-  border-radius: var(--radius-control);
-  background: transparent;
-  font-weight: 700;
-  font-size: 13px;
-  letter-spacing: 0.08em;
-  color: var(--text-2);
-  cursor: pointer;
-  text-align: left;
-}
-
-.env-item:hover {
-  background: var(--bg-surface-2);
-  color: var(--text);
-}
-
-.env-item.active {
-  color: var(--live);
-}
 
 .version-chip {
   display: flex;

@@ -3,6 +3,7 @@ import { computed } from "vue";
 import Icon from "./Icon.vue";
 import type { DeviceInfo, SlotStatus } from "../types";
 import { deviceName } from "../devices";
+import { KEY_COUNT } from "../keyboard";
 
 const props = defineProps<{
   device: DeviceInfo;
@@ -42,7 +43,7 @@ const state = computed(() => {
   if (noSlot.value) return "no slot";
   if (props.unseen) return "not seen by SC";
   const counts =
-    d.kind === "keyboard" ? [] : [`${d.num_buttons} btn`, `${d.num_axes} axes`, `${d.num_hats} hats`];
+    d.kind === "keyboard" ? [`${KEY_COUNT} keys`] : [`${d.num_buttons} btns`, `${d.num_axes} axes`, `${d.num_hats} hats`];
   return [`${props.bindingCount} bindings`, ...counts].join(" · ");
 });
 
@@ -60,7 +61,6 @@ const state = computed(() => {
       <span v-else-if="kindChip" class="chip mono">{{ kindChip }}</span>
     </div>
     <div class="row2">
-      <span class="status">{{ state }}</span>
       <button
         v-if="device.hardware_id"
         type="button"
@@ -70,6 +70,7 @@ const state = computed(() => {
       >
         <Icon :name="hidden ? 'eye-off' : 'eye'" :size="14" />
       </button>
+      <span class="status">{{ state }}</span>
     </div>
   </div>
 </template>

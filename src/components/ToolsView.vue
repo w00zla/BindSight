@@ -22,7 +22,13 @@ import type {
 } from "../types";
 
 // `hasCurrent`: the live actionmaps.xml is loaded (else there is no Current source).
-const props = defineProps<{ bindings: ResolvedBinding[]; actionMaps: ActionMap[]; hasCurrent: boolean }>();
+const props = defineProps<{
+  bindings: ResolvedBinding[];
+  actionMaps: ActionMap[];
+  hasCurrent: boolean;
+  // SC's label for an input token; echoes the token when there is none.
+  tokenLabel: (token: string) => string;
+}>();
 const emit = defineEmits<{
   notify: [message: string, type: "ok" | "error"];
   restored: [status: LoadStatus];
@@ -250,8 +256,13 @@ async function deleteBackup(b: BackupSummary) {
 
 // --- diff filters ----------------------------------------------------------
 
-const kindFilter = ref<DiffKind | "all">("all");
-const deviceFilter = ref<string | "all">("all");
+// Toggled chips; none toggled = everything.
+const kindFilter = ref<DiffKind[]>([]);
+const deviceFilter = ref<string[]>([]);
+
+function toggleIn<T>(list: T[], item: T): T[] {
+  return list.includes(item) ? list.filter((x) => x !== item) : [...list, item];
+}
 const search = ref("");
 
 // Same order as the device tiles, joysticks by instance.
@@ -286,7 +297,9 @@ function refText(r: ActionRef): string {
 // Haystack for the search box: token plus every action name and label.
 function haystack(row: DiffRow): string {
   const refs = [...row.a, ...row.b];
-  return [row.token, ...refs.map((r) => r.action), ...refs.map((r) => r.label ?? "")].join(" ").toLowerCase();
+  return [row.token, inputText(row.token), ...refs.map((r) => r.action), ...refs.map((r) => r.label ?? "")]
+    .join(" ")
+    .toLowerCase();
 }
 
 const COLUMNS: ColumnSpec[] = [
@@ -312,7 +325,7 @@ function cellValue(r: DiffRow, key: string): string | number {
     case "device":
       return deviceRank(r);
     case "input":
-      return inputPart(r.token);
+      return inputText(r.token);
     case "action":
       return rowAction(r);
     case "a":
@@ -325,8 +338,8 @@ function cellValue(r: DiffRow, key: string): string | number {
 const filteredRows = computed<DiffRow[]>(() => {
   const q = search.value.trim().toLowerCase();
   const rows = (report.value?.rows ?? []).filter((r) => {
-    if (kindFilter.value !== "all" && r.kind !== kindFilter.value) return false;
-    if (deviceFilter.value !== "all" && deviceLabel(r) !== deviceFilter.value) return false;
+    if (kindFilter.value.length && !kindFilter.value.includes(r.kind)) return false;
+    if (deviceFilter.value.length && !deviceFilter.value.includes(deviceLabel(r))) return false;
     return !q || haystack(r).includes(q);
   });
   return sortRows(rows, cols.sort.value, cellValue, (a, b) => collator.compare(a.token, b.token));
@@ -347,6 +360,12 @@ const SIGNS: Record<DiffKind, string> = { added: "+", removed: "−", changed: "
 // Input token without its device prefix, e.g. "js1_button5" -> "button5".
 function inputPart(token: string): string {
   return token.replace(/^(js\d+|kb1|gp1)_/, "");
+}
+
+// The INPUT cell: SC's label, else the bare token (like the deck).
+function inputText(token: string): string {
+  const l = props.tokenLabel(token);
+  return l === token ? inputPart(token) : l;
 }
 
 const sameSource = computed(() => aKey.value === bKey.value);
@@ -474,51 +493,46 @@ onMounted(async () => {
       <div class="head compare-head">
         <Icon name="compare" :size="16" />
         <span class="head-title no-grow">Compare</span>
+        <span class="head-count">{{ report?.rows.length ?? 0 }}</span>
         <Dropdown v-model="aKey" :options="sourceDropdown" title="Source A" />
         <Icon name="arrow-right" :size="18" class="dim" />
         <Dropdown v-model="bKey" :options="sourceDropdown" title="Source B" />
         <div class="spacer" />
         <div class="chips">
-          <button type="button" class="chip" :class="{ active: kindFilter === 'all' }" @click="kindFilter = 'all'">
-            All <span class="count">{{ report?.rows.length ?? 0 }}</span>
-          </button>
           <button
             type="button"
             class="chip added"
-            :class="{ active: kindFilter === 'added' }"
-            @click="kindFilter = 'added'"
+            :class="{ active: kindFilter.includes('added') }"
+            @click="kindFilter = toggleIn(kindFilter, 'added')"
           >
             +{{ report?.added ?? 0 }}
           </button>
           <button
             type="button"
             class="chip removed"
-            :class="{ active: kindFilter === 'removed' }"
-            @click="kindFilter = 'removed'"
+            :class="{ active: kindFilter.includes('removed') }"
+            @click="kindFilter = toggleIn(kindFilter, 'removed')"
           >
             −{{ report?.removed ?? 0 }}
           </button>
           <button
             type="button"
             class="chip changed"
-            :class="{ active: kindFilter === 'changed' }"
-            @click="kindFilter = 'changed'"
+            :class="{ active: kindFilter.includes('changed') }"
+            @click="kindFilter = toggleIn(kindFilter, 'changed')"
           >
             ~{{ report?.changed ?? 0 }}
           </button>
         </div>
         <div v-if="deviceCounts.length" class="divider" />
         <div v-if="deviceCounts.length" class="chips">
-          <button type="button" class="chip all" :class="{ active: deviceFilter === 'all' }" @click="deviceFilter = 'all'">
-            All <span class="count">{{ report?.rows.length ?? 0 }}</span>
-          </button>
           <button
             v-for="[label, d] in deviceCounts"
             :key="label"
             type="button"
             class="chip mono"
-            :class="{ active: deviceFilter === label }"
-            @click="deviceFilter = label"
+            :class="{ active: deviceFilter.includes(label) }"
+            @click="deviceFilter = toggleIn(deviceFilter, label)"
           >
             {{ label }} <span class="count">{{ d.count }}</span>
           </button>
@@ -540,7 +554,7 @@ onMounted(async () => {
         <div v-for="r in filteredRows" :key="r.token" class="row diff-row" :class="r.kind">
           <span class="sign">{{ SIGNS[r.kind] }}</span>
           <span class="mono dim">{{ deviceLabel(r) }}</span>
-          <span class="mono dim" :title="r.token">{{ inputPart(r.token) }}</span>
+          <span class="dim" :class="{ mono: inputText(r.token) === inputPart(r.token) }" :title="r.token">{{ inputText(r.token) }}</span>
           <span>{{ rowAction(r) }}</span>
           <span :class="r.a.length ? 'side' : 'empty'">{{ cellText(r.a) }}</span>
           <span :class="r.b.length ? 'side' : 'empty'">{{ cellText(r.b) }}</span>
