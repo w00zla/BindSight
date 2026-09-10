@@ -606,73 +606,110 @@ const AXIS_PRESS = 16384;
 interface RebindState {
   row: ListRow;
   category: string;
-  // The captured input, once one arrived.
-  after: { token: string; kind: DeviceKind; instance: number } | null;
+  // The device column on show (dropdown); starts on the double-clicked one
+  // and follows a captured input.
+  device: string;
+  // The change gathered so far: the captured token, or the blank token for
+  // a clear, for one device kind (SC keeps one binding per kind). Dropped
+  // when the device on show switches to another kind.
+  change: { kind: DeviceKind; input: string } | null;
 }
 
 const rebind = ref<RebindState | null>(null);
 
-function openRebind(row: ListRow, group: ListGroup) {
+function openRebind(row: ListRow, group: ListGroup, col?: DeviceCol) {
   if (!props.hasCurrent) return;
-  rebind.value = { row, category: group.label, after: null };
+  const device = col?.key ?? visibleCols.value[0]?.key ?? deviceCols.value[0].key;
+  rebind.value = { row, category: group.label, device, change: null };
 }
 
-// Current bindings of the action (pending ones included): every device
-// until an input arrived, then only the kind that input replaces.
-const rebindBefore = computed(() => {
+const rebindDevices = computed(() => deviceCols.value.map((c) => ({ value: c.key, label: c.label })));
+
+// The device column on show, and its kind's columns (a joystick binding may
+// sit on another instance than the one picked).
+const rebindCol = computed(() => deviceCols.value.find((c) => c.key === rebind.value?.device) ?? null);
+const rebindKindCols = computed(() => deviceCols.value.filter((c) => c.kind === rebindCol.value?.kind));
+
+interface RebindLine {
+  device: string;
+  kind: DeviceKind;
+  text: string;
+  changed: boolean;
+}
+
+// Current bindings of the action for the device kind on show (pending ones
+// included).
+const rebindBefore = computed<RebindLine[]>(() => {
   const r = rebind.value;
   if (!r) return [];
-  return deviceCols.value.flatMap((col) => {
-    if (r.after && col.kind !== r.after.kind) return [];
-    return cellTokens(r.row, col).tokens.map((t) => ({ device: col.key, text: inputText(t) }));
-  });
+  return rebindKindCols.value.flatMap((col) =>
+    cellTokens(r.row, col).tokens.map((t) => ({ device: col.key, kind: col.kind, text: inputText(t), changed: false })),
+  );
 });
 
-const rebindAfter = computed(() => {
-  const a = rebind.value?.after;
-  return a ? { device: deviceKeyOf(a.kind, a.instance), text: inputText(a.token) } : null;
+// The same once the dialog's change applies: the new token on its device,
+// nothing for a clear, else unchanged.
+const rebindAfter = computed<RebindLine[]>(() => {
+  const r = rebind.value;
+  const kind = rebindCol.value?.kind;
+  if (!r || !kind) return [];
+  const change = r.change;
+  if (!change || change.kind !== kind) return rebindBefore.value;
+  const target = parseToken(change.input);
+  if (isBlank(change.input) || !target) return [];
+  return [{ device: deviceKeyOf(kind, target.instance), kind, text: inputText(change.input), changed: true }];
 });
 
-// One Unbind per device that has a binding in the Before list (one per kind,
-// so the device names the kind), then Confirm / Cancel.
-const rebindButtons = computed<ConfirmButton[]>(() => {
-  const unbinds = new Map<DeviceKind, string>();
-  for (const b of rebindBefore.value) {
-    const kind = parseToken(`${b.device}_`)?.kind;
-    if (kind && !unbinds.has(kind)) unbinds.set(kind, b.device);
-  }
-  return [
-    ...[...unbinds].map(([kind, device]) => ({ label: `Unbind ${device}`, kind: "danger" as const, value: `unbind:${kind}` })),
-    { label: "Confirm", kind: "primary", value: "confirm", disabled: !rebind.value?.after },
-    { label: "Cancel", kind: "outline", value: "cancel" },
-  ];
-});
+const rebindButtons = computed<ConfirmButton[]>(() => [
+  { label: "Clear", kind: "danger", value: "clear", side: "left", disabled: !rebindAfter.value.length },
+  { label: "Apply", kind: "primary", value: "apply", disabled: !rebind.value?.change },
+  { label: "Cancel", kind: "outline", value: "cancel" },
+]);
 
-function setAfter(token: string | null) {
+// Clear the kind on show: no binding on any of its devices.
+function clearKind() {
+  const r = rebind.value;
+  const kind = rebindCol.value?.kind;
+  if (r && kind) r.change = { kind, input: blankToken(kind) };
+}
+
+// Switching the device on show (by hand or by a captured input) drops a
+// change of another kind: the dialog edits one input at a time.
+watch(
+  () => rebind.value?.device,
+  () => {
+    const r = rebind.value;
+    if (r?.change && r.change.kind !== rebindCol.value?.kind) r.change = null;
+  },
+);
+
+// A captured input becomes the change and brings its device on show.
+function setCaptured(token: string | null) {
   const r = rebind.value;
   const target = token ? parseToken(token) : null;
   if (!r || !token || !target) return;
-  r.after = { token, ...target };
+  r.change = { kind: target.kind, input: token };
+  r.device = deviceKeyOf(target.kind, target.instance);
 }
 
-// A press while the dialog is open becomes the new binding: buttons and keys
-// on the way down, hats off centre, axes past half travel. Joystick inputs
-// take their jsN from the file (the backend resolves them), keyboard and
-// gamepad tokens come with the held modifiers folded in. Escape cancels
-// the dialog instead (so it cannot be bound here).
+// A press while the dialog is open becomes the new binding of its kind:
+// buttons and keys on the way down, hats off centre, axes past half travel.
+// Joystick inputs take their jsN from the file (the backend resolves them),
+// keyboard and gamepad tokens come with the held modifiers folded in.
+// Escape cancels the dialog instead (so it cannot be bound here).
 async function takeInput(p: JoyInput) {
   if (!rebind.value) return;
   switch (p.kind) {
     case "key":
       if (!p.pressed) return;
       if (p.name === "escape") rebind.value = null;
-      else setAfter(props.inputToken(p));
+      else setCaptured(props.inputToken(p));
       return;
     case "padbutton":
-      if (p.pressed) setAfter(props.inputToken(p));
+      if (p.pressed) setCaptured(props.inputToken(p));
       return;
     case "padaxis":
-      if (Math.abs(p.value) >= AXIS_PRESS) setAfter(props.inputToken(p));
+      if (Math.abs(p.value) >= AXIS_PRESS) setCaptured(props.inputToken(p));
       return;
     case "button":
       if (!p.pressed) return;
@@ -691,7 +728,7 @@ async function takeInput(p: JoyInput) {
       index: p.index,
       direction: p.kind === "hat" ? p.direction : null,
     });
-    setAfter(res.token);
+    setCaptured(res.token);
   } catch {
     /* ignore transient resolve errors */
   }
@@ -699,23 +736,21 @@ async function takeInput(p: JoyInput) {
 
 function onRebindChoose(value: string) {
   const r = rebind.value;
-  rebind.value = null;
   if (!r) return;
-  let change: { kind: DeviceKind; input: string } | null = null;
-  if (value === "confirm" && r.after) change = { kind: r.after.kind, input: r.after.token };
-  const unbind = value.startsWith("unbind:") ? (value.slice(7) as DeviceKind) : null;
-  if (unbind) change = { kind: unbind, input: blankToken(unbind) };
-  if (!change) return;
-  const { actionmap, action } = r.row;
-  const key = pendingKey(actionmap, action, change.kind);
-  // Back to what the file has: no change to keep.
-  const inFile = props.bindings.filter((b) => b.actionmap === actionmap && b.action === action && b.device_kind === change!.kind);
-  const same = unbind ? inFile.length === 0 : inFile.length === 1 && inFile[0].token === change.input;
-  if (same) {
-    pending.value.delete(key);
+  if (value === "clear") {
+    clearKind();
     return;
   }
-  pending.value.set(key, { actionmap, action, kind: change.kind, input: change.input });
+  rebind.value = null;
+  if (value !== "apply" || !r.change) return;
+  const { actionmap, action } = r.row;
+  const { kind, input } = r.change;
+  const key = pendingKey(actionmap, action, kind);
+  // Back to what the file has: no change to keep.
+  const inFile = props.bindings.filter((b) => b.actionmap === actionmap && b.action === action && b.device_kind === kind);
+  const same = isBlank(input) ? inFile.length === 0 : inFile.length === 1 && inFile[0].token === input;
+  if (same) pending.value.delete(key);
+  else pending.value.set(key, { actionmap, action, kind, input });
 }
 
 // --- save / discard --------------------------------------------------------
@@ -995,13 +1030,19 @@ function compareWith(key: string) {
           </div>
           <template v-if="isOpen(g)">
             <div v-for="r in g.rows" :key="r.action" class="row list-row" @dblclick="openRebind(r, g)">
-              <span class="action-cell" :title="r.action">{{ r.label }}</span>
+              <span class="action-cell">
+                <button type="button" class="icon-btn framed" title="Set binding" @click.stop="openRebind(r, g)" @dblclick.stop>
+                  <Icon name="target" :size="12" />
+                </button>
+                <span class="action-label" :title="r.action">{{ r.label }}</span>
+              </span>
               <span
                 v-for="c in visibleCols"
                 :key="c.key"
                 class="bind-cell"
                 :class="{ pending: cellTokens(r, c).pending, empty: !bindText(r, c) }"
                 :title="cellTokens(r, c).tokens.join(', ')"
+                @dblclick.stop="openRebind(r, g, c)"
               >{{ bindText(r, c) || "—" }}</span>
             </div>
           </template>
@@ -1090,24 +1131,42 @@ function compareWith(key: string) {
 
     <ConfirmDialog v-if="confirm" :title="confirm.title" :icon="confirm.icon" :buttons="confirm.buttons" @choose="onConfirm" />
 
-    <!-- rebind: the next input pressed becomes the action's binding -->
-    <ConfirmDialog v-if="rebind" :title="rebind.row.label" icon="edit" :buttons="rebindButtons" captureKeys @choose="onRebindChoose">
-      <div class="rb-category">{{ rebind.category }}</div>
-      <div class="rb-block">
-        <span class="rb-label">Before</span>
-        <div v-for="b in rebindBefore" :key="`${b.device}:${b.text}`" class="rb-line">
-          <span class="mono dim">{{ b.device }}</span>
-          <span>{{ b.text }}</span>
-        </div>
-        <div v-if="!rebindBefore.length" class="rb-line dim">—</div>
+    <!-- rebind: the next input pressed (or Clear) becomes the change, Apply queues it -->
+    <ConfirmDialog
+      v-if="rebind"
+      :title="rebind.row.label"
+      :subtitle="rebind.category"
+      icon="target"
+      :buttons="rebindButtons"
+      captureKeys
+      @choose="onRebindChoose"
+    >
+      <div class="rb-device">
+        <span class="rb-label">Device</span>
+        <Dropdown v-model="rebind.device" :options="rebindDevices" variant="small" title="Device" />
       </div>
-      <div class="rb-block">
-        <span class="rb-label">After</span>
-        <div v-if="rebindAfter" class="rb-line">
-          <span class="mono dim">{{ rebindAfter.device }}</span>
-          <span class="rb-new">{{ rebindAfter.text }}</span>
+      <div class="rb-columns">
+        <div class="rb-block">
+          <span class="rb-label">Before</span>
+          <div v-for="b in rebindBefore" :key="`${b.device}:${b.text}`" class="rb-line">
+            <span v-if="b.device !== rebind.device" class="mono dim">{{ b.device }}</span>
+            <span class="rb-text">{{ b.text }}</span>
+          </div>
+          <div v-if="!rebindBefore.length" class="rb-line dim">—</div>
         </div>
-        <div v-else class="rb-line dim">Press an input…</div>
+        <Icon name="arrow-right" :size="18" class="dim" />
+        <div class="rb-block">
+          <span class="rb-label">After</span>
+          <div v-for="a in rebindAfter" :key="`${a.device}:${a.text}`" class="rb-line">
+            <span v-if="a.device !== rebind.device" class="mono dim">{{ a.device }}</span>
+            <span class="rb-text" :class="{ 'rb-new': a.changed }">{{ a.text }}</span>
+          </div>
+          <div v-if="!rebindAfter.length" class="rb-line dim">—</div>
+        </div>
+      </div>
+      <div class="rb-hint">
+        <Icon name="target" :size="14" />
+        <span>Press an input on any device to bind it.</span>
       </div>
     </ConfirmDialog>
   </div>
@@ -1595,7 +1654,7 @@ function compareWith(key: string) {
 }
 
 .list-row {
-  cursor: default;
+  cursor: pointer;
   user-select: none;
 }
 
@@ -1610,7 +1669,32 @@ function compareWith(key: string) {
 }
 
 .action-cell {
-  padding-left: 22px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding-left: 4px;
+}
+
+/* A small outlined square, like the outline buttons but row-sized. */
+.icon-btn.framed {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: var(--radius-control);
+  color: var(--text);
+}
+
+.icon-btn.framed:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.action-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .bind-cell.empty {
@@ -1624,18 +1708,28 @@ function compareWith(key: string) {
 
 /* --- rebind dialog --- */
 
-.rb-category {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--text-2);
+.rb-device {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Before and After side by side, an arrow between them. */
+.rb-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
 }
 
 .rb-block {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  align-self: stretch;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  background: var(--bg-surface-2);
 }
 
 .rb-label {
@@ -1653,12 +1747,27 @@ function compareWith(key: string) {
 }
 
 .rb-line .mono {
-  width: 40px;
   flex-shrink: 0;
+}
+
+.rb-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .rb-new {
   color: var(--warn);
   font-weight: 600;
+}
+
+.rb-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+  font-size: 13px;
 }
 </style>

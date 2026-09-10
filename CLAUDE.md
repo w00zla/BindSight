@@ -48,28 +48,34 @@ presentational components:
   the one item "Current"), binding profiles, backups, and on the right
   either the Bindings List (Current: the game's keybinding screen as a
   table, one toggleable column per device the file names, categories
-  collapsible, double-click = rebind dialog, pending rebinds kept until
-  Save / Discard in the action tile above it) or Compare (any other source
-  picked on the left). Filter chips persist via `persist.ts`.
+  collapsible, "Set binding" button / double-click = rebind dialog editing
+  one input at a time, pending rebinds kept until Save / Discard in the
+  action tile above it) or Compare (any other source picked on the left).
 - `ImageMapEditor` — the Devices mode (Konva via `vue-konva`, three columns:
   devices + image-maps, canvas, live input + areas); also hosts Device Info
   (Device List and Device Events tiles, each with its own Save).
   `DeviceImage.vue` is the plain-SVG viewer.
-- `SettingsDialog`, `ConfirmDialog` (title, required icon, buttons, optional
-  body slot — behind every unsaved-changes / delete / game-file-write
-  question and the Fix via config / Fix via console dialogs), `Toasts`,
-  `Icon` (inline stroke SVGs by name — never emoji), `WindowEdges`.
+- `SettingsDialog` (own-styled checkboxes, WebKitGTK would paint GTK's),
+  `ConfirmDialog` (title, optional subtitle, required icon, buttons —
+  each may be `disabled` or parked `side: "left"` — optional body slot,
+  `captureKeys` keeps the keyboard capture on; behind every
+  unsaved-changes / delete / game-file-write question, the Fix via config /
+  Fix via console dialogs and the rebind dialog), `Toasts`, `Icon` (inline
+  stroke SVGs by name — never emoji), `WindowEdges`.
 - Shared modules: `imagemap.ts` (image-map types/helpers incl. token <->
   input key), `keyboard.ts` (webview keyboard capture, `KeyboardEvent.code`
   -> SC key name, feeds the same handler as `joy-input`), `devices.ts`
   (`deviceName` / `deviceKey` / `deviceIcon`; remembered GUI state is keyed
   by hardware id, never by SDL's index), `types.ts` (all device/input/
-  binding types), `logging.ts` (console forwarding, see Logging).
-- **Tables** (bindings deck, Compare): `tableColumns.ts` (`useTableColumns`:
-  sort state, widths, grid template, localStorage persistence) +
-  `ColumnHead.vue` (sortable headers, resize grips). The last column is the
-  `1fr` filler, the others carry px defaults, every cell truncates with an
-  ellipsis.
+  binding types), `logging.ts` (console forwarding, see Logging),
+  `persist.ts` (`persistedRef`: a ref mirrored into localStorage — every
+  filter chip choice goes through it).
+- **Tables** (bindings deck, Compare, Bindings List): `tableColumns.ts`
+  (`useTableColumns`: sort state, widths, grid template, localStorage
+  persistence; the column list may be reactive — the Bindings List's device
+  columns come from the file) + `ColumnHead.vue` (sortable headers, resize
+  grips). The last column is the `1fr` filler, the others carry px
+  defaults, every cell truncates with an ellipsis.
 - Design tokens in `src/styles/tokens.css` (the only place colours are
   defined), fonts bundled under `src/assets/fonts/` (OFL). The name is
   two-tone: BIND in `--text`, SIGHT in `--accent`.
@@ -155,7 +161,9 @@ presentational components:
 - `kblayout.rs` — `keyboard_layout` command: xkb code (`de`, `us`, …) via
   `localectl` / `vconsole.conf` on Linux, `GetKeyboardLayoutNameW` on Windows.
 - `lib.rs` — Tauri commands, state wiring (`AppData`: config, game data +
-  load status, profile, binding index, Game.log snapshot), thread spawns, the
+  load status, profile + its load error, binding index, Game.log snapshot;
+  `get_load_status` hands the last profile outcome to a frontend that
+  mounts after the first load already finished), thread spawns, the
   Wayland DMABUF workaround, logging setup.
 
 ## Logging

@@ -300,6 +300,45 @@ section {
   align-items: center;
   gap: 10px;
   font-size: 14px;
+  cursor: pointer;
+}
+
+/* Own checkbox look: WebKitGTK would paint the GTK theme's. */
+.check input {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex-shrink: 0;
+  display: grid;
+  place-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.check input:hover {
+  border-color: var(--accent);
+}
+
+.check input:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.check input:checked::after {
+  content: "";
+  width: 8px;
+  height: 4px;
+  border-left: 2px solid var(--accent-text);
+  border-bottom: 2px solid var(--accent-text);
+  transform: translateY(-1px) rotate(-45deg);
+}
+
+.check input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* The global.ini override is an exotic option: a smaller, muted row. */
@@ -316,7 +355,12 @@ section {
 .row.sub .check input {
   width: 12px;
   height: 12px;
-  margin: 0;
+}
+
+.row.sub .check input:checked::after {
+  width: 6px;
+  height: 3px;
+  border-width: 0 0 1.5px 1.5px;
 }
 
 .row.sub .input {

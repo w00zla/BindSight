@@ -11,6 +11,8 @@ export interface ConfirmButton {
   kind: "primary" | "outline" | "danger";
   value: string;
   disabled?: boolean;
+  // "left" parks the button at the far left of the footer.
+  side?: "left";
 }
 </script>
 
@@ -20,7 +22,14 @@ import Icon from "./Icon.vue";
 
 // `captureKeys`: the keyboard capture stays on while this dialog is open
 // (see keyboard.ts) — for a dialog that waits for a key press.
-const props = defineProps<{ title: string; icon: ConfirmIcon; buttons: ConfirmButton[]; captureKeys?: boolean }>();
+// `subtitle`: a dim second line under the title (the rebind dialog's category).
+const props = defineProps<{
+  title: string;
+  subtitle?: string;
+  icon: ConfirmIcon;
+  buttons: ConfirmButton[];
+  captureKeys?: boolean;
+}>();
 const emit = defineEmits<{ choose: [value: string] }>();
 
 // A click on the backdrop answers with the first outline button (the way out),
@@ -43,7 +52,10 @@ function onBackdrop() {
     >
       <div class="head">
         <Icon :name="icon" :size="18" />
-        <span class="title">{{ title }}</span>
+        <div class="titles">
+          <span class="title">{{ title }}</span>
+          <span v-if="subtitle" class="subtitle">{{ subtitle }}</span>
+        </div>
       </div>
       <div v-if="$slots.default" class="body">
         <slot />
@@ -54,7 +66,7 @@ function onBackdrop() {
           :key="b.value"
           type="button"
           class="btn"
-          :class="b.kind"
+          :class="[b.kind, { left: b.side === 'left' }]"
           :disabled="b.disabled"
           @click="emit('choose', b.value)"
         >
@@ -116,10 +128,22 @@ function onBackdrop() {
   border-top: 1px solid var(--border-dim);
 }
 
-.title {
+.titles {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.title {
   font-weight: 600;
   font-size: 18px;
+}
+
+.subtitle {
+  font-size: 12px;
+  color: var(--text-2);
 }
 
 .btn {
@@ -150,6 +174,10 @@ function onBackdrop() {
   background: transparent;
   color: var(--err);
   border: 1px solid color-mix(in srgb, var(--err) 60%, transparent);
+}
+
+.btn.left {
+  margin-right: auto;
 }
 
 .btn:disabled {
