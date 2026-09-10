@@ -328,11 +328,10 @@ function haystack(row: DiffRow): string {
 
 const COLUMNS: ColumnSpec[] = [
   { key: "sign", label: "", width: 28 },
-  { key: "device", label: "DEVICE", width: 70 },
-  { key: "input", label: "INPUT", width: 130 },
-  { key: "action", label: "ACTION", width: 300 },
-  { key: "a", label: "A", width: 260 },
-  { key: "b", label: "B", width: null },
+  { key: "input", label: "INPUT", width: 200, icon: "bolt" },
+  { key: "action", label: "ACTION", width: 300, icon: "target" },
+  { key: "a", label: "A", width: 260, icon: "file" },
+  { key: "b", label: "B", width: null, icon: "file" },
 ];
 const cols = useTableColumns("bindsight.columns.compare", COLUMNS, { key: "input", dir: "asc" });
 // The A/B headers carry the source names.
@@ -346,10 +345,9 @@ function cellValue(r: DiffRow, key: string): string | number {
   switch (key) {
     case "sign":
       return r.kind;
-    case "device":
-      return deviceRank(r);
+    // Device order first (like the tiles), then the input.
     case "input":
-      return inputText(r.token);
+      return `${String(deviceRank(r)).padStart(4, "0")} ${inputText(r.token)}`;
     case "action":
       return rowAction(r);
     case "a":
@@ -454,12 +452,13 @@ const countSummary = computed(() => {
 // The list is in the game's order and not sortable; the last visible device
 // column is the filler.
 const listColumns = computed<ColumnSpec[]>(() => [
-  { key: "action", label: "ACTION", width: 320, sortable: false },
+  { key: "action", label: "ACTION", width: 320, sortable: false, icon: "target" },
   ...visibleCols.value.map((d, i, all) => ({
     key: d.key,
     label: d.label.toUpperCase(),
     width: i === all.length - 1 ? null : 200,
     sortable: false,
+    icon: d.kind === "keyboard" ? "keyboard" : d.kind === "gamepad" ? "gamepad" : "devices",
   })),
 ]);
 const listCols = useTableColumns("bindsight.columns.bindings", listColumns, { key: "action", dir: "asc" });
@@ -598,6 +597,50 @@ function bindText(row: ListRow, col: DeviceCol): string {
   return tokens.length ? tokens.map(inputText).join(", ") : "";
 }
 
+// --- live highlight --------------------------------------------------------
+
+// The last press's SC token, and whether it is still lit: a button / key
+// stays lit while held, a hat / axis pulses for PULSE_MS. Rows bound to the
+// token (pending ones too) mark their cell and category while lit and fade
+// afterwards.
+const PULSE_MS = 600;
+const liveToken = ref<string | null>(null);
+const liveOn = ref(false);
+let pulseTimer: ReturnType<typeof setTimeout> | null = null;
+
+function light(token: string, momentary: boolean) {
+  if (pulseTimer) clearTimeout(pulseTimer);
+  pulseTimer = null;
+  liveToken.value = token;
+  liveOn.value = true;
+  if (momentary) {
+    pulseTimer = setTimeout(() => {
+      liveOn.value = false;
+    }, PULSE_MS);
+  }
+}
+
+function unlight(token: string) {
+  if (token === liveToken.value) liveOn.value = false;
+}
+
+const liveRows = computed<Set<string>>(() => {
+  const t = liveToken.value;
+  const rows = new Set<string>();
+  if (!t) return rows;
+  for (const b of props.bindings) if (b.token === t) rows.add(rowKey(b.actionmap, b.action));
+  for (const p of pending.value.values()) if (p.input === t) rows.add(rowKey(p.actionmap, p.action));
+  return rows;
+});
+
+function isLive(row: ListRow): boolean {
+  return liveRows.value.has(rowKey(row.actionmap, row.action));
+}
+
+function isLiveCell(row: ListRow, col: DeviceCol): boolean {
+  return liveToken.value !== null && cellTokens(row, col).tokens.includes(liveToken.value);
+}
+
 // --- rebind dialog ---------------------------------------------------------
 
 // Past half travel an axis counts as pressed.
@@ -692,35 +735,42 @@ function setCaptured(token: string | null) {
   r.device = deviceKeyOf(target.kind, target.instance);
 }
 
-// A press while the dialog is open becomes the new binding of its kind:
-// buttons and keys on the way down, hats off centre, axes past half travel.
-// Joystick inputs take their jsN from the file (the backend resolves them),
-// keyboard and gamepad tokens come with the held modifiers folded in.
-// Escape cancels the dialog instead (so it cannot be bound here).
-async function takeInput(p: JoyInput) {
-  if (!rebind.value) return;
+// What an event is: a press (buttons / keys / pad buttons on the way down,
+// hats off centre, axes past half travel, at most every AXIS_MS per axis),
+// a release (the way back up), or nothing to act on. Hats and axes are
+// momentary: they pulse instead of staying lit.
+const AXIS_MS = 150;
+const lastAxis = new Map<string, number>();
+
+type Edge = "press" | "release" | null;
+
+function edgeOf(p: JoyInput): { edge: Edge; momentary: boolean } {
   switch (p.kind) {
     case "key":
-      if (!p.pressed) return;
-      if (p.name === "escape") rebind.value = null;
-      else setCaptured(props.inputToken(p));
-      return;
     case "padbutton":
-      if (p.pressed) setCaptured(props.inputToken(p));
-      return;
-    case "padaxis":
-      if (Math.abs(p.value) >= AXIS_PRESS) setCaptured(props.inputToken(p));
-      return;
     case "button":
-      if (!p.pressed) return;
-      break;
+      return { edge: p.pressed ? "press" : "release", momentary: false };
     case "hat":
-      if (p.direction === "centered") return;
-      break;
+      return { edge: p.direction === "centered" ? null : "press", momentary: true };
+    case "padaxis":
+      return { edge: Math.abs(p.value) >= AXIS_PRESS && axisDue(`${p.guid}#${p.name}`) ? "press" : null, momentary: true };
     case "axis":
-      if (Math.abs(p.value) < AXIS_PRESS) return;
-      break;
+      return { edge: Math.abs(p.value) >= AXIS_PRESS && axisDue(`${p.guid}#${p.index}`) ? "press" : null, momentary: true };
   }
+}
+
+function axisDue(key: string): boolean {
+  const now = Date.now();
+  if (now - (lastAxis.get(key) ?? 0) < AXIS_MS) return false;
+  lastAxis.set(key, now);
+  return true;
+}
+
+// The SC token of an event. Joystick inputs take their jsN from the file
+// (the backend resolves them), keyboard and gamepad tokens come with the
+// held modifiers folded in.
+async function tokenOf(p: JoyInput): Promise<string | null> {
+  if (p.kind === "key" || p.kind === "padbutton" || p.kind === "padaxis") return props.inputToken(p);
   try {
     const res = await invoke<{ token: string | null; actions: BoundAction[] }>("resolve_input", {
       guid: p.guid,
@@ -728,10 +778,30 @@ async function takeInput(p: JoyInput) {
       index: p.index,
       direction: p.kind === "hat" ? p.direction : null,
     });
-    setCaptured(res.token);
+    return res.token;
   } catch {
-    /* ignore transient resolve errors */
+    return null;
   }
+}
+
+// A press lights its rows in the list and, while the dialog is open,
+// becomes its change; a release puts the light out. Escape cancels the
+// dialog instead (so it cannot be bound here).
+async function takeInput(p: JoyInput) {
+  if (p.kind === "key" && p.pressed && p.name === "escape" && rebind.value) {
+    rebind.value = null;
+    return;
+  }
+  const { edge, momentary } = edgeOf(p);
+  if (!edge) return;
+  const token = await tokenOf(p);
+  if (!token) return;
+  if (edge === "release") {
+    unlight(token);
+    return;
+  }
+  light(token, momentary);
+  if (rebind.value) setCaptured(token);
 }
 
 function onRebindChoose(value: string) {
@@ -875,7 +945,6 @@ function compareWith(key: string) {
             :class="{ a: view === 'compare' && aKey === CURRENT, b: view === 'list' || bKey === CURRENT }"
             @click="showList"
           >
-            <span class="dot" />
             <div class="lines">
               <span class="line-title">Current</span>
               <span class="mono line-sub">actionmaps.xml · {{ info ? stamp(info.modified) : "—" }}</span>
@@ -987,12 +1056,16 @@ function compareWith(key: string) {
         <Icon name="bindings" :size="16" />
         <span class="head-title no-grow">Bindings List</span>
         <div class="divider" />
-        <button type="button" class="btn outline small" :disabled="allExpanded" @click="expandAll">
-          <Icon name="chevron-down" :size="14" />Expand all
+        <button type="button" class="btn outline small square" title="Expand all" :disabled="allExpanded" @click="expandAll">
+          <Icon name="unfold" :size="14" />
         </button>
-        <button type="button" class="btn outline small" :disabled="!expanded.size" @click="collapseAll">
-          <Icon name="chevron-up" :size="14" />Collapse all
+        <button type="button" class="btn outline small square" title="Collapse all" :disabled="!expanded.size" @click="collapseAll">
+          <Icon name="fold" :size="14" />
         </button>
+        <span class="head-hint">
+          <Icon name="bolt" :size="13" />
+          Press an input to highlight its bindings
+        </span>
         <div class="spacer" />
         <div class="chips">
           <button
@@ -1023,13 +1096,18 @@ function compareWith(key: string) {
           @reset="listCols.resetWidth"
         />
         <template v-for="g in shownGroups" :key="g.key">
-          <div class="group-row" @click="toggleGroup(g.key)">
+          <div class="group-row" :class="{ live: liveOn && g.rows.some(isLive) }" @click="toggleGroup(g.key)">
             <Icon :name="isOpen(g) ? 'chevron-down' : 'chevron-right'" :size="14" />
             <span class="group-label">{{ g.label }}</span>
-            <span class="head-count">{{ g.rows.length }}</span>
           </div>
           <template v-if="isOpen(g)">
-            <div v-for="r in g.rows" :key="r.action" class="row list-row" @dblclick="openRebind(r, g)">
+            <div
+              v-for="r in g.rows"
+              :key="r.action"
+              class="row list-row"
+              :class="{ live: liveOn && isLive(r) }"
+              @dblclick="openRebind(r, g)"
+            >
               <span class="action-cell">
                 <button type="button" class="icon-btn framed" title="Set binding" @click.stop="openRebind(r, g)" @dblclick.stop>
                   <Icon name="target" :size="12" />
@@ -1040,10 +1118,10 @@ function compareWith(key: string) {
                 v-for="c in visibleCols"
                 :key="c.key"
                 class="bind-cell"
-                :class="{ pending: cellTokens(r, c).pending, empty: !bindText(r, c) }"
+                :class="{ pending: cellTokens(r, c).pending, empty: !bindText(r, c), live: liveOn && isLiveCell(r, c) }"
                 :title="cellTokens(r, c).tokens.join(', ')"
                 @dblclick.stop="openRebind(r, g, c)"
-              >{{ bindText(r, c) || "—" }}</span>
+              ><Icon name="bolt" :size="12" class="live-mark" />{{ bindText(r, c) || "—" }}</span>
             </div>
           </template>
         </template>
@@ -1116,8 +1194,10 @@ function compareWith(key: string) {
         />
         <div v-for="r in filteredRows" :key="r.token" class="row diff-row" :class="r.kind">
           <span class="sign">{{ SIGNS[r.kind] }}</span>
-          <span class="mono dim">{{ deviceLabel(r) }}</span>
-          <span class="dim" :class="{ mono: inputText(r.token) === inputPart(r.token) }" :title="r.token">{{ inputText(r.token) }}</span>
+          <span class="input-cell dim" :title="r.token">
+            <span class="mono">{{ deviceLabel(r) }}</span>
+            <span :class="{ mono: inputText(r.token) === inputPart(r.token) }">{{ inputText(r.token) }}</span>
+          </span>
           <span>{{ rowAction(r) }}</span>
           <span :class="r.a.length ? 'side' : 'empty'">{{ cellText(r.a) }}</span>
           <span :class="r.b.length ? 'side' : 'empty'">{{ cellText(r.b) }}</span>
@@ -1325,13 +1405,6 @@ function compareWith(key: string) {
   align-items: center;
 }
 
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--live);
-}
-
 .lines {
   display: flex;
   flex-direction: column;
@@ -1400,6 +1473,12 @@ function compareWith(key: string) {
   padding: 0 10px;
   gap: 6px;
   font-size: 12px;
+}
+
+/* Icon-only: as wide as it is high. */
+.btn.square {
+  width: var(--h-chip-sm);
+  padding: 0;
 }
 
 .btn.outline {
@@ -1584,6 +1663,17 @@ function compareWith(key: string) {
   white-space: nowrap;
 }
 
+/* Device and input side by side in the one INPUT cell. */
+.input-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.input-cell .mono {
+  flex-shrink: 0;
+}
+
 .sign {
   font-weight: 700;
 }
@@ -1680,9 +1770,9 @@ function compareWith(key: string) {
   width: 20px;
   height: 20px;
   flex-shrink: 0;
-  border: 1px solid rgba(255, 255, 255, 0.5);
+  border: 1px solid var(--border);
   border-radius: var(--radius-control);
-  color: var(--text);
+  color: var(--text-2);
 }
 
 .icon-btn.framed:hover {
@@ -1704,6 +1794,52 @@ function compareWith(key: string) {
 .bind-cell.pending {
   color: var(--warn);
   font-weight: 600;
+}
+
+/* The last press: a live-coloured left edge on the row and its category,
+   the matching cell in live colour with a bolt (always in the layout,
+   invisible until lit). Lights up at once, fades out over the pulse time. */
+.group-row,
+.list-row {
+  border-left: 3px solid transparent;
+  transition: border-left-color 600ms ease-out;
+}
+
+.group-row.live,
+.list-row.live {
+  border-left-color: var(--live);
+  transition: none;
+}
+
+.bind-cell {
+  transition: color 600ms ease-out;
+}
+
+.bind-cell.live {
+  color: var(--live);
+  transition: none;
+}
+
+.live-mark {
+  vertical-align: -2px;
+  margin-right: 6px;
+  opacity: 0;
+  transition: opacity 600ms ease-out;
+}
+
+.bind-cell.live .live-mark {
+  opacity: 1;
+  transition: none;
+}
+
+.head-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
 }
 
 /* --- rebind dialog --- */

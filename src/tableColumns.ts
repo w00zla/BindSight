@@ -14,6 +14,8 @@ export interface ColumnSpec {
   // Default width in px; null = the flexible filler column (never resized).
   width: number | null;
   sortable?: boolean;
+  // Icon in front of the label (an Icon name).
+  icon?: string;
 }
 
 const MIN_WIDTH = 40;

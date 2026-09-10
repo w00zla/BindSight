@@ -43,7 +43,8 @@ presentational components:
 - `StartupTile` — covers every mode while the first game-data load after
   start runs, whatever its outcome.
 - Monitor: `DeviceTile`, `StatusPanel`, `ImageStage` (+ `Splitter`),
-  `LiveCard`, `BindingsDeck`.
+  `LiveCard`, `BindingsDeck` (flat rows or one bucket per input, same head
+  as the Bindings List).
 - `ToolsView` — the whole Bindings mode: Game Bindings (the live file as
   the one item "Current"), binding profiles, backups, and on the right
   either the Bindings List (Current: the game's keybinding screen as a
@@ -73,9 +74,9 @@ presentational components:
 - **Tables** (bindings deck, Compare, Bindings List): `tableColumns.ts`
   (`useTableColumns`: sort state, widths, grid template, localStorage
   persistence; the column list may be reactive — the Bindings List's device
-  columns come from the file) + `ColumnHead.vue` (sortable headers, resize
-  grips). The last column is the `1fr` filler, the others carry px
-  defaults, every cell truncates with an ellipsis.
+  columns come from the file) + `ColumnHead.vue` (sortable headers with an
+  icon per column, resize grips). The last column is the `1fr` filler, the
+  others carry px defaults, every cell truncates with an ellipsis.
 - Design tokens in `src/styles/tokens.css` (the only place colours are
   defined), fonts bundled under `src/assets/fonts/` (OFL). The name is
   two-tone: BIND in `--text`, SIGHT in `--accent`.

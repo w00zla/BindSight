@@ -6,7 +6,7 @@
 // filler) the next column from its left edge; the last column's grip is its
 // own. The root carries the parent's `.row.cols-head` styling; the grid
 // template comes from the parent's `--cols` variable.
-import Icon from "./Icon.vue";
+import Icon, { type IconName } from "./Icon.vue";
 import type { ColumnSpec, SortState } from "../tableColumns";
 
 const props = defineProps<{ columns: ColumnSpec[]; sort: SortState }>();
@@ -32,6 +32,7 @@ function gripTarget(i: number): { key: string; fromLeft: boolean } | null {
       :class="{ sortable: c.sortable !== false, active: sort.key === c.key }"
       @click="c.sortable !== false && emit('sort', c.key)"
     >
+      <Icon v-if="c.icon" :name="c.icon as IconName" :size="13" class="col-icon" />
       <span class="txt">{{ c.label }}</span>
       <Icon v-if="sort.key === c.key" :name="sort.dir === 'asc' ? 'chevron-up' : 'chevron-down'" :size="12" />
       <span
@@ -61,6 +62,10 @@ function gripTarget(i: number): { key: string; fromLeft: boolean } | null {
 
 .col.sortable:hover {
   color: var(--text);
+}
+
+.col-icon {
+  flex-shrink: 0;
 }
 
 .txt {

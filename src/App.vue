@@ -99,6 +99,14 @@ const activeEnv = ref("LIVE");
 const bindings = ref<ResolvedBinding[]>([]);
 const tokens = ref<Record<string, string>>({});
 const currentInput = ref<CurrentInput | null>(null);
+// The physical input behind `currentInput`, to tell whether it is still held
+// (buttons / keys while down, hats until centred, axes for a pulse — the
+// image stage's `activeInputs` rules).
+const currentKey = ref<{ guid: string; key: string } | null>(null);
+const currentHeld = computed(() => {
+  const c = currentKey.value;
+  return !!c && activeInputs.value[c.guid]?.[c.key] !== undefined;
+});
 // The last captured key event, handed to the editor (only the webview sees keys).
 const keyInput = ref<JoyInput | null>(null);
 const clash = ref<ClashReport | null>(null);
@@ -345,13 +353,15 @@ function clearActive(guid: string, drop: (key: string) => boolean) {
   activeInputs.value = { ...activeInputs.value, [guid]: next };
 }
 
-// A binding clicked in the list, kept lit on the image-map image until clicked
-// again or another one is picked.
-const pinned = ref<{ guid: string; key: string } | null>(null);
+// A binding clicked in the list, selected until clicked again or another
+// one is picked; it is kept lit on the image-map image when it can be.
+const pinned = ref<ResolvedBinding | null>(null);
+const pinnedTarget = computed(() => (pinned.value ? pinTarget(pinned.value) : null));
 
 function activeFor(guid: string): Map<string, HighlightClass> {
   const m = new Map<string, HighlightClass>(Object.entries(activeInputs.value[guid] ?? {}));
-  if (pinned.value?.guid === guid) m.set(pinned.value.key, "bound");
+  const t = pinnedTarget.value;
+  if (t?.guid === guid) m.set(t.key, "bound");
   return m;
 }
 
@@ -402,17 +412,20 @@ function missingInMap(b: ResolvedBinding): boolean {
 }
 
 function isPinned(b: ResolvedBinding): boolean {
-  const t = pinTarget(b);
-  return !!t && pinned.value?.guid === t.guid && pinned.value.key === t.key;
+  const p = pinned.value;
+  return !!p && p.token === b.token && p.actionmap === b.actionmap && p.action === b.action;
 }
 
+// Select the row either way; say why nothing lights up when it cannot (a
+// missing area is already tagged on the row itself).
 function togglePin(b: ResolvedBinding) {
-  const r = resolvePin(b);
-  if ("reason" in r) {
-    notify(r.reason, "error");
+  if (isPinned(b)) {
+    pinned.value = null;
     return;
   }
-  pinned.value = isPinned(b) ? null : r;
+  pinned.value = b;
+  const r = resolvePin(b);
+  if ("reason" in r && !missingInMap(b)) notify(r.reason, "error");
 }
 
 // Buttons and keys stay lit while held, hats until centered, axes pulse.
@@ -678,6 +691,7 @@ async function showBinding(p: JoyInput) {
 
 function applyResolution(p: JoyInput, key: string, res: InputResolution) {
   const d = deviceOf(p.guid);
+  currentKey.value = { guid: p.guid, key };
   currentInput.value = {
     device: d ? deviceName(d) : p.guid,
     kind: d?.kind ?? "joystick",
@@ -1069,6 +1083,7 @@ onUnmounted(() => {
         <BindingsDeck
           :bindings="connectedBindings"
           :currentToken="currentInput?.token ?? null"
+          :liveOn="currentHeld"
           :tokenLabel="tokenLabel"
           :categoryLabel="actionmapLabel"
           :deviceLabel="deviceLabel"
