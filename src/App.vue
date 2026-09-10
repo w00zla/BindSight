@@ -968,7 +968,9 @@ onMounted(async () => {
     debugLogging.value = cfg.debug_logging;
     setDebugLogging(cfg.debug_logging);
     mapChoices.value = cfg.imagemap_choices ?? {};
-    bindings.value = await invoke<ResolvedBinding[]>("get_bindings");
+    // The outcome of a load that ended before the listener was up: bindings,
+    // whether the profile parsed, and its error.
+    takeStatus(await invoke<LoadStatus>("get_load_status"));
   } catch (e) {
     error.value = String(e);
     // Never leave the startup tile up: the other features work regardless.

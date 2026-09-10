@@ -9,6 +9,7 @@ import ColumnHead from "./ColumnHead.vue";
 import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
 import ConfirmDialog, { type ConfirmButton, type ConfirmIcon } from "./ConfirmDialog.vue";
 import { KIND_RANK } from "../devices";
+import { persistedRef } from "../persist";
 import type {
   ActionMap,
   ActionRef,
@@ -73,6 +74,10 @@ function onConfirm(value: string) {
   const resolve = confirmResolve;
   confirmResolve = null;
   resolve?.(value);
+}
+
+function toggleIn<T>(list: T[], item: T): T[] {
+  return list.includes(item) ? list.filter((x) => x !== item) : [...list, item];
 }
 
 // --- time formatting -------------------------------------------------------
@@ -278,13 +283,10 @@ async function openBackupDir(b: BackupSummary) {
 
 // --- diff filters ----------------------------------------------------------
 
-// Toggled chips; none toggled = everything.
-const kindFilter = ref<DiffKind[]>([]);
-const deviceFilter = ref<string[]>([]);
+// Toggled chips; none toggled = everything. Remembered across restarts.
+const kindFilter = persistedRef<DiffKind[]>("bindsight.compare.kinds", []);
+const deviceFilter = persistedRef<string[]>("bindsight.compare.devices", []);
 
-function toggleIn<T>(list: T[], item: T): T[] {
-  return list.includes(item) ? list.filter((x) => x !== item) : [...list, item];
-}
 const search = ref("");
 
 // Same order as the device tiles, joysticks by instance.
@@ -406,11 +408,6 @@ async function loadInfo() {
   }
 }
 
-// "12.3 KB"
-function fmtSize(bytes: number): string {
-  return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
-}
-
 // One column per device the file knows: the keyboard and the gamepad (SC
 // has exactly one of each), then every joystick slot named in <options>.
 interface DeviceCol {
@@ -421,8 +418,8 @@ interface DeviceCol {
 }
 
 const deviceCols = computed<DeviceCol[]>(() => [
-  { key: "kb1", kind: "keyboard", instance: 1, label: "kb1" },
-  { key: "gp1", kind: "gamepad", instance: 1, label: "gp1" },
+  { key: "kb1", kind: "keyboard", instance: 1, label: "kb1 · Keyboard" },
+  { key: "gp1", kind: "gamepad", instance: 1, label: "gp1 · Gamepad" },
   ...[...(info.value?.joysticks ?? [])]
     .sort((a, b) => a.instance - b.instance)
     .map((j) => ({
@@ -433,11 +430,32 @@ const deviceCols = computed<DeviceCol[]>(() => [
     })),
 ]);
 
-// The list is in the game's order and not sortable; the last device column
-// is the filler.
+// Columns the user switched off (remembered; a device new to the file
+// starts visible).
+const hiddenCols = persistedRef<string[]>("bindsight.bindings.hidden", []);
+const visibleCols = computed(() => deviceCols.value.filter((c) => !hiddenCols.value.includes(c.key)));
+
+function toggleCol(key: string) {
+  hiddenCols.value = toggleIn(hiddenCols.value, key);
+}
+
+// Bindings in the file, total and per device in column order:
+// "522 total · 43 kb1 · 6 gp1 · 120 js1".
+const countSummary = computed(() => {
+  const counts = new Map<string, number>();
+  for (const b of props.bindings) {
+    const key = deviceKeyOf(b.device_kind, b.instance);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const perDevice = deviceCols.value.map((c) => `${counts.get(c.key) ?? 0} ${c.key}`);
+  return [`${props.bindings.length} total`, ...perDevice].join(" · ");
+});
+
+// The list is in the game's order and not sortable; the last visible device
+// column is the filler.
 const listColumns = computed<ColumnSpec[]>(() => [
   { key: "action", label: "ACTION", width: 320, sortable: false },
-  ...deviceCols.value.map((d, i, all) => ({
+  ...visibleCols.value.map((d, i, all) => ({
     key: d.key,
     label: d.label.toUpperCase(),
     width: i === all.length - 1 ? null : 200,
@@ -476,8 +494,6 @@ const groups = computed<ListGroup[]>(() => {
   return out;
 });
 
-const rowCount = computed(() => groups.value.reduce((n, g) => n + g.rows.length, 0));
-
 // Expanded categories; everything starts collapsed like in the game.
 const expanded = ref(new Set<string>());
 
@@ -499,7 +515,7 @@ const shownGroups = computed<ListGroup[]>(() => {
     .map((g) => ({
       ...g,
       rows: g.rows.filter((r) =>
-        [r.label, r.action, g.label, ...deviceCols.value.map((c) => bindText(r, c))].join(" ").toLowerCase().includes(q),
+        [r.label, r.action, g.label, ...visibleCols.value.map((c) => bindText(r, c))].join(" ").toLowerCase().includes(q),
       ),
     }))
     .filter((g) => g.rows.length);
@@ -811,26 +827,11 @@ function compareWith(key: string) {
 <template>
   <div class="tools">
     <div class="left">
-      <!-- game bindings: SC's action master list -->
-      <section class="panel game">
+      <!-- game bindings: the live file -->
+      <section class="panel">
         <div class="head">
           <Icon name="list" :size="15" />
           <span class="head-title">Game Bindings</span>
-        </div>
-        <div class="rows scroll actions">
-          <div v-for="m in actionMaps" :key="m.name" class="action-group">
-            <div class="group-head">{{ m.label ?? m.name }}</div>
-            <div v-for="a in m.actions" :key="a.name" class="action-item">{{ a.label ?? a.name }}</div>
-          </div>
-          <div v-if="!actionMaps.length" class="row-none">None</div>
-        </div>
-      </section>
-
-      <!-- binding profiles -->
-      <section class="panel">
-        <div class="head">
-          <Icon name="file" :size="15" />
-          <span class="head-title">Binding Profiles</span>
         </div>
         <div class="rows">
           <div
@@ -842,9 +843,20 @@ function compareWith(key: string) {
             <span class="dot" />
             <div class="lines">
               <span class="line-title">Current</span>
-              <span class="mono line-sub">{{ bindings.length }} bindings · {{ info ? stamp(info.modified) : "—" }}</span>
+              <span class="mono line-sub">actionmaps.xml · {{ info ? stamp(info.modified) : "—" }}</span>
             </div>
           </div>
+          <div v-else class="row-none">None</div>
+        </div>
+      </section>
+
+      <!-- binding profiles -->
+      <section class="panel">
+        <div class="head">
+          <Icon name="file" :size="15" />
+          <span class="head-title">Binding Profiles</span>
+        </div>
+        <div class="rows">
           <div
             v-for="m in profiles"
             :key="m.file"
@@ -857,7 +869,7 @@ function compareWith(key: string) {
               <span class="mono line-sub">{{ m.file }} · {{ stamp(m.modified) }}</span>
             </div>
           </div>
-          <div v-if="!profiles.length && !hasCurrent" class="row-none">None</div>
+          <div v-if="!profiles.length" class="row-none">None</div>
         </div>
         <div class="foot">
           <button type="button" class="btn outline" :disabled="busy" @click="importProfile">
@@ -913,13 +925,11 @@ function compareWith(key: string) {
     <div v-if="view === 'list'" class="action-tile">
       <div class="tile-name">
         <Icon name="file" :size="14" />
-        <span class="name-text">Current</span>
-        <span v-if="info" class="tile-facts">
-          {{ stamp(info.modified) }} · {{ fmtSize(info.size) }} · {{ info.rebinds }} rebinds · {{ info.joysticks.length }} joysticks
-        </span>
+        <span class="name-text">Game Bindings</span>
       </div>
       <div class="tile-btns">
-        <span class="mono tile-path" :title="info?.path">{{ info?.path ?? "—" }}</span>
+        <span class="mono tile-facts">{{ countSummary }}</span>
+        <div class="spacer" />
         <span v-if="dirty" class="tile-dirty">{{ changesText() }}</span>
         <button type="button" class="btn danger small" :disabled="!dirty || busy" @click="discardChanges">
           <Icon name="close" :size="14" />
@@ -941,14 +951,28 @@ function compareWith(key: string) {
       <div class="head compare-head">
         <Icon name="bindings" :size="16" />
         <span class="head-title no-grow">Bindings List</span>
-        <span class="head-count">{{ rowCount }}</span>
-        <div class="spacer" />
+        <div class="divider" />
         <button type="button" class="btn outline small" :disabled="allExpanded" @click="expandAll">
           <Icon name="chevron-down" :size="14" />Expand all
         </button>
         <button type="button" class="btn outline small" :disabled="!expanded.size" @click="collapseAll">
           <Icon name="chevron-up" :size="14" />Collapse all
         </button>
+        <div class="spacer" />
+        <div class="chips">
+          <button
+            v-for="c in deviceCols"
+            :key="c.key"
+            type="button"
+            class="chip mono"
+            :class="{ active: !hiddenCols.includes(c.key) }"
+            :title="c.label"
+            @click="toggleCol(c.key)"
+          >
+            {{ c.key }}
+          </button>
+        </div>
+        <div class="divider" />
         <div class="search">
           <Icon name="search" :size="14" />
           <input v-model="listSearch" placeholder="Find…" />
@@ -973,7 +997,7 @@ function compareWith(key: string) {
             <div v-for="r in g.rows" :key="r.action" class="row list-row" @dblclick="openRebind(r, g)">
               <span class="action-cell" :title="r.action">{{ r.label }}</span>
               <span
-                v-for="c in deviceCols"
+                v-for="c in visibleCols"
                 :key="c.key"
                 class="bind-cell"
                 :class="{ pending: cellTokens(r, c).pending, empty: !bindText(r, c) }"
@@ -1150,16 +1174,6 @@ function compareWith(key: string) {
   gap: 8px;
 }
 
-.tile-path {
-  flex: 1;
-  min-width: 0;
-  font-size: 12px;
-  color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .tile-dirty {
   font-size: 12px;
   font-weight: 600;
@@ -1184,37 +1198,6 @@ function compareWith(key: string) {
 .panel.grow {
   flex: 1;
   min-height: 0;
-}
-
-/* Capped so profiles and backups stay in view. */
-.panel.game {
-  flex: 0 1 40%;
-  min-height: 0;
-}
-
-.rows.actions {
-  padding: 10px 14px;
-}
-
-.action-group {
-  margin-bottom: 12px;
-}
-
-.group-head {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--text-2);
-  margin-bottom: 4px;
-}
-
-.action-item {
-  font-size: 13px;
-  padding: 2px 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .head {

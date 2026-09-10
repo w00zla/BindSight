@@ -44,12 +44,13 @@ presentational components:
   start runs, whatever its outcome.
 - Monitor: `DeviceTile`, `StatusPanel`, `ImageStage` (+ `Splitter`),
   `LiveCard`, `BindingsDeck`.
-- `ToolsView` — the whole Bindings mode: game bindings, binding profiles
-  (with the live file as "Current"), backups, and on the right either the
-  Bindings List (Current: the game's keybinding screen as a table, one
-  column per device the file names, categories collapsible, double-click
-  = rebind dialog, pending rebinds kept until Save / Discard in the action
-  tile above it) or Compare (any other source picked on the left).
+- `ToolsView` — the whole Bindings mode: Game Bindings (the live file as
+  the one item "Current"), binding profiles, backups, and on the right
+  either the Bindings List (Current: the game's keybinding screen as a
+  table, one toggleable column per device the file names, categories
+  collapsible, double-click = rebind dialog, pending rebinds kept until
+  Save / Discard in the action tile above it) or Compare (any other source
+  picked on the left). Filter chips persist via `persist.ts`.
 - `ImageMapEditor` — the Devices mode (Konva via `vue-konva`, three columns:
   devices + image-maps, canvas, live input + areas); also hosts Device Info
   (Device List and Device Events tiles, each with its own Save).

@@ -70,6 +70,8 @@ pub(crate) struct AppData {
     index: bindings::BindingIndex,
     /// SC's device enumeration from `Game.log` as of the last reload.
     game_log: Result<gamelog::LogEnumeration, gamelog::GameLogError>,
+    /// Why the last `reload_profile` left `profile` empty, for `get_load_status`.
+    profile_error: Option<String>,
 }
 
 /// Result of (re)loading the user's actionmaps.xml.
@@ -520,16 +522,34 @@ pub(crate) fn reload_profile(data: &mut AppData) -> LoadStatus {
                 options.join(", ")
             );
             data.profile = Some(profile);
+            data.profile_error = None;
         }
         Err(e) => {
             warn!("profile not loaded: {e}");
-            status.error = Some(e);
+            status.error = Some(e.clone());
             data.index = bindings::BindingIndex::default();
             data.profile = None;
+            data.profile_error = Some(e);
         }
     }
     data.game_log = read_game_log(data.config.base_path());
     status
+}
+
+/// The outcome of the last `reload_profile` without reading anything again —
+/// for a frontend that mounts after the first load already finished (its
+/// `scdata-changed` listener was not up yet).
+#[tauri::command]
+fn get_load_status(data: State<Mutex<AppData>>) -> LoadStatus {
+    let data = data.lock().unwrap();
+    LoadStatus {
+        base_path: data.config.base_path().to_string(),
+        actionmaps_path: config::actionmaps_path(data.config.base_path()).display().to_string(),
+        loaded: data.profile.is_some(),
+        error: data.profile_error.clone(),
+        bindings: current_bindings(&data),
+        sc: data.sc.status(),
+    }
 }
 
 /// Read SC's `Game.log` and log what it says about the device order — the
@@ -739,6 +759,7 @@ pub fn run() {
                 sc: ScState::default(),
                 profile: None,
                 index: bindings::BindingIndex::default(),
+                profile_error: None,
             }));
             spawn_sc_load(app.handle().clone());
 
@@ -755,6 +776,7 @@ pub fn run() {
             get_sc_status,
             get_config,
             get_bindings,
+            get_load_status,
             reload,
             get_clash_report,
             apply_resort,
