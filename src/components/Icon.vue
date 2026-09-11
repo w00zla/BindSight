@@ -73,6 +73,8 @@ export const ICONS = {
   'shape-rotate': '<path d="M6.3 17.7a8 8 0 1 1 11.4 0"/><path d="M3 15l3.3 2.7 3-2.7"/><path d="M21 15l-3.3 2.7-3-2.7"/>',
   'shape-arc': '<path d="M4 16a8 8 0 0 1 16 0"/><path d="M8 16a4 4 0 0 1 8 0"/><path d="M4 16h4M16 16h4"/>',
   'shape-wedge': '<path d="M12 12V3a9 9 0 0 1 9 9z"/>',
+  // A picture frame with a hill, no sun: an image shape, not an image-map.
+  'shape-image': '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m3 17 5-5 4 4 3-3 6 6"/>',
 } as const
 
 export type IconName = keyof typeof ICONS

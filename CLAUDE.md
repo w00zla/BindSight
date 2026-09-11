@@ -219,8 +219,9 @@ All of it lives in the Devices mode's Device Info view instead.
   references any more (an image shape deleted, the device image swapped).
 - Token -> input key undoes the +1 offset (`js2_button5` -> `button:4`) and
   maps axes through `DeviceInfo::axes`; `kb1_lalt+x` -> `key:x`, `gp1_a` ->
-  `pad:a` (a combo pins the part after the last `+`). Input key -> token is
-  `App.vue::keyToken` (needs the device's `jsN` from Game.log).
+  `pad:a` (a combo pins the part after the last `+`). The editor shows keys
+  by their native name only (`button 3`, `hat 0 up`, `axis 2 (rotz)`): an
+  image-map does not know which `jsN` its device is.
 - **Bundled image-maps** (`src-tauri/resources/imagemaps/`): Keyboard US,
   Keyboard DE, Xbox controller, PlayStation controller — generated, never
   hand-edited: `scripts/gen-imagemaps.py` holds the geometry and writes

@@ -804,21 +804,6 @@ function eventToken(p: JoyInput): string | null {
   }
 }
 
-// SC token for an image-map input key of a device (`button:4` on js2 ->
-// `js2_button5`), null when SC has no token for it (unlisted joystick,
-// pad without a slot, diagonal hat).
-function keyToken(d: DeviceInfo, key: string): string | null {
-  const [kind, a, b] = key.split(":");
-  if (kind === "key") return `kb1_${a}`;
-  if (kind === "pad") return d.gamepad_slot ? `gp1_${a}` : null;
-  const n = slotFor(d.sc_product_guid ?? null)?.stored_instance ?? null;
-  if (!n) return null;
-  if (kind === "button") return `js${n}_button${Number(a) + 1}`;
-  if (kind === "axis") return d.axes[Number(a)] ? `js${n}_${d.axes[Number(a)]}` : null;
-  if (kind === "hat") return ["up", "right", "down", "left"].includes(b) ? `js${n}_hat${Number(a) + 1}_${b}` : null;
-  return null;
-}
-
 // One path for every live input, whatever made it: the raw log collects in
 // every mode, the editor owns the input while an image-map is being edited.
 function onInput(p: JoyInput) {
@@ -1189,7 +1174,6 @@ onUnmounted(() => {
       :keyInput="keyInput"
       :chosenMapId="chosenMapId"
       :tokenLabel="tokenLabel"
-      :keyToken="keyToken"
       @choose="setMapChoice"
       @notify="notify"
       @saved="onMapsSaved"

@@ -1860,6 +1860,7 @@ async function compareWith(key: string) {
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   gap: 12px;
   align-items: stretch;
+  margin-bottom: 10px;
 }
 
 .rb-side {
@@ -1873,14 +1874,13 @@ async function compareWith(key: string) {
   margin-top: 22px;
 }
 
-/* Room for four lines up front, so a recorded or cleared binding does not
-   make the dialog jump. */
+/* As tall as its lines: one per device kind at most (joystick, keyboard,
+   gamepad), so the dialog barely moves. */
 .rb-block {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  min-height: 112px;
+  gap: 6px;
   padding: 10px 12px;
   border-radius: var(--radius-control);
   background: var(--bg-surface-2);
@@ -1898,7 +1898,7 @@ async function compareWith(key: string) {
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .rb-line .mono {
@@ -1927,7 +1927,7 @@ async function compareWith(key: string) {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
 }
 
 .rb-record .btn {
@@ -1937,6 +1937,7 @@ async function compareWith(key: string) {
 .rb-hint {
   color: var(--text-2);
   font-size: 13px;
+  line-height: 1.2;
   visibility: hidden;
 }
 

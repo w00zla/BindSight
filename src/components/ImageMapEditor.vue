@@ -49,8 +49,6 @@ const props = defineProps<{
   chosenMapId: (d: DeviceInfo) => string | null;
   // SC's label for an input token; echoes the token when there is none.
   tokenLabel: (token: string | null) => string;
-  // SC token for an image-map input key of a device, null when SC has none.
-  keyToken: (d: DeviceInfo, key: string) => string | null;
 }>();
 const emit = defineEmits<{
   notify: [message: string, type: "ok" | "error"];
@@ -71,7 +69,7 @@ const TOOLS: { tool: Tool; icon: IconName; title: string }[] = [
   { tool: "arrow", icon: "shape-arrow", title: "Arrow" },
   { tool: "arrow2", icon: "shape-arrow2", title: "Double arrow" },
   { tool: "rotate", icon: "shape-rotate", title: "Rotation" },
-  { tool: "image", icon: "image-plus", title: "Image" },
+  { tool: "image", icon: "shape-image", title: "Image" },
 ];
 const SYMBOLS: SymbolKind[] = ["arrow", "arrow2", "rotate"];
 
@@ -82,7 +80,7 @@ const DEFAULT_IMAGE_W = 0.15;
 const NEW_ARC = { inner: 0.6, angle: 270, rotation: 135 };
 const NEW_WEDGE = { angle: 90, rotation: 225 };
 const MIN_DRAW_PX = 4;
-const ZOOMS = [0.5, 0.75, 1, 1.5, 2, 3];
+const ZOOMS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
 
 // --- colours ---------------------------------------------------------------
 
@@ -148,11 +146,13 @@ function readPaint() {
 
 // --- device / image-map selection -----------------------------------------
 
+// The selection is a connected device (by SDL GUID) or, with "Show unused
+// image-maps" on, a hardware id no connected device has. Exactly one is set.
 const selectedGuid = ref("");
+const selectedUnusedHw = ref("");
 const device = computed(() => props.devices.find((d) => d.sdl_guid === selectedGuid.value) ?? null);
-
-
-const selectedName = computed(() => (device.value ? deviceName(device.value) : "—"));
+// Hardware id the listed image-maps belong to.
+const selectedHw = computed(() => device.value?.hardware_id ?? (selectedUnusedHw.value || null));
 
 const summaries = ref<ImageMapSummary[]>([]);
 
@@ -162,12 +162,45 @@ function mapsFor(d: DeviceInfo): ImageMapSummary[] {
 
 // Listed alphabetically by name — bundled and user maps in one order.
 const deviceMaps = computed(() =>
-  device.value
-    ? mapsFor(device.value)
-        .slice()
+  selectedHw.value
+    ? summaries.value
+        .filter((s) => sameHardware(s.hardware_id, selectedHw.value))
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
     : [],
 );
+
+// Image-maps whose device is not connected, one entry per hardware id,
+// listed after the devices while "Show unused image-maps" is on. Icon and
+// name come from the maps themselves (a keyboard or pad by its literal id).
+interface UnusedGroup {
+  hw: string;
+  name: string;
+  icon: "keyboard" | "gamepad" | "devices";
+  maps: ImageMapSummary[];
+}
+const showUnused = persistedRef<boolean>("bindsight.devices.showUnused", false);
+const unusedGroups = computed<UnusedGroup[]>(() => {
+  const by = new Map<string, UnusedGroup>();
+  for (const s of summaries.value) {
+    if (props.devices.some((d) => sameHardware(d.hardware_id, s.hardware_id))) continue;
+    const key = s.hardware_id.toLowerCase();
+    let g = by.get(key);
+    if (!g) {
+      g = {
+        hw: s.hardware_id,
+        name: s.hardware_name || s.hardware_id,
+        icon: key === "keyboard" ? "keyboard" : key === "gamepad" ? "gamepad" : "devices",
+        maps: [],
+      };
+      by.set(key, g);
+    }
+    g.maps.push(s);
+  }
+  return [...by.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+});
+const selectedUnused = computed(() => unusedGroups.value.find((g) => sameHardware(g.hw, selectedUnusedHw.value)) ?? null);
+
+const selectedName = computed(() => (device.value ? deviceName(device.value) : (selectedUnused.value?.name ?? "—")));
 
 const openId = ref("");
 const map = ref<ImageMap | null>(null);
@@ -232,34 +265,15 @@ const currentKey = ref<string | null>(null);
 const currentCount = computed(() =>
   currentKey.value ? shapes.value.filter((a) => a.input === currentKey.value).length : 0,
 );
-const currentToken = computed(() =>
-  currentKey.value && device.value ? props.keyToken(device.value, currentKey.value) : null,
-);
-// SC's label for the current input; empty when SC has no token or no label.
-const currentLabel = computed(() => {
-  const t = currentToken.value;
-  if (!t) return "";
-  const l = props.tokenLabel(t);
-  return l === t ? "" : l;
-});
-// Headline of the input card: label, else token, else the raw key.
-const currentText = computed(() => currentLabel.value || currentToken.value || currentKey.value || "");
-const currentSub = computed(() => {
-  const parts: string[] = [];
-  if (currentKey.value) {
-    if (currentToken.value && currentLabel.value) parts.push(currentToken.value);
-    if (currentToken.value) parts.push(currentKey.value);
-    else parts.push("not known to the game");
-  }
-  parts.push(selectedName.value);
-  return parts.join(" · ");
-});
+// Headline of the input card: the input's native name. No SC token or
+// label — an image-map does not know which jsN its device is.
+const currentText = computed(() => (currentKey.value ? keyName(currentKey.value) : ""));
 // The line under the Record button: can shapes be drawn right now?
-const inputStatus = computed<{ kind: "live" | "warn" | "ok"; icon: IconName; text: string }>(() => {
-  if (recording.value) return { kind: "live", icon: "target", text: "Waiting for input…" };
-  if (!currentKey.value) return { kind: "warn", icon: "warning", text: "Record an input before drawing" };
+const inputStatus = computed<{ kind: "warn" | "ok"; icon: IconName; text: string }>(() => {
+  if (!device.value) return { kind: "warn", icon: "warning", text: "Device not connected" };
+  if (!currentKey.value) return { kind: "warn", icon: "warning", text: "Record an input before adding shapes" };
   const n = currentCount.value;
-  return { kind: "ok", icon: "check", text: `Ready to draw · ${n} shape${n === 1 ? "" : "s"}` };
+  return { kind: "ok", icon: "check", text: n ? `Ready to add shapes · ${n} so far` : "Ready to add shapes" };
 });
 
 function dropInput() {
@@ -293,19 +307,19 @@ const filter = ref("");
 interface Bucket {
   key: string;
   text: string;
-  // True when the text is the token or the raw key, not SC's label.
-  mono: boolean;
   rows: Shape[];
 }
 
-// What an input key is called in the table: SC's label, else the token,
-// else the raw key.
-function inputText(key: string): { text: string; mono: boolean } {
-  const d = device.value;
-  const t = d ? props.keyToken(d, key) : null;
-  if (!t) return { text: key, mono: true };
-  const l = props.tokenLabel(t);
-  return l === t ? { text: t, mono: true } : { text: l, mono: false };
+// An input key's native name, as the Device Events tile writes it:
+// `button:3` -> "button 3", `hat:0:up` -> "hat 0 up", `axis:2` -> "axis 2
+// (rotz)", `key:lshift` -> "key lshift", `pad:a` -> "pad a".
+function keyName(key: string): string {
+  const [kind, a, b] = key.split(":");
+  if (kind === "axis") {
+    const sc = device.value?.axes[Number(a)];
+    return `axis ${a}${sc ? ` (${sc})` : ""}`;
+  }
+  return [kind, a, b].filter((x) => x !== undefined).join(" ");
 }
 
 // Sorting by INPUT orders the buckets, by SHAPE the rows inside each bucket
@@ -316,8 +330,7 @@ const buckets = computed<Bucket[]>(() => {
   for (const a of shapes.value) {
     let b = by.get(a.input);
     if (!b) {
-      const { text, mono } = inputText(a.input);
-      b = { key: a.input, text, mono, rows: [] };
+      b = { key: a.input, text: keyName(a.input), rows: [] };
       by.set(a.input, b);
     }
     b.rows.push(a);
@@ -536,7 +549,15 @@ watch(
   () => props.devices,
   (list) => {
     if (list.some((d) => d.sdl_guid === selectedGuid.value)) return;
-    if (dirty.value) return;
+    // An unused hardware id whose device just connected: same maps, now
+    // under the device.
+    const arrived = selectedUnusedHw.value ? list.find((d) => sameHardware(d.hardware_id, selectedUnusedHw.value)) : null;
+    if (arrived) {
+      selectedGuid.value = arrived.sdl_guid;
+      selectedUnusedHw.value = "";
+      return;
+    }
+    if (selectedUnusedHw.value || dirty.value) return;
     selectedGuid.value = list.find((d) => d.hardware_id)?.sdl_guid ?? "";
     currentKey.value = null;
     recording.value = false;
@@ -558,8 +579,32 @@ async function selectDevice(d: DeviceInfo) {
   if (!d.hardware_id || d.sdl_guid === selectedGuid.value) return;
   if (!(await requestLeave())) return;
   selectedGuid.value = d.sdl_guid;
+  selectedUnusedHw.value = "";
   closeMap();
   await openFirst();
+}
+
+async function selectUnused(g: UnusedGroup) {
+  showDeviceInfo.value = false;
+  if (sameHardware(g.hw, selectedUnusedHw.value)) return;
+  if (!(await requestLeave())) return;
+  selectedGuid.value = "";
+  selectedUnusedHw.value = g.hw;
+  closeMap();
+  await openFirst();
+}
+
+// Hiding the unused entries while one is selected moves the selection to
+// the first device (after the usual unsaved-changes question).
+async function toggleShowUnused() {
+  if (showUnused.value && selectedUnusedHw.value) {
+    if (!(await requestLeave())) return;
+    selectedUnusedHw.value = "";
+    selectedGuid.value = props.devices.find((d) => d.hardware_id)?.sdl_guid ?? "";
+    closeMap();
+    await openFirst();
+  }
+  showUnused.value = !showUnused.value;
 }
 
 async function openMap(id: string) {
@@ -590,8 +635,7 @@ async function pickImage(): Promise<string | null> {
 // The empty slot for a map that does not exist yet: nothing is loaded, the
 // image is still missing. "Choose image" turns it into a real map.
 async function newMap() {
-  const d = device.value;
-  if (!d?.hardware_id) return;
+  if (!selectedHw.value) return;
   showDeviceInfo.value = false;
   if (!(await requestLeave())) return;
   closeMap();
@@ -599,15 +643,15 @@ async function newMap() {
 }
 
 async function createMap() {
-  const d = device.value;
-  if (!d?.hardware_id) return;
+  const hw = selectedHw.value;
+  if (!hw) return;
   try {
     const imagePath = await pickImage();
     if (!imagePath) return;
     const m = await invoke<ImageMap>("create_imagemap", {
-      name: deviceName(d),
-      hardwareId: d.hardware_id,
-      hardwareName: d.sc_name ?? "",
+      name: selectedName.value,
+      hardwareId: hw,
+      hardwareName: device.value?.sc_name ?? selectedUnused.value?.name ?? "",
       imagePath,
     });
     await loadSummaries();
@@ -714,16 +758,15 @@ async function saveMap(): Promise<boolean> {
   }
 }
 
-async function exportMap() {
-  const m = map.value;
-  if (!m) return;
+// Export any image-map by id: the open one (Export button) or an unused one.
+async function exportMap(id: string, name: string) {
   try {
     const dest = await save({
-      defaultPath: `${m.name || "image-map"}.zip`,
+      defaultPath: `${name || "image-map"}.zip`,
       filters: [{ name: "Image-map", extensions: ["zip"] }],
     });
     if (!dest) return;
-    await invoke("export_imagemap", { id: m.id, destPath: dest });
+    await invoke("export_imagemap", { id, destPath: dest });
     emit("notify", "Image-map exported", "ok");
   } catch (e) {
     emit("notify", String(e), "error");
@@ -741,8 +784,13 @@ async function importMap() {
     const d = props.devices.find((dev) => sameHardware(dev.hardware_id, s.hardware_id));
     if (d) {
       selectedGuid.value = d.sdl_guid;
-      await loadMap(s.id);
+      selectedUnusedHw.value = "";
+    } else {
+      showUnused.value = true;
+      selectedGuid.value = "";
+      selectedUnusedHw.value = s.hardware_id;
     }
+    await loadMap(s.id);
     emit("saved");
     emit("notify", `Imported ${s.name}`, "ok");
   } catch (e) {
@@ -883,9 +931,14 @@ function cancelDraw() {
   draftPoly.value = [];
 }
 
-function deleteShape(id: string) {
+async function deleteShape(id: string) {
   const m = map.value;
   if (!m || locked.value || !editing.value) return;
+  const choice = await ask("Delete shape?", "trash", [
+    { label: "Delete", kind: "danger", value: "delete" },
+    { label: "Cancel", kind: "outline", value: "cancel" },
+  ]);
+  if (choice !== "delete") return;
   m.shapes = m.shapes.filter((a) => a.id !== id);
   if (selectedId.value === id) selectedId.value = null;
 }
@@ -960,7 +1013,7 @@ function onEditorKey(e: KeyboardEvent) {
       break;
     case "Delete":
     case "Backspace":
-      deleteShape(a.id);
+      void deleteShape(a.id);
       break;
     case "d":
     case "D":
@@ -973,10 +1026,10 @@ function onEditorKey(e: KeyboardEvent) {
   e.preventDefault();
 }
 
-// One generic icon for shapes; only polygons and images have their own.
+// The kind's tool icon.
 function shapeIcon(a: Shape): IconName {
-  const k = a.geometry.kind;
-  return k === "polygon" ? "shape-polygon" : k === "image" ? "image" : "shape";
+  const g = a.geometry;
+  return g.kind === "symbol" ? `shape-${g.symbol}` : `shape-${g.kind}`;
 }
 
 function shapeKind(a: Shape): string {
@@ -1043,13 +1096,52 @@ function stagePointer(): { x: number; y: number } | null {
   return stage?.getPointerPosition() ?? null;
 }
 
+// Drag the canvas around inside its scrolling box: the middle button or
+// Shift + left button anywhere (caught before Konva sees the press, so no
+// shape drag or draw starts), the left button on the bare image (select
+// mode) or on the box around the canvas.
+let pan: { x: number; y: number; left: number; top: number } | null = null;
+
+function startPan(ev: MouseEvent) {
+  const box = stageBox.value;
+  if (!box) return;
+  ev.preventDefault();
+  pan = { x: ev.clientX, y: ev.clientY, left: box.scrollLeft, top: box.scrollTop };
+  box.classList.add("panning");
+  const move = (e: MouseEvent) => {
+    if (!pan) return;
+    box.scrollLeft = pan.left - (e.clientX - pan.x);
+    box.scrollTop = pan.top - (e.clientY - pan.y);
+  };
+  const up = () => {
+    pan = null;
+    box.classList.remove("panning");
+    window.removeEventListener("mousemove", move);
+    window.removeEventListener("mouseup", up);
+  };
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
+}
+
+function onBoxMouseDown(ev: MouseEvent) {
+  if ((ev.target as HTMLElement | null)?.closest(".shape-panel")) return;
+  const onBox = ev.target === stageBox.value;
+  if (ev.button === 1 || (ev.button === 0 && (ev.shiftKey || onBox))) {
+    ev.stopPropagation();
+    startPan(ev);
+  }
+}
+
 function onStageMouseDown(e: KonvaEventObject<MouseEvent>) {
   if (!W.value) return;
   const pos = stagePointer();
   if (!pos) return;
   if (selectMode.value) {
-    // A click on the bare image clears the selection.
-    if (e.target === e.target.getStage() || e.target.name() === "bg") selectedId.value = null;
+    // A click on the bare image clears the selection and starts a pan.
+    if (e.target === e.target.getStage() || e.target.name() === "bg") {
+      selectedId.value = null;
+      startPan(e.evt);
+    }
     return;
   }
   if (locked.value) return;
@@ -1275,7 +1367,7 @@ function onShapeClick(a: Shape) {
 
 function onShapeEnter(a: Shape) {
   const pos = stagePointer();
-  hover.value = pos ? { x: pos.x + 10, y: pos.y + 10, text: inputText(a.input).text } : null;
+  hover.value = pos ? { x: pos.x + 10, y: pos.y + 10, text: keyName(a.input) } : null;
 }
 
 function onShapeLeave() {
@@ -1681,13 +1773,48 @@ function noMaps(d: DeviceInfo): boolean {
               </button>
             </div>
           </template>
+
+          <!-- image-maps without a connected device, as entries of their own -->
+          <template v-if="showUnused">
+            <template v-for="g in unusedGroups" :key="g.hw">
+              <div class="dev unused" :class="{ on: sameHardware(g.hw, selectedUnusedHw) }" :title="g.hw" @click="selectUnused(g)">
+                <div class="dev-name">
+                  <Icon :name="g.icon" :size="15" class="dev-kind" />
+                  <span>{{ g.name }}</span>
+                </div>
+                <div class="dev-line">Not connected</div>
+              </div>
+              <div v-if="sameHardware(g.hw, selectedUnusedHw)" class="maps">
+                <div
+                  v-for="s in deviceMaps"
+                  :key="s.id"
+                  class="map"
+                  :class="{ open: s.id === openId }"
+                  @click="openMap(s.id)"
+                >
+                  <span class="map-name">{{ s.name }}</span>
+                  <span v-if="s.source === 'bundled'" class="ro" title="Read-only">
+                    <Icon name="lock" :size="13" />
+                  </span>
+                </div>
+                <button type="button" class="map-new" @click="newMap">
+                  <Icon name="plus" :size="13" />
+                  <span>New image-map</span>
+                </button>
+              </div>
+            </template>
+          </template>
         </div>
+        <label class="check">
+          <input type="checkbox" :checked="showUnused" @change="toggleShowUnused" />
+          Show unused image-maps
+        </label>
         <div class="foot">
           <button type="button" class="btn outline wide" @click="importMap">
             <Icon name="download" :size="14" />
             Import
           </button>
-          <button type="button" class="btn outline wide" :disabled="!map" @click="exportMap">
+          <button type="button" class="btn outline wide" :disabled="!map" @click="map && exportMap(map.id, map.name)">
             <Icon name="upload" :size="14" />
             Export
           </button>
@@ -1727,8 +1854,8 @@ function noMaps(d: DeviceInfo): boolean {
         <button
           type="button"
           class="btn primary small"
-          :disabled="isChosen"
-          :title="isChosen ? 'Already in use' : undefined"
+          :disabled="isChosen || !device"
+          :title="isChosen ? 'Already in use' : !device ? 'Device not connected' : undefined"
           @click="useForDevice"
         >
           <Icon name="check" :size="14" />
@@ -1845,19 +1972,18 @@ function noMaps(d: DeviceInfo): boolean {
       </template>
       <template v-else-if="map">
         <div v-if="editing" class="centre-head">
-          <template v-if="editing">
-            <button
-              v-for="t in TOOLS"
-              :key="t.tool"
-              type="button"
-              class="tool"
-              :class="{ on: tool === t.tool }"
-              :title="t.title"
-              @click="setTool(t.tool)"
-            >
-              <Icon :name="t.icon" :size="16" />
-            </button>
-          </template>
+          <button
+            v-for="t in TOOLS"
+            :key="t.tool"
+            type="button"
+            class="tool"
+            :class="{ on: tool === t.tool }"
+            :disabled="!currentKey"
+            :title="currentKey ? t.title : `${t.title} · record an input first`"
+            @click="setTool(t.tool)"
+          >
+            <Icon :name="t.icon" :size="16" />
+          </button>
           <div class="grow" />
           <div class="zoom mono">
             <button type="button" title="Zoom out" @click="zoomStep(-1)">−</button>
@@ -1868,7 +1994,114 @@ function noMaps(d: DeviceInfo): boolean {
           </div>
         </div>
 
-        <div ref="stageBox" class="stage-box">
+        <div ref="stageBox" class="stage-box" @mousedown.capture="onBoxMouseDown">
+          <!-- the selected shape's panel floats over the canvas, top left -->
+          <div v-if="editing && selectedShape" class="shape-panel">
+            <div class="sp-head">
+              <Icon :name="shapeIcon(selectedShape)" :size="14" />
+              <span class="sp-kind">{{ shapeKind(selectedShape) }}</span>
+              <span class="sp-input mono">{{ keyName(selectedShape.input) }}</span>
+              <div class="grow" />
+              <button type="button" class="row-del" title="Duplicate · Ctrl+D" @click="duplicateShape(selectedShape)">
+                <Icon name="clone" :size="13" />
+              </button>
+              <button type="button" class="row-del" title="Delete · Del" @click="deleteShape(selectedShape.id)">
+                <Icon name="close" :size="13" />
+              </button>
+            </div>
+            <template v-if="selectedShape.geometry.kind !== 'image'">
+              <div v-for="role in (['stroke', 'fill'] as const)" :key="role" class="sp-row">
+                <span class="sp-label">{{ role === "stroke" ? "Outline" : "Fill" }}</span>
+                <div class="sp-colour">
+                  <div class="swatches">
+                    <button
+                      v-for="c in swatches"
+                      :key="c"
+                      type="button"
+                      class="swatch"
+                      :class="{ on: colourHex(roleColour(selectedShape, role)) === c.toLowerCase() }"
+                      :style="{ background: c }"
+                      :title="c"
+                      @click="setRoleHex(selectedShape, role, c)"
+                    />
+                  </div>
+                  <div class="sp-line">
+                    <span class="swatch big" :style="{ background: roleColour(selectedShape, role) }" />
+                    <input
+                      class="hex mono"
+                      :value="colourHex(roleColour(selectedShape, role))"
+                      maxlength="7"
+                      spellcheck="false"
+                      @change="onHexInput(selectedShape, role, $event)"
+                    />
+                    <input
+                      type="range"
+                      class="range"
+                      min="0"
+                      max="100"
+                      :value="colourAlpha(roleColour(selectedShape, role))"
+                      title="Opacity"
+                      @input="onAlphaInput(selectedShape, role, $event)"
+                    />
+                    <span class="mono sp-val">{{ colourAlpha(roleColour(selectedShape, role)) }}%</span>
+                    <button
+                      type="button"
+                      class="btn outline small"
+                      :disabled="!selectedShape[role]"
+                      title="Back to the default colour"
+                      @click="resetRole(selectedShape, role)"
+                    >
+                      Default
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </template>
+            <div v-if="selectedShape.geometry.kind === 'rect'" class="sp-row">
+              <span class="sp-label">Corners</span>
+              <div class="sp-line">
+                <input
+                  type="range"
+                  class="range"
+                  min="0"
+                  max="50"
+                  :value="Math.round(selectedShape.geometry.radius * 100)"
+                  @input="onRangeInput($event, (v) => ((selectedShape!.geometry as RectGeometry).radius = v / 100))"
+                />
+                <span class="mono sp-val">{{ Math.round(selectedShape.geometry.radius * 100) }}%</span>
+              </div>
+            </div>
+            <template v-if="selectedShape.geometry.kind === 'arc' || selectedShape.geometry.kind === 'wedge'">
+              <div class="sp-row">
+                <span class="sp-label">Angle</span>
+                <div class="sp-line">
+                  <input
+                    type="range"
+                    class="range"
+                    min="5"
+                    max="360"
+                    :value="Math.round(selectedShape.geometry.angle)"
+                    @input="onRangeInput($event, (v) => ((selectedShape!.geometry as ArcGeometry | WedgeGeometry).angle = v))"
+                  />
+                  <span class="mono sp-val">{{ Math.round(selectedShape.geometry.angle) }}°</span>
+                </div>
+              </div>
+              <div v-if="selectedShape.geometry.kind === 'arc'" class="sp-row">
+                <span class="sp-label">Inner</span>
+                <div class="sp-line">
+                  <input
+                    type="range"
+                    class="range"
+                    min="0"
+                    max="95"
+                    :value="Math.round(selectedShape.geometry.inner * 100)"
+                    @input="onRangeInput($event, (v) => ((selectedShape!.geometry as ArcGeometry).inner = v / 100))"
+                  />
+                  <span class="mono sp-val">{{ Math.round(selectedShape.geometry.inner * 100) }}%</span>
+                </div>
+              </div>
+            </template>
+          </div>
           <div class="stage-centre">
             <v-stage
               v-if="imgEl && W"
@@ -2035,24 +2268,25 @@ function noMaps(d: DeviceInfo): boolean {
     <!-- right: live input and shapes -->
     <aside v-if="!showDeviceInfo" class="col-right">
       <div v-if="editing" class="input-card">
-        <div class="ic-key">
+        <div class="ic-key" :class="{ on: !!currentKey }">
           <Icon name="bolt" :size="22" />
-          <span v-if="currentKey" class="key" :class="{ mono: !currentLabel }" :title="currentKey">{{ currentText }}</span>
-          <span v-else class="key idle">{{ recording ? "Press an input…" : "No input" }}</span>
+          <span v-if="currentKey" class="key">{{ currentText }}</span>
+          <span v-else class="key idle">{{ recording ? "Waiting for input…" : "No input registered" }}</span>
         </div>
-        <div class="ic-sub mono">{{ currentSub }}</div>
+        <div class="ic-sub">{{ selectedName }}</div>
         <div class="ic-btns">
           <button
             type="button"
             class="btn small"
             :class="recording ? 'primary' : 'outline'"
-            title="Take the next input of this device"
+            :disabled="!device"
+            :title="device ? 'Take the next input of this device' : 'Device not connected'"
             @click="recording = true"
           >
             <Icon name="target" :size="13" />
             {{ recording ? "Recording…" : "Record Input" }}
           </button>
-          <span class="ic-hint"><span class="kbd mono">Esc</span> stops</span>
+          <span v-if="recording" class="ic-hint">Esc to cancel</span>
         </div>
         <div class="ic-status" :class="inputStatus.kind">
           <Icon :name="inputStatus.icon" :size="13" />
@@ -2060,117 +2294,10 @@ function noMaps(d: DeviceInfo): boolean {
         </div>
       </div>
 
-      <!-- the selected shape: colours and per-kind settings -->
-      <div v-if="editing && selectedShape" class="shape-panel">
-        <div class="sp-head">
-          <Icon :name="shapeIcon(selectedShape)" :size="14" />
-          <span class="sp-kind">{{ shapeKind(selectedShape) }}</span>
-          <span class="sp-input" :class="{ mono: inputText(selectedShape.input).mono }">{{ inputText(selectedShape.input).text }}</span>
-          <div class="grow" />
-          <button type="button" class="row-del" title="Duplicate · Ctrl+D" @click="duplicateShape(selectedShape)">
-            <Icon name="clone" :size="13" />
-          </button>
-          <button type="button" class="row-del" title="Delete · Del" @click="deleteShape(selectedShape.id)">
-            <Icon name="trash" :size="13" />
-          </button>
-        </div>
-        <template v-if="selectedShape.geometry.kind !== 'image'">
-          <div v-for="role in (['stroke', 'fill'] as const)" :key="role" class="sp-row">
-            <span class="sp-label">{{ role === "stroke" ? "Outline" : "Fill" }}</span>
-            <div class="sp-colour">
-              <div class="swatches">
-                <button
-                  v-for="c in swatches"
-                  :key="c"
-                  type="button"
-                  class="swatch"
-                  :class="{ on: colourHex(roleColour(selectedShape, role)) === c.toLowerCase() }"
-                  :style="{ background: c }"
-                  :title="c"
-                  @click="setRoleHex(selectedShape, role, c)"
-                />
-              </div>
-              <div class="sp-line">
-                <span class="swatch big" :style="{ background: roleColour(selectedShape, role) }" />
-                <input
-                  class="hex mono"
-                  :value="colourHex(roleColour(selectedShape, role))"
-                  maxlength="7"
-                  spellcheck="false"
-                  @change="onHexInput(selectedShape, role, $event)"
-                />
-                <input
-                  type="range"
-                  class="range"
-                  min="0"
-                  max="100"
-                  :value="colourAlpha(roleColour(selectedShape, role))"
-                  title="Opacity"
-                  @input="onAlphaInput(selectedShape, role, $event)"
-                />
-                <span class="mono sp-val">{{ colourAlpha(roleColour(selectedShape, role)) }}%</span>
-                <button
-                  type="button"
-                  class="btn outline small"
-                  :disabled="!selectedShape[role]"
-                  title="Back to the default colour"
-                  @click="resetRole(selectedShape, role)"
-                >
-                  Default
-                </button>
-              </div>
-            </div>
-          </div>
-        </template>
-        <div v-if="selectedShape.geometry.kind === 'rect'" class="sp-row">
-          <span class="sp-label">Corners</span>
-          <div class="sp-line">
-            <input
-              type="range"
-              class="range"
-              min="0"
-              max="50"
-              :value="Math.round(selectedShape.geometry.radius * 100)"
-              @input="onRangeInput($event, (v) => ((selectedShape!.geometry as RectGeometry).radius = v / 100))"
-            />
-            <span class="mono sp-val">{{ Math.round(selectedShape.geometry.radius * 100) }}%</span>
-          </div>
-        </div>
-        <template v-if="selectedShape.geometry.kind === 'arc' || selectedShape.geometry.kind === 'wedge'">
-          <div class="sp-row">
-            <span class="sp-label">Angle</span>
-            <div class="sp-line">
-              <input
-                type="range"
-                class="range"
-                min="5"
-                max="360"
-                :value="Math.round(selectedShape.geometry.angle)"
-                @input="onRangeInput($event, (v) => ((selectedShape!.geometry as ArcGeometry | WedgeGeometry).angle = v))"
-              />
-              <span class="mono sp-val">{{ Math.round(selectedShape.geometry.angle) }}°</span>
-            </div>
-          </div>
-          <div v-if="selectedShape.geometry.kind === 'arc'" class="sp-row">
-            <span class="sp-label">Inner</span>
-            <div class="sp-line">
-              <input
-                type="range"
-                class="range"
-                min="0"
-                max="95"
-                :value="Math.round(selectedShape.geometry.inner * 100)"
-                @input="onRangeInput($event, (v) => ((selectedShape!.geometry as ArcGeometry).inner = v / 100))"
-              />
-              <span class="mono sp-val">{{ Math.round(selectedShape.geometry.inner * 100) }}%</span>
-            </div>
-          </div>
-        </template>
-      </div>
-
       <div class="shapes" :style="{ '--cols': cols.template.value, '--cols-min': `${cols.minWidth.value}px` }">
-        <div class="tabs">
-          <div class="tab">Shapes</div>
+        <div class="shapes-head">
+          <div class="panel-title">Shapes</div>
+          <div class="divider" />
           <button type="button" class="btn outline small square" title="Expand all" :disabled="allExpanded" @click="expandAll">
             <Icon name="unfold" :size="14" />
           </button>
@@ -2178,9 +2305,9 @@ function noMaps(d: DeviceInfo): boolean {
             <Icon name="fold" :size="14" />
           </button>
           <div class="grow" />
-          <div class="filter">
-            <Icon name="search" :size="13" />
-            <input v-model="filter" class="filter-in mono" placeholder="Filter…" spellcheck="false" />
+          <div class="search">
+            <Icon name="search" :size="14" />
+            <input v-model="filter" class="mono" placeholder="Find…" spellcheck="false" />
           </div>
         </div>
         <div class="table">
@@ -2195,7 +2322,7 @@ function noMaps(d: DeviceInfo): boolean {
             <div class="row group-row" :class="{ cur: g.key === currentKey }" @click="toggleBucket(g.key)">
               <span class="input-cell">
                 <Icon :name="isOpen(g) ? 'chevron-down' : 'chevron-right'" :size="14" class="chevron" />
-                <span class="cell-input" :class="{ mono: g.mono }" :title="g.key"
+                <span class="cell-input mono" :title="g.key"
                   ><Icon name="bolt" :size="12" class="live-mark" />{{ g.text }}</span
                 >
               </span>
@@ -2214,7 +2341,7 @@ function noMaps(d: DeviceInfo): boolean {
                   <Icon :name="shapeIcon(a)" :size="14" class="shape-icon" />
                   <span class="cell-kind">{{ shapeKind(a) }}</span>
                   <button v-if="editing" type="button" class="row-del" title="Delete" @click.stop="deleteShape(a.id)">
-                    <Icon name="trash" :size="13" />
+                    <Icon name="close" :size="13" />
                   </button>
                 </span>
               </div>
@@ -2405,6 +2532,51 @@ function noMaps(d: DeviceInfo): boolean {
   padding: 6px 12px 12px;
 }
 
+/* Own checkbox look (mirrors SettingsDialog): WebKitGTK would paint GTK's. */
+.check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 14px 14px;
+  font-size: 13px;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+}
+
+.check input {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex-shrink: 0;
+  display: grid;
+  place-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.check input:hover {
+  border-color: var(--accent);
+}
+
+.check input:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.check input:checked::after {
+  content: "";
+  width: 8px;
+  height: 4px;
+  border-left: 2px solid var(--accent-text);
+  border-bottom: 2px solid var(--accent-text);
+  transform: translateY(-1px) rotate(-45deg);
+}
+
 .dev-list {
   flex: 1;
   min-height: 0;
@@ -2433,6 +2605,16 @@ function noMaps(d: DeviceInfo): boolean {
 .dev.dim {
   opacity: 0.55;
   cursor: default;
+}
+
+/* An image-map's device that is not connected. */
+.dev.unused {
+  border-style: dashed;
+  border-color: var(--border);
+}
+
+.dev.unused.on {
+  border-color: var(--accent);
 }
 
 .dev-name {
@@ -2637,6 +2819,7 @@ function noMaps(d: DeviceInfo): boolean {
 }
 
 .stage-box {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -2647,6 +2830,11 @@ function noMaps(d: DeviceInfo): boolean {
     linear-gradient(color-mix(in srgb, var(--text-2) 6%, transparent) 1px, transparent 1px),
     linear-gradient(90deg, color-mix(in srgb, var(--text-2) 6%, transparent) 1px, transparent 1px);
   background-size: 24px 24px;
+}
+
+.stage-box.panning,
+.stage-box.panning * {
+  cursor: grabbing !important;
 }
 
 /* `margin: auto` centres without cutting off the edges when it overflows. */
@@ -2773,24 +2961,31 @@ function noMaps(d: DeviceInfo): boolean {
   gap: 8px;
 }
 
+/* Same look as the Monitor's Last Input card: bolt and label in live colour
+   while there is an input, dimmed otherwise. */
 .ic-key {
   display: flex;
   align-items: center;
   gap: 10px;
+  color: var(--text-3);
+}
+
+.ic-key.on {
   color: var(--live);
 }
 
-.ic-key :deep(svg) {
+.ic-key.on :deep(svg) {
   fill: color-mix(in srgb, var(--live) 25%, transparent);
 }
 
 .key {
-  font-size: 26px;
+  font-size: 22px;
+  font-weight: 600;
   line-height: 1.1;
 }
 
+/* Same size as a recorded input, so the card keeps its height. */
 .key.idle {
-  font-size: 18px;
   color: var(--text-3);
 }
 
@@ -2811,26 +3006,12 @@ function noMaps(d: DeviceInfo): boolean {
   color: var(--text-3);
 }
 
-.kbd {
-  display: inline-block;
-  padding: 0 5px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  font-size: 11px;
-  line-height: 16px;
-  color: var(--text-2);
-}
-
 /* Colour-coded state under the Record button. */
 .ic-status {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
-}
-
-.ic-status.live {
-  color: var(--live);
 }
 
 .ic-status.warn {
@@ -2851,48 +3032,36 @@ function noMaps(d: DeviceInfo): boolean {
   overflow: hidden;
 }
 
-.tabs {
+/* Same head as the bindings deck: title, divider, buttons, search. */
+.shapes-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 10px 12px 0;
+  gap: 4px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--border-dim);
 }
 
-.tabs .btn.square {
-  margin-bottom: 6px;
+.shapes-head .divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 8px;
+  background: var(--border-dim);
 }
 
-.tab {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 8px 14px;
-  border-radius: var(--radius-control) var(--radius-control) 0 0;
-  background: var(--bg-surface-2);
-  font-weight: 600;
-  font-size: 13px;
-}
-
-.tab span {
-  color: var(--text-2);
-}
-
-.filter {
+.search {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 30px;
-  width: 150px;
-  padding: 0 10px;
-  margin-bottom: 6px;
+  height: var(--h-chip);
+  width: 180px;
+  min-width: 0;
+  padding: 0 12px;
   border-radius: var(--radius-control);
   background: var(--bg-surface-2);
   color: var(--text-2);
-  box-sizing: border-box;
 }
 
-.filter-in {
+.search input {
   flex: 1;
   min-width: 0;
   border: none;
@@ -2902,10 +3071,23 @@ function noMaps(d: DeviceInfo): boolean {
   outline: none;
 }
 
-/* --- shape panel --- */
+.search input::placeholder {
+  color: rgba(173, 211, 235, 0.6);
+}
+
+/* --- shape panel: floats over the canvas in its top-left corner, sticky so
+   it stays there while the canvas scrolls --- */
 
 .shape-panel {
-  background: var(--bg-surface);
+  position: sticky;
+  top: 0;
+  left: 0;
+  align-self: flex-start;
+  z-index: 2;
+  width: 330px;
+  margin: -8px 0 0 -8px;
+  background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+  border: 1px solid var(--border-dim);
   border-radius: var(--radius-panel);
   padding: 12px 16px;
   display: flex;
@@ -3185,5 +3367,6 @@ function noMaps(d: DeviceInfo): boolean {
   background: var(--bg-surface-2);
   color: var(--err);
 }
+
 
 </style>
