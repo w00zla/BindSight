@@ -229,11 +229,11 @@ fn is_bare_name(name: &str) -> bool {
         && !name.contains('\0')
 }
 
-/// Characters a user-given name may contain: letters, digits, space, `_`
-/// and `-` — nothing that needs escaping in a file name, a shell or a URL.
-/// The same rule is meant for device names later on.
+/// Characters a user-given name may contain: letters, digits, space, `_`,
+/// `-` and brackets of any kind — nothing that needs escaping in a file
+/// name or a URL. The same rule is meant for device names later on.
 pub fn is_name_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == ' ' || c == '_' || c == '-'
+    c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-' | '(' | ')' | '[' | ']' | '{' | '}')
 }
 
 pub const NAME_MAX: usize = 64;
@@ -288,7 +288,7 @@ pub fn validate(p: &ImageMap) -> Result<(), String> {
         return Err("image-map name is empty".into());
     }
     if !is_safe_name(&p.name) {
-        return Err(format!("invalid image-map name {:?} (letters, digits, space, _ and - only)", p.name));
+        return Err(format!("invalid image-map name {:?} (letters, digits, space, _ - and brackets only)", p.name));
     }
     if p.hardware_id.trim().is_empty() {
         return Err("hardware id is empty".into());
@@ -893,13 +893,13 @@ mod tests {
         let mut p = sample("p1", "ok");
         p.name = "  ".into();
         assert!(validate(&p).unwrap_err().contains("name"));
-        for bad in ["My/Map", "a\\b", " lead", "trail ", "quote\"", "ümlaut", &"x".repeat(NAME_MAX + 1)] {
+        for bad in ["My/Map", "a\\b", " lead", "trail ", "quote\"", "naïve", &"x".repeat(NAME_MAX + 1)] {
             let mut p = sample("p1", "ok");
             p.name = bad.to_string();
             assert!(validate(&p).is_err(), "{bad:?} should be rejected");
         }
         let mut p = sample("p1", "ok");
-        p.name = "VKB Gladiator_NXT-EVO 2".into();
+        p.name = "VKB Gladiator_NXT-EVO 2 (left) [v1] {x}".into();
         assert!(validate(&p).is_ok());
 
         let mut p = sample("p1", "ok");
@@ -1173,12 +1173,12 @@ mod tests {
 
     #[test]
     fn sanitize_name_makes_names_safe() {
-        assert_eq!(sanitize_name("  VKB-Sim  Gladiator/NXT (EVO) ", "x"), "VKB-Sim Gladiator NXT EVO");
+        assert_eq!(sanitize_name("  VKB-Sim  Gladiator/NXT (EVO) ", "x"), "VKB-Sim Gladiator NXT (EVO)");
         assert_eq!(sanitize_name("Keyboard/Mouse", "x"), "Keyboard Mouse");
         assert_eq!(sanitize_name("///", "fallback"), "fallback");
         assert_eq!(sanitize_name("", "fallback"), "fallback");
         assert!(sanitize_name(&"ab ".repeat(40), "x").len() <= NAME_MAX);
-        assert!(is_safe_name(&sanitize_name("ümlaut & co", "x")));
+        assert!(is_safe_name(&sanitize_name("café & co", "x")));
     }
 
     #[test]

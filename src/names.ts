@@ -1,10 +1,11 @@
 // User-given names (image-maps now, device names later): letters, digits,
-// space, `_` and `-` only, so nothing ever needs escaping in a file name, a
-// shell or a URL. Mirrors `imagemap::is_name_char` / `sanitize_name`.
+// space, `_`, `-` and brackets of any kind only, so nothing ever needs
+// escaping in a file name or a URL. Mirrors `imagemap::is_name_char` /
+// `sanitize_name`.
 
 export const NAME_MAX = 64;
 
-const NOT_NAME = /[^A-Za-z0-9 _-]/g;
+const NOT_NAME = /[^A-Za-z0-9 _()[\]{}-]/g;
 
 // Drop what a name must not contain; spaces are kept as typed, so this can
 // run on every keystroke.

@@ -212,8 +212,8 @@ All of it lives in the Devices mode's Device Info view instead.
   `angle`, `rotation`) and `image` (its own file in the map folder, no
   colours, box like a symbol). Several shapes per input are fine.
 - **Names** (image-map now, device names later): letters, digits, space,
-  `_`, `-` only, trimmed, at most 64 characters — nothing that needs
-  escaping anywhere. `imagemap::sanitize_name` / `src/names.ts` hold the
+  `_`, `-` and brackets `()[]{}` only, trimmed, at most 64 characters —
+  nothing that needs escaping in a file name or URL. `imagemap::sanitize_name` / `src/names.ts` hold the
   rule; the backend validates, the editor strips as you type.
 - **A shape is drawn only while its input is active** (Monitor); the image
   itself is the resting look — anything permanent belongs in the image.
@@ -227,10 +227,10 @@ All of it lives in the Devices mode's Device Info view instead.
   by their native name only (`button 3`, `hat 0 up`, `axis 2 (rotz)`): an
   image-map does not know which `jsN` its device is.
 - **Bundled image-maps** (`src-tauri/resources/imagemaps/`): Keyboard US,
-  Keyboard DE, Xbox controller, PlayStation controller — generated, never
-  hand-edited (a generator outside the repo holds the geometry and writes
-  `image.png` + `imagemap.json`; fixed ids `4b7a2c1e-…-000000000001` to
-  `…0004`).
+  Keyboard DE, Xbox controller, PlayStation controller, Keyboard US (TKL),
+  Keyboard DE (TKL) — generated, never hand-edited (a generator outside the
+  repo holds the geometry and writes `image.png` + `imagemap.json`; fixed
+  ids `4b7a2c1e-…-000000000001` to `…0006`).
 - **Default map per device** (`App.vue`, `chosenMapId`): the user's choice,
   else the first fitting hard-coded `BUNDLED_RULES` entry (not part of the
   model; gamepads by case-insensitive `*`/`?` wildcards on the controller
