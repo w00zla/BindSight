@@ -260,12 +260,16 @@ function dropInput() {
 const RIGHT_W = { min: 300, max: 700, def: 380 };
 const rightWidth = persistedRef<number>("bindsight.devices.rightWidth", RIGHT_W.def);
 let rightStart: number | null = null;
+// Refitting the canvas re-lays out every shape; while the splitter moves
+// the canvas keeps its size and is fitted once on release.
+let measureBox: (() => void) | null = null;
 function dragRight(delta: number) {
   rightStart ??= rightWidth.value;
   rightWidth.value = Math.min(RIGHT_W.max, Math.max(RIGHT_W.min, Math.round(rightStart + delta)));
 }
 function endDragRight() {
   rightStart = null;
+  measureBox?.();
 }
 
 // --- shapes table ------------------------------------------------------------
@@ -522,8 +526,11 @@ watch(stageBox, (el) => {
     boxW.value = el.clientWidth - 2 * STAGE_PAD;
     boxH.value = el.clientHeight - 2 * STAGE_PAD;
   };
+  measureBox = measure;
   measure();
-  ro = new ResizeObserver(measure);
+  ro = new ResizeObserver(() => {
+    if (rightStart === null) measure();
+  });
   ro.observe(el);
 });
 
