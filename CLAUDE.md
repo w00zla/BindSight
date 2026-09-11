@@ -52,7 +52,7 @@ presentational components:
   one input at a time, pending rebinds kept until Save / Discard in the
   action tile above it) or Compare (any other source picked on the left).
 - `ImageMapEditor` — the Devices mode (Konva via `vue-konva`, three columns:
-  devices + image-maps, canvas, live input + areas); also hosts Device Info
+  devices + image-maps, canvas, live input + shapes); also hosts Device Info
   (Device List and Device Events tiles, each with its own Save).
   `DeviceImage.vue` is the plain-SVG viewer.
 - `SettingsDialog` (own-styled checkboxes, WebKitGTK would paint GTK's),
@@ -191,26 +191,36 @@ never goes to the app log** — no enumeration lines, no axis derivation, no
 input events, only real failures (hidapi init, joystick open, thread death).
 All of it lives in the Devices mode's Device Info view instead.
 
-## Image-map data model (`imagemap.json`, format 3)
+## Image-map data model (`imagemap.json`, format 4)
 
 - Keyed by `hardware_id`: SC Product GUID (vendor/product, platform-stable)
   for joysticks, the literal `gamepad` for gamepads (SC treats every pad as
   the same XInput device), `keyboard` for the keyboard. Several image-maps
   per id are normal (told apart by `name`).
-- **Exactly one image per image-map** (`image: {file, label}`, mandatory —
-  an image-map is created around its image file). Format 1 (`images[]`) is
-  not read.
-- Areas map an input key to a shape. Joysticks use **SDL-level** keys
-  (`button:N`, `hat:N:<dir>`, `axis:N`, no axis sign); keyboard and gamepad
-  use SC's own names (`key:lshift`, `key:oem_102`, `pad:a`, `pad:thumblx`,
-  `pad:triggerl_btn`). Shapes: `rect`, `ellipse`, `polygon`, `symbol`
-  (`arrow`, `cw`, `ccw`: a 100x100 path stretched into a `w` x `h` box,
-  rotatable). Several areas per input are fine.
-- Coordinates are normalized 0..1 to the image's natural size, rotation in
-  degrees around the shape's center. The model is ours, never Konva's JSON.
+- **Exactly one device image per image-map** (`image: {file, label}`,
+  mandatory — an image-map is created around its image file). Older formats
+  (1: `images[]`, 2, 3: `areas` with a nested `shape`) are not read.
+- `shapes[]` map an input key to a `geometry` plus optional `stroke` / `fill`
+  (`#rrggbb` or `#rrggbbaa`; unset = the `--shape-stroke` / `--shape-fill`
+  tokens). Joysticks use **SDL-level** keys (`button:N`, `hat:N:<dir>`,
+  `axis:N`, no axis sign); keyboard and gamepad use SC's own names
+  (`key:lshift`, `key:oem_102`, `pad:a`, `pad:thumblx`, `pad:triggerl_btn`).
+  Geometry kinds: `rect` (+ `radius`, a fraction of the shorter side),
+  `ellipse`, `polygon`, `symbol` (`arrow`, `arrow2`, `rotate`: a 100x100
+  path stretched into a `w` x `h` box, rotatable), `arc` (outer `r`, `inner`
+  as a fraction of it, `angle` of sweep from `rotation`), `wedge` (`r`,
+  `angle`, `rotation`) and `image` (its own file in the map folder, no
+  colours, box like a symbol). Several shapes per input are fine.
+- **A shape is drawn only while its input is active** (Monitor); the image
+  itself is the resting look — anything permanent belongs in the image.
+- Coordinates are normalized 0..1 to the image's natural size (radii to the
+  width), rotation in degrees around the shape's center. The model is ours,
+  never Konva's JSON. `save` prunes image files in the folder that nothing
+  references any more (an image shape deleted, the device image swapped).
 - Token -> input key undoes the +1 offset (`js2_button5` -> `button:4`) and
   maps axes through `DeviceInfo::axes`; `kb1_lalt+x` -> `key:x`, `gp1_a` ->
-  `pad:a` (a combo pins the part after the last `+`).
+  `pad:a` (a combo pins the part after the last `+`). Input key -> token is
+  `App.vue::keyToken` (needs the device's `jsN` from Game.log).
 - **Bundled image-maps** (`src-tauri/resources/imagemaps/`): Keyboard US,
   Keyboard DE, Xbox controller, PlayStation controller — generated, never
   hand-edited: `scripts/gen-imagemaps.py` holds the geometry and writes

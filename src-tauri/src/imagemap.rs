@@ -1,4 +1,4 @@
-//! Image-maps: one image of a physical device plus drawn areas that map an
+//! Image-maps: one image of a physical device plus drawn shapes that map an
 //! input to a region of it, so the Monitor can light up the physical
 //! control. Joysticks use SDL-level keys (`button:5`, `hat:0:up`, `axis:2`);
 //! keyboard and gamepad use SC's own names (`key:lshift`, `pad:a`).
@@ -37,8 +37,8 @@ use tauri::{AppHandle, Manager, State};
 use crate::{config, AppData};
 
 /// Current imagemap.json format. Older ones (1: several `images`; 2: square
-/// `size` symbols, `variant`) are not read — nothing shipped with them.
-pub const FORMAT: u32 = 3;
+/// `size` symbols, `variant`; 3: `areas` with a nested `shape`) are not read.
+pub const FORMAT: u32 = 4;
 
 const MAP_FILE: &str = "imagemap.json";
 
@@ -51,11 +51,13 @@ pub struct ImageFile {
     pub label: String,
 }
 
-/// Area geometry, normalized 0..1 relative to the image's natural size.
-/// `rotation` is degrees clockwise around the shape's own center.
+/// Shape geometry, normalized 0..1 relative to the image's natural size
+/// (`x` / `w` against the width, `y` / `h` against the height; radii against
+/// the width). `rotation` is degrees clockwise around the shape's own center
+/// — for an arc or wedge, where its sweep starts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
-pub enum Shape {
+pub enum Geometry {
     Rect {
         x: f64,
         y: f64,
@@ -63,6 +65,9 @@ pub enum Shape {
         h: f64,
         #[serde(default)]
         rotation: f64,
+        /// Corner radius as a fraction of the shorter side (0..0.5).
+        #[serde(default)]
+        radius: f64,
     },
     Ellipse {
         cx: f64,
@@ -76,7 +81,7 @@ pub enum Shape {
         points: Vec<[f64; 2]>,
     },
     Symbol {
-        /// `arrow`, `cw` or `ccw`.
+        /// `arrow`, `arrow2` or `rotate`.
         symbol: String,
         /// Center.
         x: f64,
@@ -87,16 +92,63 @@ pub enum Shape {
         #[serde(default)]
         rotation: f64,
     },
+    /// A ring segment: `angle` degrees of sweep, starting at `rotation`.
+    Arc {
+        cx: f64,
+        cy: f64,
+        /// Outer radius.
+        r: f64,
+        /// Inner radius as a fraction of the outer (0..1).
+        inner: f64,
+        angle: f64,
+        #[serde(default)]
+        rotation: f64,
+    },
+    /// A pie slice: `angle` degrees of sweep, starting at `rotation`.
+    Wedge {
+        cx: f64,
+        cy: f64,
+        r: f64,
+        angle: f64,
+        #[serde(default)]
+        rotation: f64,
+    },
+    /// An image file of its own in the image-map folder, centered at x/y.
+    Image {
+        file: String,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        #[serde(default)]
+        rotation: f64,
+    },
 }
 
-/// A drawn region of the image, tied to one input key.
+impl Geometry {
+    /// The extra image file an image shape needs, if any.
+    fn file(&self) -> Option<&str> {
+        match self {
+            Geometry::Image { file, .. } => Some(file),
+            _ => None,
+        }
+    }
+}
+
+/// A drawn shape, tied to one input key. Lit on the image while its input
+/// is active; `stroke` / `fill` (CSS `#rrggbb` or `#rrggbbaa`) override the
+/// app's default lit colours.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Area {
+pub struct Shape {
     pub id: String,
     /// `button:<n>`, `hat:<n>:<dir>` or `axis:<n>` (joystick, SDL-level);
     /// `key:<name>` (keyboard) or `pad:<name>` (gamepad), SC's own names.
     pub input: String,
-    pub shape: Shape,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    pub geometry: Geometry,
 }
 
 /// The full `imagemap.json`.
@@ -112,7 +164,21 @@ pub struct ImageMap {
     pub hardware_name: String,
     pub image: ImageFile,
     #[serde(default)]
-    pub areas: Vec<Area>,
+    pub shapes: Vec<Shape>,
+}
+
+impl ImageMap {
+    /// Every file the image-map references: the image, then the image
+    /// shapes' files, without repeats.
+    fn files(&self) -> Vec<&str> {
+        let mut out = vec![self.image.file.as_str()];
+        for f in self.shapes.iter().filter_map(|s| s.geometry.file()) {
+            if !out.contains(&f) {
+                out.push(f);
+            }
+        }
+        out
+    }
 }
 
 /// Where a listed image-map was found.
@@ -132,7 +198,7 @@ pub struct ImageMapSummary {
     pub hardware_id: String,
     pub hardware_name: String,
     pub source: ImageMapSource,
-    pub area_count: usize,
+    pub shape_count: usize,
 }
 
 impl ImageMapSummary {
@@ -143,7 +209,7 @@ impl ImageMapSummary {
             hardware_id: p.hardware_id.clone(),
             hardware_name: p.hardware_name.clone(),
             source,
-            area_count: p.areas.len(),
+            shape_count: p.shapes.len(),
         }
     }
 }
@@ -183,15 +249,61 @@ pub fn validate(p: &ImageMap) -> Result<(), String> {
     if !is_bare_name(&p.image.file) {
         return Err(format!("invalid image file name {:?}", p.image.file));
     }
+    for sh in &p.shapes {
+        if sh.id.trim().is_empty() || sh.input.trim().is_empty() {
+            return Err("shape without id or input".into());
+        }
+        for c in [&sh.stroke, &sh.fill].into_iter().flatten() {
+            if !is_colour(c) {
+                return Err(format!("invalid colour {c:?} on shape {:?}", sh.id));
+            }
+        }
+        if let Some(f) = sh.geometry.file() {
+            if !is_bare_name(f) {
+                return Err(format!("invalid image file name {f:?} on shape {:?}", sh.id));
+            }
+        }
+    }
     Ok(())
 }
 
-/// Check that the referenced image file exists in `dir`.
+/// `#rrggbb` or `#rrggbbaa`.
+fn is_colour(c: &str) -> bool {
+    let hex = match c.strip_prefix('#') {
+        Some(h) => h,
+        None => return false,
+    };
+    (hex.len() == 6 || hex.len() == 8) && hex.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+/// Check that every referenced file exists in `dir`.
 fn validate_files(p: &ImageMap, dir: &Path) -> Result<(), String> {
-    if !dir.join(&p.image.file).is_file() {
-        return Err(format!("image file {:?} is missing", p.image.file));
+    for f in p.files() {
+        if !dir.join(f).is_file() {
+            return Err(format!("image file {f:?} is missing"));
+        }
     }
     Ok(())
+}
+
+/// Drop image files in `dir` that `p` no longer references (an image shape
+/// deleted, an image swapped). Only image files are touched.
+fn prune_files(p: &ImageMap, dir: &Path) {
+    let keep = p.files();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if name == MAP_FILE || mime_for(&name).is_none() || keep.contains(&name.as_str()) {
+            continue;
+        }
+        if let Err(e) = fs::remove_file(entry.path()) {
+            warn!("could not remove orphaned {}: {e}", entry.path().display());
+        }
+    }
 }
 
 fn read_map(dir: &Path) -> Result<ImageMap, String> {
@@ -303,7 +415,7 @@ pub fn create(
         hardware_id: hardware_id.to_string(),
         hardware_name: hardware_name.to_string(),
         image,
-        areas: Vec::new(),
+        shapes: Vec::new(),
     };
     validate(&map)?;
     write_map(&dir, &map)?;
@@ -325,25 +437,29 @@ pub fn clone_map(bundled_root: &Path, user_root: &Path, id: &str, name: &str) ->
         hardware_id: source.hardware_id,
         hardware_name: source.hardware_name,
         image: source.image,
-        areas: source.areas,
+        shapes: source.shapes,
     };
     validate(&map)?;
 
     let dir = user_root.join(&new_id);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    if let Err(e) = fs::copy(src_dir.join(&map.image.file), dir.join(&map.image.file)) {
-        let _ = fs::remove_dir_all(&dir);
-        return Err(e.to_string());
+    for f in map.files() {
+        if let Err(e) = fs::copy(src_dir.join(f), dir.join(f)) {
+            let _ = fs::remove_dir_all(&dir);
+            return Err(format!("{f}: {e}"));
+        }
     }
     write_map(&dir, &map)?;
     Ok(map)
 }
 
+/// Write the image-map; image files it no longer references are removed.
 pub fn save(bundled_root: &Path, user_root: &Path, map: ImageMap) -> Result<ImageMap, String> {
     validate(&map)?;
     let dir = writable_dir(bundled_root, user_root, &map.id)?;
     validate_files(&map, &dir)?;
     write_map(&dir, &map)?;
+    prune_files(&map, &dir);
     Ok(map)
 }
 
@@ -376,8 +492,9 @@ fn unique(base: &str, mut taken: impl FnMut(&str) -> bool) -> String {
         .expect("unbounded counter")
 }
 
-/// Copy a replacement image into the image-map folder. Does not touch
-/// `imagemap.json` — the caller swaps it in and removes the old file.
+/// Copy an image (a replacement device image, or one for an image shape)
+/// into the image-map folder. Does not touch `imagemap.json` — the caller
+/// references it; a file nothing references is pruned at the next save.
 pub fn add_image(bundled_root: &Path, user_root: &Path, id: &str, source: &Path) -> Result<ImageFile, String> {
     let dir = writable_dir(bundled_root, user_root, id)?;
     copy_image_into(&dir, source)
@@ -429,7 +546,7 @@ pub fn read_image(bundled_root: &Path, user_root: &Path, id: &str, file: &str) -
     Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
 }
 
-/// Zip `imagemap.json` + the referenced image (flat, deflate) to `dest`.
+/// Zip `imagemap.json` + every referenced image (flat, deflate) to `dest`.
 pub fn export(bundled_root: &Path, user_root: &Path, id: &str, dest: &Path) -> Result<(), String> {
     let (dir, _) = find_dir(bundled_root, user_root, id)?;
     let map = read_map(&dir)?;
@@ -438,9 +555,9 @@ pub fn export(bundled_root: &Path, user_root: &Path, id: &str, dest: &Path) -> R
 
     let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     let mut zip = zip::ZipWriter::new(File::create(dest).map_err(|e| format!("{}: {e}", dest.display()))?);
-    for name in [MAP_FILE.to_string(), map.image.file.clone()] {
-        zip.start_file(&name, opts).map_err(|e| e.to_string())?;
-        let bytes = fs::read(dir.join(&name)).map_err(|e| format!("{name}: {e}"))?;
+    for name in std::iter::once(MAP_FILE).chain(map.files()) {
+        zip.start_file(name, opts).map_err(|e| e.to_string())?;
+        let bytes = fs::read(dir.join(name)).map_err(|e| format!("{name}: {e}"))?;
         zip.write_all(&bytes).map_err(|e| e.to_string())?;
     }
     zip.finish().map_err(|e| e.to_string())?;
@@ -478,8 +595,10 @@ pub fn import(user_root: &Path, source: &Path) -> Result<ImageMapSummary, String
         .map_err(|e| e.to_string())?;
     let mut map: ImageMap = serde_json::from_str(&text).map_err(|e| format!("imagemap.json: {e}"))?;
     validate(&map)?;
-    if !entries.iter().any(|(_, n)| *n == map.image.file) {
-        return Err(format!("image file {:?} is missing from the zip", map.image.file));
+    for f in map.files() {
+        if !entries.iter().any(|(_, n)| n == f) {
+            return Err(format!("image file {f:?} is missing from the zip"));
+        }
     }
     map.id = uuid::Uuid::new_v4().to_string();
 
@@ -644,11 +763,27 @@ mod tests {
             hardware_id: "{0200231D-0000-0000-0000-504944564944}".into(),
             hardware_name: "Test Stick".into(),
             image: ImageFile { file: "top.png".into(), label: "Top".into() },
-            areas: vec![Area {
-                id: "a1".into(),
-                input: "button:5".into(),
-                shape: Shape::Rect { x: 0.1, y: 0.2, w: 0.05, h: 0.04, rotation: 0.0 },
-            }],
+            shapes: vec![rect_shape("a1", "button:5")],
+        }
+    }
+
+    fn rect_shape(id: &str, input: &str) -> Shape {
+        Shape {
+            id: id.into(),
+            input: input.into(),
+            stroke: None,
+            fill: None,
+            geometry: Geometry::Rect { x: 0.1, y: 0.2, w: 0.05, h: 0.04, rotation: 0.0, radius: 0.0 },
+        }
+    }
+
+    fn image_shape(id: &str, file: &str) -> Shape {
+        Shape {
+            id: id.into(),
+            input: "button:1".into(),
+            stroke: None,
+            fill: None,
+            geometry: Geometry::Image { file: file.into(), x: 0.5, y: 0.5, w: 0.1, h: 0.1, rotation: 0.0 },
         }
     }
 
@@ -656,19 +791,46 @@ mod tests {
     fn put(root: &Path, p: &ImageMap) {
         let dir = root.join(&p.id);
         write_map(&dir, p).unwrap();
-        fs::write(dir.join(&p.image.file), PNG).unwrap();
+        for f in p.files() {
+            fs::write(dir.join(f), PNG).unwrap();
+        }
     }
 
     #[test]
-    fn shape_json_uses_kind_tag() {
+    fn geometry_json_uses_kind_tag() {
         let json = r#"{"kind":"symbol","symbol":"arrow","x":0.3,"y":0.3,"w":0.05,"h":0.02,"rotation":90}"#;
-        let s: Shape = serde_json::from_str(json).unwrap();
-        assert!(matches!(s, Shape::Symbol { rotation, h, .. } if rotation == 90.0 && h == 0.02));
-        let back = serde_json::to_value(&s).unwrap();
+        let g: Geometry = serde_json::from_str(json).unwrap();
+        assert!(matches!(g, Geometry::Symbol { rotation, h, .. } if rotation == 90.0 && h == 0.02));
+        let back = serde_json::to_value(&g).unwrap();
         assert_eq!(back["kind"], "symbol");
-        // Polygon has no rotation; rect rotation defaults.
-        let r: Shape = serde_json::from_str(r#"{"kind":"rect","x":0,"y":0,"w":1,"h":1}"#).unwrap();
-        assert!(matches!(r, Shape::Rect { rotation, .. } if rotation == 0.0));
+        // Polygon has no rotation; rect rotation and radius default.
+        let r: Geometry = serde_json::from_str(r#"{"kind":"rect","x":0,"y":0,"w":1,"h":1}"#).unwrap();
+        assert!(matches!(r, Geometry::Rect { rotation, radius, .. } if rotation == 0.0 && radius == 0.0));
+        let a: Geometry =
+            serde_json::from_str(r#"{"kind":"arc","cx":0.5,"cy":0.5,"r":0.1,"inner":0.6,"angle":270}"#).unwrap();
+        assert!(matches!(a, Geometry::Arc { inner, angle, .. } if inner == 0.6 && angle == 270.0));
+        // Unset colours are left out of the JSON.
+        let sh = serde_json::to_value(rect_shape("a", "button:1")).unwrap();
+        assert!(sh.get("stroke").is_none() && sh.get("fill").is_none());
+        assert_eq!(sh["geometry"]["kind"], "rect");
+    }
+
+    #[test]
+    fn validate_checks_shapes() {
+        let mut p = sample("p1", "ok");
+        p.shapes[0].stroke = Some("#396cd8".into());
+        p.shapes[0].fill = Some("#396CD880".into());
+        assert!(validate(&p).is_ok());
+        for bad in ["396cd8", "#396cd", "#zzzzzz", "#396cd8800", "blue"] {
+            p.shapes[0].fill = Some(bad.into());
+            assert!(validate(&p).is_err(), "{bad:?} should be rejected");
+        }
+        let mut p = sample("p1", "ok");
+        p.shapes.push(image_shape("i", "../x.png"));
+        assert!(validate(&p).is_err());
+        let mut p = sample("p1", "ok");
+        p.shapes[0].input = " ".into();
+        assert!(validate(&p).is_err());
     }
 
     #[test]
@@ -676,7 +838,7 @@ mod tests {
         assert!(validate(&sample("p1", "ok")).is_ok());
 
         let mut p = sample("p1", "ok");
-        p.format = 1;
+        p.format = 3;
         assert!(validate(&p).unwrap_err().contains("format"));
 
         let mut p = sample("p1", "ok");
@@ -706,7 +868,7 @@ mod tests {
         put(&bundled, &sample("shared", "Bundled name"));
         put(&bundled, &sample("only-bundled", "Zeta"));
         let mut u = sample("shared", "User name");
-        u.areas.clear();
+        u.shapes.clear();
         put(&user, &u);
 
         let list = list(&bundled, &user);
@@ -714,7 +876,7 @@ mod tests {
         let shared = list.iter().find(|s| s.id == "shared").unwrap();
         assert_eq!(shared.source, ImageMapSource::User);
         assert_eq!(shared.name, "User name");
-        assert_eq!(shared.area_count, 0);
+        assert_eq!(shared.shape_count, 0);
         assert_eq!(list.iter().find(|s| s.id == "only-bundled").unwrap().source, ImageMapSource::Bundled);
         // Bundled first ("Zeta"), then user ("User name") — source beats name.
         assert_eq!(list[0].id, "only-bundled");
@@ -733,7 +895,7 @@ mod tests {
         put(&bundled, &sample("b1", "Bundled"));
 
         let mut edited = sample("b1", "Edited");
-        edited.areas[0].input = "button:7".into();
+        edited.shapes[0].input = "button:7".into();
         assert!(save(&bundled, &user, edited).unwrap_err().contains("read-only"));
         assert!(!user.join("b1").exists());
 
@@ -770,7 +932,7 @@ mod tests {
         assert_ne!(cloned.id, "p1");
         assert_eq!(cloned.name, "My copy");
         assert_eq!(cloned.hardware_id, sample("p1", "Bundled").hardware_id);
-        assert_eq!(cloned.areas.len(), 1);
+        assert_eq!(cloned.shapes.len(), 1);
         assert!(user.join(&cloned.id).join(MAP_FILE).is_file());
         assert!(user.join(&cloned.id).join(&cloned.image.file).is_file());
 
@@ -834,7 +996,7 @@ mod tests {
         let (bundled, user) = (t.path("bundled"), t.path("user"));
         let mut p = sample("p1", "P");
         p.image = ImageFile { file: "a.png".into(), label: String::new() };
-        p.areas.clear();
+        p.shapes.clear();
         put(&user, &p);
         // read_image serves any bare file in the folder, referenced or not.
         for f in ["b.JPG", "c.jpeg", "d.webp"] {
@@ -871,7 +1033,7 @@ mod tests {
         let imported = get(&bundled, &user2, &summary.id).unwrap();
         assert_eq!(imported.id, summary.id);
         assert_eq!(imported.name, "Round trip");
-        assert_eq!(imported.areas[0].input, "button:5");
+        assert_eq!(imported.shapes[0].input, "button:5");
         assert_eq!(fs::read(user2.join(&summary.id).join("top.png")).unwrap(), PNG);
 
         // Importing again makes a second, independent map.
@@ -916,6 +1078,40 @@ mod tests {
         let z = write_zip("badid.zip", &[("imagemap.json", &bad), ("top.png", PNG)]);
         assert!(import(&user, &z).is_err());
         assert!(!user.exists() || fs::read_dir(&user).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn image_shape_files_travel_with_the_map() {
+        let t = Tmp::new();
+        let (bundled, user, user2) = (t.path("bundled"), t.path("user"), t.path("user2"));
+        let mut p = sample("img", "With image shape");
+        p.shapes.push(image_shape("i1", "glyph.png"));
+        put(&user, &p);
+
+        // Clone copies the extra file.
+        let cloned = clone_map(&bundled, &user, "img", "Copy").unwrap();
+        assert!(user.join(&cloned.id).join("glyph.png").is_file());
+
+        // Export / import carry it too, and import refuses a zip without it.
+        let zip_path = t.path("img.zip");
+        export(&bundled, &user, "img", &zip_path).unwrap();
+        let imported = import(&user2, &zip_path).unwrap();
+        assert!(user2.join(&imported.id).join("glyph.png").is_file());
+        fs::remove_file(user.join("img").join("glyph.png")).unwrap();
+        assert!(export(&bundled, &user, "img", &t.path("broken.zip")).is_err());
+        assert!(save(&bundled, &user, p.clone()).unwrap_err().contains("glyph.png"));
+
+        // Save prunes image files nothing references any more, and only those.
+        fs::write(user.join("img").join("glyph.png"), PNG).unwrap();
+        fs::write(user.join("img").join("orphan.png"), PNG).unwrap();
+        fs::write(user.join("img").join("notes.txt"), b"x").unwrap();
+        let mut without = p.clone();
+        without.shapes.pop();
+        save(&bundled, &user, without).unwrap();
+        assert!(!user.join("img").join("glyph.png").exists());
+        assert!(!user.join("img").join("orphan.png").exists());
+        assert!(user.join("img").join("notes.txt").is_file());
+        assert!(user.join("img").join("top.png").is_file());
     }
 
     #[test]

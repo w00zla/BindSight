@@ -151,6 +151,7 @@ function onReset(i: number) {
           :map="t.view.map"
           :src="imgSrc(t.view.map.id, t.view.map.image.file)"
           :active="activeFor(t.device.sdl_guid)"
+          :imageUrl="(f: string) => imgSrc(t.view!.map.id, f)"
         />
         <div v-else-if="!t.view" class="empty">
           <Icon name="image" :size="48" />

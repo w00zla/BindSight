@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Devices mode: pick a device, pick one of its image-maps, press a physical
-// input and draw the areas that belong to it. Konva does the canvas work;
+// input and draw the shapes that belong to it. Konva does the canvas work;
 // everything is stored normalized (0..1) in the image-map.
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
@@ -8,7 +8,9 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { KonvaEventObject, Node as KonvaNode } from "konva/lib/Node";
 import type { Stage } from "konva/lib/Stage";
+import type { Arc } from "konva/lib/shapes/Arc";
 import type { Ellipse } from "konva/lib/shapes/Ellipse";
+import type { Wedge } from "konva/lib/shapes/Wedge";
 import type { Transformer } from "konva/lib/shapes/Transformer";
 import type { VueKonvaRef } from "vue-konva";
 import Icon, { type IconName } from "./Icon.vue";
@@ -22,11 +24,16 @@ import { KEY_COUNT, MOUSE_INPUTS, recording } from "../keyboard";
 import { persistedRef } from "../persist";
 import {
   SYMBOL_PATHS,
+  rectRadiusPx,
   symbolPx,
   inputKey,
   sameHardware,
-  type Area,
+  shapeImageFiles,
+  type ArcGeometry,
+  type Geometry,
   type ImageMap,
+  type RectGeometry,
+  type WedgeGeometry,
   type ImageMapSummary,
   type Shape,
   type SymbolKind,
@@ -52,19 +59,28 @@ const emit = defineEmits<{
   choose: [hardwareId: string | null, id: string];
 }>();
 
-// No active tool == select/move mode.
-type Tool = "rect" | "ellipse" | "polygon" | SymbolKind;
+// No active tool == select/move mode. The image tool never stays active:
+// it picks a file and places it at once.
+type Tool = "rect" | "ellipse" | "polygon" | "arc" | "wedge" | "image" | SymbolKind;
 const TOOLS: { tool: Tool; icon: IconName; title: string }[] = [
   { tool: "rect", icon: "shape-rect", title: "Rectangle" },
   { tool: "ellipse", icon: "shape-ellipse", title: "Ellipse" },
   { tool: "polygon", icon: "shape-polygon", title: "Polygon" },
+  { tool: "arc", icon: "shape-arc", title: "Arc" },
+  { tool: "wedge", icon: "shape-wedge", title: "Wedge" },
   { tool: "arrow", icon: "shape-arrow", title: "Arrow" },
-  { tool: "cw", icon: "shape-cw", title: "Clockwise" },
-  { tool: "ccw", icon: "shape-ccw", title: "Counter-clockwise" },
+  { tool: "arrow2", icon: "shape-arrow2", title: "Double arrow" },
+  { tool: "rotate", icon: "shape-rotate", title: "Rotation" },
+  { tool: "image", icon: "image-plus", title: "Image" },
 ];
+const SYMBOLS: SymbolKind[] = ["arrow", "arrow2", "rotate"];
 
-// A new symbol is 5% of the image width, square on screen.
+// A new symbol is 5% of the image width, square on screen; a new image
+// shape 15% of the image width, keeping its own aspect.
 const DEFAULT_SYMBOL_W = 0.05;
+const DEFAULT_IMAGE_W = 0.15;
+const NEW_ARC = { inner: 0.6, angle: 270, rotation: 135 };
+const NEW_WEDGE = { angle: 90, rotation: 225 };
 const MIN_DRAW_PX = 4;
 const ZOOMS = [0.5, 0.75, 1, 1.5, 2, 3];
 
@@ -82,29 +98,52 @@ function withAlpha(colour: string, alpha: number): string {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
+// --- shape colours (`#rrggbb` or `#rrggbbaa`) ------------------------------
+
+function colourHex(c: string): string {
+  return c.slice(0, 7).toLowerCase();
+}
+
+// Alpha of a colour in percent (100 when it has none).
+function colourAlpha(c: string): number {
+  return c.length === 9 ? Math.round((parseInt(c.slice(7, 9), 16) / 255) * 100) : 100;
+}
+
+function composeColour(hex: string, alpha: number): string {
+  const a = Math.round((Math.min(100, Math.max(0, alpha)) / 100) * 255);
+  return a >= 255 ? hex : `${hex}${a.toString(16).padStart(2, "0")}`;
+}
+
 // Filled once at mount — the stage only exists after an image has loaded.
 const paint = ref({
   live: "",
-  liveFill: "",
-  dim: "",
-  dimFill: "",
+  shapeStroke: "",
+  shapeFill: "",
   anchor: "",
   tipBg: "",
   tipText: "",
 });
 
+// Swatches of the colour picker: the app's own colours plus a few plain ones.
+const swatches = ref<string[]>([]);
+
 function readPaint() {
   const live = cssVar("--live");
-  const dim = cssVar("--text-2");
   paint.value = {
     live,
-    liveFill: withAlpha(live, 0.25),
-    dim,
-    dimFill: withAlpha(dim, 0.1),
+    shapeStroke: cssVar("--shape-stroke"),
+    shapeFill: cssVar("--shape-fill"),
     anchor: cssVar("--text"),
     tipBg: withAlpha(cssVar("--bg-base"), 0.85),
     tipText: cssVar("--text"),
   };
+  swatches.value = [
+    ...["--shape-stroke", "--live", "--accent", "--ok", "--warn", "--err", "--text"].map(cssVar),
+    "#ff5500",
+    "#ff2d8a",
+    "#9b5cff",
+    "#000000",
+  ].filter((c) => /^#[0-9a-f]{6}$/i.test(c));
 }
 
 // --- device / image-map selection -----------------------------------------
@@ -152,7 +191,11 @@ const isChosen = computed(
 
 // --- canvas state ----------------------------------------------------------
 
-const areas = computed<Area[]>(() => map.value?.areas ?? []);
+const shapes = computed<Shape[]>(() => map.value?.shapes ?? []);
+
+// Loaded elements of the image shapes' files, by file name (Konva draws an
+// image node from an element).
+const shapeImgs = ref<Record<string, HTMLImageElement>>({});
 
 const imgEl = ref<HTMLImageElement | null>(null);
 const natW = ref(0);
@@ -175,14 +218,19 @@ const tool = ref<Tool | null>(null);
 const selectMode = computed(() => tool.value === null);
 const canDrag = computed(() => selectMode.value && editing.value);
 const selectedId = ref<string | null>(null);
-const selectedArea = computed(() => areas.value.find((a) => a.id === selectedId.value) ?? null);
+const selectedShape = computed(() => shapes.value.find((a) => a.id === selectedId.value) ?? null);
+// Arcs and wedges stay circular under the transformer.
+const keepRatio = computed(() => {
+  const k = selectedShape.value?.geometry.kind;
+  return k === "arc" || k === "wedge";
+});
 const hover = ref<{ x: number; y: number; text: string } | null>(null);
 
 // The recorded input new shapes go to. Only Record changes it; it is dropped
 // whenever the map, the device, the view or the edit mode changes.
 const currentKey = ref<string | null>(null);
 const currentCount = computed(() =>
-  currentKey.value ? areas.value.filter((a) => a.input === currentKey.value).length : 0,
+  currentKey.value ? shapes.value.filter((a) => a.input === currentKey.value).length : 0,
 );
 const currentToken = computed(() =>
   currentKey.value && device.value ? props.keyToken(device.value, currentKey.value) : null,
@@ -247,7 +295,7 @@ interface Bucket {
   text: string;
   // True when the text is the token or the raw key, not SC's label.
   mono: boolean;
-  rows: Area[];
+  rows: Shape[];
 }
 
 // What an input key is called in the table: SC's label, else the token,
@@ -265,7 +313,7 @@ function inputText(key: string): { text: string; mono: boolean } {
 const buckets = computed<Bucket[]>(() => {
   const f = filter.value.trim().toLowerCase();
   const by = new Map<string, Bucket>();
-  for (const a of areas.value) {
+  for (const a of shapes.value) {
     let b = by.get(a.input);
     if (!b) {
       const { text, mono } = inputText(a.input);
@@ -279,7 +327,7 @@ const buckets = computed<Bucket[]>(() => {
   const dir = sort.key === "input" && sort.dir === "desc" ? -1 : 1;
   list.sort((x, y) => (collator.compare(x.text, y.text) || collator.compare(x.key, y.key)) * dir);
   if (sort.key === "shape") {
-    for (const b of list) b.rows = sortRows(b.rows, sort, (a) => areaKind(a));
+    for (const b of list) b.rows = sortRows(b.rows, sort, (a) => shapeKind(a));
   }
   return list;
 });
@@ -309,7 +357,7 @@ watch(currentKey, (k) => {
   if (k) openBucket(k);
 });
 watch(selectedId, (id) => {
-  const a = areas.value.find((x) => x.id === id);
+  const a = shapes.value.find((x) => x.id === id);
   if (a) openBucket(a.input);
 });
 
@@ -436,6 +484,26 @@ async function loadCanvasImage() {
   }
 }
 
+// Keep an element loaded for every image shape's file of the open map.
+watch(
+  () => (map.value ? shapeImageFiles(map.value) : []),
+  (files) => {
+    const m = map.value;
+    if (!m) return;
+    for (const file of files) {
+      if (shapeImgs.value[file]) continue;
+      void imageUrl(m.id, file).then((url) => {
+        const el = new Image();
+        el.onload = () => {
+          shapeImgs.value = { ...shapeImgs.value, [file]: el };
+        };
+        el.src = url;
+      });
+    }
+  },
+  { immediate: true },
+);
+
 // Breathing room between the canvas and the panel edges (`.stage-box`
 // padding); clientWidth includes it, so the fit must not.
 const STAGE_PAD = 16;
@@ -457,6 +525,7 @@ watch(stageBox, (el) => {
 
 watch([() => map.value?.id, () => map.value?.image.file], () => {
   cancelDraw();
+  shapeImgs.value = {};
   loadCanvasImage();
 });
 
@@ -681,7 +750,7 @@ async function importMap() {
   }
 }
 
-// Replace the image-map's image. The areas stay (a re-shot of the same view
+// Replace the image-map's image. The shapes stay (a re-shot of the same view
 // keeps them useful); the old file is removed once the new one is in.
 async function replaceImage() {
   const m = map.value;
@@ -739,12 +808,14 @@ watch(
 
 onMounted(async () => {
   readPaint();
+  window.addEventListener("keydown", onEditorKey);
   unlisten.push(await listen<JoyInput>("joy-input", (e) => takeInput(e.payload)));
   await loadSummaries();
   if (!openId.value) await openFirst();
 });
 
 onUnmounted(() => {
+  window.removeEventListener("keydown", onEditorKey);
   unlisten.forEach((fn) => fn());
   unlisten = [];
   recording.value = false;
@@ -752,23 +823,59 @@ onUnmounted(() => {
   ro = null;
 });
 
-// --- areas -----------------------------------------------------------------
+// --- shapes ----------------------------------------------------------------
 
-function addArea(shape: Shape) {
+function addShape(geometry: Geometry) {
   const m = map.value;
   if (!m || !currentKey.value) return;
-  const area: Area = { id: newId(), input: currentKey.value, shape };
-  m.areas.push(area);
-  selectedId.value = area.id;
+  const shape: Shape = { id: newId(), input: currentKey.value, geometry };
+  m.shapes.push(shape);
+  selectedId.value = shape.id;
   tool.value = null;
 }
 
 function setTool(t: Tool) {
   if (locked.value || !editing.value) return;
   cancelDraw();
+  if (t === "image") {
+    tool.value = null;
+    void addImageShape();
+    return;
+  }
   // Clicking the active tool turns it off — no tool == select/move.
   tool.value = tool.value === t ? null : t;
   if (tool.value) selectedId.value = null;
+}
+
+// Image tool: pick a file, copy it into the map folder and place it at the
+// image centre, keeping its aspect. A file no shape references any more is
+// removed at the next save (backend side).
+async function addImageShape() {
+  const m = map.value;
+  if (!m || locked.value || !editing.value) return;
+  if (!currentKey.value) {
+    emit("notify", "Press an input first", "error");
+    return;
+  }
+  try {
+    const src = await pickImage();
+    if (!src) return;
+    const img = await invoke<{ file: string; label: string }>("add_imagemap_image", { id: m.id, sourcePath: src });
+    const url = await imageUrl(m.id, img.file);
+    const el = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const e = new Image();
+      e.onload = () => resolve(e);
+      e.onerror = () => reject(new Error(`Cannot decode ${img.file}`));
+      e.src = url;
+    });
+    shapeImgs.value = { ...shapeImgs.value, [img.file]: el };
+    const w = DEFAULT_IMAGE_W;
+    // Same pixel aspect as the file, expressed in image-relative units.
+    const h = ((w * natW.value * el.naturalHeight) / el.naturalWidth) / natH.value;
+    addShape({ kind: "image", file: img.file, x: 0.5, y: 0.5, w, h, rotation: 0 });
+  } catch (e) {
+    emit("notify", String(e), "error");
+  }
 }
 
 function cancelDraw() {
@@ -779,23 +886,146 @@ function cancelDraw() {
 function deleteShape(id: string) {
   const m = map.value;
   if (!m || locked.value || !editing.value) return;
-  m.areas = m.areas.filter((a) => a.id !== id);
+  m.shapes = m.shapes.filter((a) => a.id !== id);
   if (selectedId.value === id) selectedId.value = null;
 }
 
 // A row in the list, or a shape on the canvas: both select the shape. The
 // recorded input stays what it is — only Record changes it.
-function pickArea(a: Area) {
+function pickShape(a: Shape) {
   selectedId.value = a.id;
 }
 
-// One generic icon for shapes; only the polygon has its own.
-function areaIcon(a: Area): IconName {
-  return a.shape.kind === "polygon" ? "shape-polygon" : "shape";
+// Shift a shape by stage pixels.
+function moveShape(a: Shape, dxPx: number, dyPx: number) {
+  const dx = dxPx / W.value;
+  const dy = dyPx / H.value;
+  const s = a.geometry;
+  if (s.kind === "polygon") {
+    s.points = s.points.map(([x, y]) => [x + dx, y + dy] as [number, number]);
+  } else if (s.kind === "ellipse" || s.kind === "arc" || s.kind === "wedge") {
+    s.cx += dx;
+    s.cy += dy;
+  } else {
+    s.x += dx;
+    s.y += dy;
+  }
 }
 
-function areaKind(a: Area): string {
-  return a.shape.kind === "symbol" ? a.shape.symbol : a.shape.kind;
+// A copy of the shape, offset a little, under the same input; the copy is
+// selected.
+function duplicateShape(a: Shape) {
+  const m = map.value;
+  if (!m || locked.value || !editing.value) return;
+  const copy: Shape = { ...JSON.parse(JSON.stringify(a)), id: newId() };
+  moveShape(copy, 12, 12);
+  m.shapes.push(copy);
+  selectedId.value = copy.id;
+}
+
+// Keyboard editing of the selected shape: arrows nudge (Shift: 10 px),
+// Delete / Backspace delete, Ctrl+D duplicates, Escape deselects or drops the
+// tool. Text fields and open dialogs keep their keys; while recording, keys
+// are the input being recorded.
+const NUDGE_PX = 1;
+const NUDGE_SHIFT_PX = 10;
+
+function onEditorKey(e: KeyboardEvent) {
+  if (!editing.value || recording.value || confirm.value || document.querySelector('[role="dialog"]')) return;
+  const t = e.target as HTMLElement | null;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+  if (e.key === "Escape") {
+    if (tool.value) {
+      setTool(tool.value);
+    } else if (selectedId.value) {
+      selectedId.value = null;
+    }
+    return;
+  }
+  const a = selectedShape.value;
+  if (!a) return;
+  const step = e.shiftKey ? NUDGE_SHIFT_PX : NUDGE_PX;
+  switch (e.key) {
+    case "ArrowUp":
+      moveShape(a, 0, -step);
+      break;
+    case "ArrowDown":
+      moveShape(a, 0, step);
+      break;
+    case "ArrowLeft":
+      moveShape(a, -step, 0);
+      break;
+    case "ArrowRight":
+      moveShape(a, step, 0);
+      break;
+    case "Delete":
+    case "Backspace":
+      deleteShape(a.id);
+      break;
+    case "d":
+    case "D":
+      if (!(e.ctrlKey || e.metaKey)) return;
+      duplicateShape(a);
+      break;
+    default:
+      return;
+  }
+  e.preventDefault();
+}
+
+// One generic icon for shapes; only polygons and images have their own.
+function shapeIcon(a: Shape): IconName {
+  const k = a.geometry.kind;
+  return k === "polygon" ? "shape-polygon" : k === "image" ? "image" : "shape";
+}
+
+function shapeKind(a: Shape): string {
+  const g = a.geometry;
+  if (g.kind === "symbol") return g.symbol === "arrow2" ? "double arrow" : g.symbol === "rotate" ? "rotation" : g.symbol;
+  return g.kind;
+}
+
+// --- shape panel ------------------------------------------------------------
+
+type ColourRole = "stroke" | "fill";
+
+// The colour a role shows: the shape's own, else the default lit colour.
+function roleColour(a: Shape, role: ColourRole): string {
+  const own = a[role];
+  if (own) return own;
+  if (role === "stroke") return paint.value.shapeStroke;
+  // The fill token is an rgba(); its hex form with alpha for the picker.
+  const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/.exec(paint.value.shapeFill);
+  if (!m) return paint.value.shapeFill;
+  const hex = `#${[m[1], m[2], m[3]].map((n) => Number(n).toString(16).padStart(2, "0")).join("")}`;
+  return composeColour(hex, Math.round(Number(m[4] ?? 1) * 100));
+}
+
+function setRoleHex(a: Shape, role: ColourRole, hex: string) {
+  const h = hex.trim().toLowerCase();
+  const full = h.startsWith("#") ? h : `#${h}`;
+  if (!/^#[0-9a-f]{6}$/.test(full)) return;
+  a[role] = composeColour(full, colourAlpha(roleColour(a, role)));
+}
+
+function setRoleAlpha(a: Shape, role: ColourRole, alpha: number) {
+  a[role] = composeColour(colourHex(roleColour(a, role)), alpha);
+}
+
+function resetRole(a: Shape, role: ColourRole) {
+  delete a[role];
+}
+
+function onHexInput(a: Shape, role: ColourRole, e: Event) {
+  setRoleHex(a, role, (e.target as HTMLInputElement).value);
+}
+
+function onAlphaInput(a: Shape, role: ColourRole, e: Event) {
+  setRoleAlpha(a, role, Number((e.target as HTMLInputElement).value));
+}
+
+function onRangeInput(e: Event, apply: (v: number) => void) {
+  apply(Number((e.target as HTMLInputElement).value));
 }
 
 // --- zoom ------------------------------------------------------------------
@@ -827,14 +1057,14 @@ function onStageMouseDown(e: KonvaEventObject<MouseEvent>) {
     emit("notify", "Press an input first", "error");
     return;
   }
-  if (tool.value === "rect" || tool.value === "ellipse") {
+  if (tool.value === "rect" || tool.value === "ellipse" || tool.value === "arc" || tool.value === "wedge") {
     draft.value = { x0: pos.x, y0: pos.y, x1: pos.x, y1: pos.y };
   } else if (tool.value === "polygon") {
     draftPoly.value = [...draftPoly.value, pos.x, pos.y];
-  } else if (tool.value) {
-    addArea({
+  } else if (tool.value && SYMBOLS.includes(tool.value as SymbolKind)) {
+    addShape({
       kind: "symbol",
-      symbol: tool.value,
+      symbol: tool.value as SymbolKind,
       x: pos.x / W.value,
       y: pos.y / H.value,
       w: DEFAULT_SYMBOL_W,
@@ -862,17 +1092,17 @@ function onStageMouseUp() {
   const w = Math.abs(d.x1 - d.x0);
   const h = Math.abs(d.y1 - d.y0);
   if (w < MIN_DRAW_PX || h < MIN_DRAW_PX) return;
+  const cx = (x + w / 2) / W.value;
+  const cy = (y + h / 2) / H.value;
   if (tool.value === "rect") {
-    addArea({ kind: "rect", x: x / W.value, y: y / H.value, w: w / W.value, h: h / H.value, rotation: 0 });
+    addShape({ kind: "rect", x: x / W.value, y: y / H.value, w: w / W.value, h: h / H.value, rotation: 0, radius: 0 });
   } else if (tool.value === "ellipse") {
-    addArea({
-      kind: "ellipse",
-      cx: (x + w / 2) / W.value,
-      cy: (y + h / 2) / H.value,
-      rx: w / 2 / W.value,
-      ry: h / 2 / H.value,
-      rotation: 0,
-    });
+    addShape({ kind: "ellipse", cx, cy, rx: w / 2 / W.value, ry: h / 2 / H.value, rotation: 0 });
+  } else if (tool.value === "arc") {
+    // The dragged box's inscribed circle.
+    addShape({ kind: "arc", cx, cy, r: Math.min(w, h) / 2 / W.value, ...NEW_ARC });
+  } else if (tool.value === "wedge") {
+    addShape({ kind: "wedge", cx, cy, r: Math.min(w, h) / 2 / W.value, ...NEW_WEDGE });
   }
 }
 
@@ -888,26 +1118,29 @@ function commitPolygon() {
   }
   draftPoly.value = [];
   if (points.length < 3) return;
-  addArea({ kind: "polygon", points });
+  addShape({ kind: "polygon", points });
 }
 
 // --- shape configs ---------------------------------------------------------
 
-function colours(a: Area) {
+// Shapes draw in their own lit colours (the tokens by default); the
+// recorded input's shapes at full opacity, the rest faded; the selected one
+// gets a dashed live-coloured outline on top.
+function colours(a: Shape) {
   const isCurrent = a.input === currentKey.value;
   const selected = a.id === selectedId.value;
   return {
-    stroke: isCurrent ? paint.value.live : paint.value.dim,
-    strokeWidth: selected ? 3 : isCurrent ? 2 : 1,
-    fill: isCurrent ? paint.value.liveFill : paint.value.dimFill,
-    opacity: isCurrent ? 1 : 0.6,
+    stroke: selected ? paint.value.live : roleColour(a, "stroke"),
+    strokeWidth: selected ? 3 : 2,
+    fill: roleColour(a, "fill"),
+    opacity: isCurrent || selected ? 1 : 0.45,
     dash: selected ? [6, 3] : undefined,
   };
 }
 
-function rectCfg(a: Area) {
-  if (a.shape.kind !== "rect") return {};
-  const s = a.shape;
+function rectCfg(a: Shape) {
+  if (a.geometry.kind !== "rect") return {};
+  const s = a.geometry;
   const w = s.w * W.value;
   const h = s.h * H.value;
   // Placed at its centre with a half-size offset, so `rotation` turns around
@@ -920,15 +1153,16 @@ function rectCfg(a: Area) {
     height: h,
     offsetX: w / 2,
     offsetY: h / 2,
+    cornerRadius: rectRadiusPx(s, W.value, H.value),
     rotation: s.rotation,
     draggable: canDrag.value,
     ...colours(a),
   };
 }
 
-function ellipseCfg(a: Area) {
-  if (a.shape.kind !== "ellipse") return {};
-  const s = a.shape;
+function ellipseCfg(a: Shape) {
+  if (a.geometry.kind !== "ellipse") return {};
+  const s = a.geometry;
   // Konva ellipses already draw around their origin — no offset needed.
   return {
     id: a.id,
@@ -942,22 +1176,22 @@ function ellipseCfg(a: Area) {
   };
 }
 
-function polyCfg(a: Area) {
-  if (a.shape.kind !== "polygon") return {};
+function polyCfg(a: Shape) {
+  if (a.geometry.kind !== "polygon") return {};
   return {
     id: a.id,
     x: 0,
     y: 0,
-    points: a.shape.points.flatMap(([x, y]) => [x * W.value, y * H.value]),
+    points: a.geometry.points.flatMap(([x, y]) => [x * W.value, y * H.value]),
     closed: true,
     draggable: canDrag.value,
     ...colours(a),
   };
 }
 
-function symbolCfg(a: Area) {
-  if (a.shape.kind !== "symbol") return {};
-  const s = a.shape;
+function symbolCfg(a: Shape) {
+  if (a.geometry.kind !== "symbol") return {};
+  const s = a.geometry;
   // 100 path units == w * image width by h * image height.
   const px = symbolPx(s, W.value, H.value);
   return {
@@ -976,32 +1210,88 @@ function symbolCfg(a: Area) {
   };
 }
 
+function arcCfg(a: Shape) {
+  if (a.geometry.kind !== "arc") return {};
+  const s = a.geometry;
+  const r = s.r * W.value;
+  return {
+    id: a.id,
+    x: s.cx * W.value,
+    y: s.cy * H.value,
+    innerRadius: r * s.inner,
+    outerRadius: r,
+    angle: s.angle,
+    rotation: s.rotation,
+    draggable: canDrag.value,
+    ...colours(a),
+  };
+}
+
+function wedgeCfg(a: Shape) {
+  if (a.geometry.kind !== "wedge") return {};
+  const s = a.geometry;
+  return {
+    id: a.id,
+    x: s.cx * W.value,
+    y: s.cy * H.value,
+    radius: s.r * W.value,
+    angle: s.angle,
+    rotation: s.rotation,
+    draggable: canDrag.value,
+    ...colours(a),
+  };
+}
+
+// An image shape has no colours of its own; it fades like the others.
+function imageCfg(a: Shape) {
+  if (a.geometry.kind !== "image") return {};
+  const s = a.geometry;
+  const w = s.w * W.value;
+  const h = s.h * H.value;
+  return {
+    id: a.id,
+    image: shapeImgs.value[s.file],
+    x: s.x * W.value,
+    y: s.y * H.value,
+    width: w,
+    height: h,
+    offsetX: w / 2,
+    offsetY: h / 2,
+    rotation: s.rotation,
+    draggable: canDrag.value,
+    opacity: colours(a).opacity,
+    stroke: a.id === selectedId.value ? paint.value.live : undefined,
+    strokeWidth: 2,
+    dash: [6, 3],
+  };
+}
+
 // --- shape edits -----------------------------------------------------------
 
-function onAreaClick(a: Area) {
+function onShapeClick(a: Shape) {
   if (!selectMode.value) return;
-  pickArea(a);
+  pickShape(a);
 }
 
-function onAreaEnter(a: Area) {
+function onShapeEnter(a: Shape) {
   const pos = stagePointer();
-  hover.value = pos ? { x: pos.x + 10, y: pos.y + 10, text: a.input } : null;
+  hover.value = pos ? { x: pos.x + 10, y: pos.y + 10, text: inputText(a.input).text } : null;
 }
 
-function onAreaLeave() {
+function onShapeLeave() {
   hover.value = null;
 }
 
-function onDragEnd(a: Area, e: KonvaEventObject<DragEvent>) {
+function onDragEnd(a: Shape, e: KonvaEventObject<DragEvent>) {
   const node = e.target;
-  const s = a.shape;
+  const s = a.geometry;
   if (s.kind === "rect") {
     s.x = (node.x() - (s.w * W.value) / 2) / W.value;
     s.y = (node.y() - (s.h * H.value) / 2) / H.value;
-  } else if (s.kind === "ellipse") {
+  } else if (s.kind === "ellipse" || s.kind === "arc" || s.kind === "wedge") {
     s.cx = node.x() / W.value;
     s.cy = node.y() / H.value;
-  } else if (s.kind === "symbol") {
+  } else if (s.kind === "symbol" || s.kind === "image") {
     s.x = node.x() / W.value;
     s.y = node.y() / H.value;
   } else {
@@ -1012,11 +1302,22 @@ function onDragEnd(a: Area, e: KonvaEventObject<DragEvent>) {
   }
 }
 
-function onTransformEnd(a: Area, e: KonvaEventObject<Event>) {
+function onTransformEnd(a: Shape, e: KonvaEventObject<Event>) {
   const node = e.target;
-  const s = a.shape;
+  const s = a.geometry;
   const sx = node.scaleX();
   const sy = node.scaleY();
+  if (s.kind === "polygon") {
+    // The points are stage coordinates: bake the node's transform into them
+    // and put the node back at the origin.
+    const m = node.getTransform();
+    s.points = s.points.map(([x, y]) => {
+      const p = m.point({ x: x * W.value, y: y * H.value });
+      return [p.x / W.value, p.y / H.value] as [number, number];
+    });
+    node.setAttrs({ x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 });
+    return;
+  }
   if (s.kind === "rect") {
     const w = Math.max(1, node.width() * sx);
     const h = Math.max(1, node.height() * sy);
@@ -1050,32 +1351,68 @@ function onTransformEnd(a: Area, e: KonvaEventObject<Event>) {
     s.x = node.x() / W.value;
     s.y = node.y() / H.value;
     s.rotation = node.rotation();
+  } else if (s.kind === "image") {
+    const w = Math.max(1, node.width() * sx);
+    const h = Math.max(1, node.height() * sy);
+    node.scaleX(1);
+    node.scaleY(1);
+    node.width(w);
+    node.height(h);
+    node.offsetX(w / 2);
+    node.offsetY(h / 2);
+    s.w = w / W.value;
+    s.h = h / H.value;
+    s.x = node.x() / W.value;
+    s.y = node.y() / H.value;
+    s.rotation = node.rotation();
+  } else if (s.kind === "arc") {
+    // Circular (keepRatio): one scale factor for both radii.
+    const arc = node as unknown as Arc;
+    const r = Math.max(1, arc.outerRadius() * sx);
+    node.scaleX(1);
+    node.scaleY(1);
+    arc.outerRadius(r);
+    arc.innerRadius(r * s.inner);
+    s.r = r / W.value;
+    s.cx = node.x() / W.value;
+    s.cy = node.y() / H.value;
+    s.rotation = node.rotation();
+  } else if (s.kind === "wedge") {
+    const wedge = node as unknown as Wedge;
+    const r = Math.max(1, wedge.radius() * sx);
+    node.scaleX(1);
+    node.scaleY(1);
+    wedge.radius(r);
+    s.r = r / W.value;
+    s.cx = node.x() / W.value;
+    s.cy = node.y() / H.value;
+    s.rotation = node.rotation();
   }
 }
 
 // Polygon vertex anchors (select mode, polygon selected).
 const vertexAnchors = computed(() => {
-  const a = selectedArea.value;
-  if (!a || a.shape.kind !== "polygon" || !canDrag.value) return [];
-  return a.shape.points.map(([x, y], i) => ({ i, x: x * W.value, y: y * H.value }));
+  const a = selectedShape.value;
+  if (!a || a.geometry.kind !== "polygon" || !canDrag.value) return [];
+  return a.geometry.points.map(([x, y], i) => ({ i, x: x * W.value, y: y * H.value }));
 });
 
 function onVertexDrag(i: number, e: KonvaEventObject<DragEvent>) {
-  const a = selectedArea.value;
-  if (!a || a.shape.kind !== "polygon") return;
-  a.shape.points[i] = [e.target.x() / W.value, e.target.y() / H.value];
+  const a = selectedShape.value;
+  if (!a || a.geometry.kind !== "polygon") return;
+  a.geometry.points[i] = [e.target.x() / W.value, e.target.y() / H.value];
 }
 
 // Attach/detach the transformer whenever the selection or the shapes change.
 watch(
-  [selectedId, canDrag, areas, W],
+  [selectedId, canDrag, shapes, W],
   async () => {
     await nextTick();
     const tr = trRef.value?.getNode();
     const stage = stageRef.value?.getStage();
     if (!tr || !stage) return;
-    const a = selectedArea.value;
-    if (!a || a.shape.kind === "polygon" || !canDrag.value) {
+    const a = selectedShape.value;
+    if (!a || !canDrag.value) {
       tr.nodes([]);
       return;
     }
@@ -1546,39 +1883,67 @@ function noMaps(d: DeviceInfo): boolean {
                 <v-image :config="{ image: imgEl, width: W, height: H, name: 'bg' }" />
               </v-layer>
               <v-layer>
-                <template v-for="a in areas" :key="a.id">
+                <template v-for="a in shapes" :key="a.id">
                   <v-rect
-                    v-if="a.shape.kind === 'rect'"
+                    v-if="a.geometry.kind === 'rect'"
                     :config="rectCfg(a)"
-                    @click="onAreaClick(a)"
-                    @mouseenter="onAreaEnter(a)"
-                    @mouseleave="onAreaLeave"
+                    @click="onShapeClick(a)"
+                    @mouseenter="onShapeEnter(a)"
+                    @mouseleave="onShapeLeave"
                     @dragend="onDragEnd(a, $event)"
                     @transformend="onTransformEnd(a, $event)"
                   />
                   <v-ellipse
-                    v-else-if="a.shape.kind === 'ellipse'"
+                    v-else-if="a.geometry.kind === 'ellipse'"
                     :config="ellipseCfg(a)"
-                    @click="onAreaClick(a)"
-                    @mouseenter="onAreaEnter(a)"
-                    @mouseleave="onAreaLeave"
+                    @click="onShapeClick(a)"
+                    @mouseenter="onShapeEnter(a)"
+                    @mouseleave="onShapeLeave"
                     @dragend="onDragEnd(a, $event)"
                     @transformend="onTransformEnd(a, $event)"
                   />
                   <v-line
-                    v-else-if="a.shape.kind === 'polygon'"
+                    v-else-if="a.geometry.kind === 'polygon'"
                     :config="polyCfg(a)"
-                    @click="onAreaClick(a)"
-                    @mouseenter="onAreaEnter(a)"
-                    @mouseleave="onAreaLeave"
+                    @click="onShapeClick(a)"
+                    @mouseenter="onShapeEnter(a)"
+                    @mouseleave="onShapeLeave"
                     @dragend="onDragEnd(a, $event)"
+                    @transformend="onTransformEnd(a, $event)"
+                  />
+                  <v-arc
+                    v-else-if="a.geometry.kind === 'arc'"
+                    :config="arcCfg(a)"
+                    @click="onShapeClick(a)"
+                    @mouseenter="onShapeEnter(a)"
+                    @mouseleave="onShapeLeave"
+                    @dragend="onDragEnd(a, $event)"
+                    @transformend="onTransformEnd(a, $event)"
+                  />
+                  <v-wedge
+                    v-else-if="a.geometry.kind === 'wedge'"
+                    :config="wedgeCfg(a)"
+                    @click="onShapeClick(a)"
+                    @mouseenter="onShapeEnter(a)"
+                    @mouseleave="onShapeLeave"
+                    @dragend="onDragEnd(a, $event)"
+                    @transformend="onTransformEnd(a, $event)"
+                  />
+                  <v-image
+                    v-else-if="a.geometry.kind === 'image'"
+                    :config="imageCfg(a)"
+                    @click="onShapeClick(a)"
+                    @mouseenter="onShapeEnter(a)"
+                    @mouseleave="onShapeLeave"
+                    @dragend="onDragEnd(a, $event)"
+                    @transformend="onTransformEnd(a, $event)"
                   />
                   <v-path
                     v-else
                     :config="symbolCfg(a)"
-                    @click="onAreaClick(a)"
-                    @mouseenter="onAreaEnter(a)"
-                    @mouseleave="onAreaLeave"
+                    @click="onShapeClick(a)"
+                    @mouseenter="onShapeEnter(a)"
+                    @mouseleave="onShapeLeave"
                     @dragend="onDragEnd(a, $event)"
                     @transformend="onTransformEnd(a, $event)"
                   />
@@ -1595,6 +1960,17 @@ function noMaps(d: DeviceInfo): boolean {
                     y: drawPreview.y + drawPreview.height / 2,
                     radiusX: drawPreview.width / 2,
                     radiusY: drawPreview.height / 2,
+                    stroke: paint.live,
+                    dash: [4, 4],
+                    listening: false,
+                  }"
+                />
+                <v-circle
+                  v-if="drawPreview && (tool === 'arc' || tool === 'wedge')"
+                  :config="{
+                    x: drawPreview.x + drawPreview.width / 2,
+                    y: drawPreview.y + drawPreview.height / 2,
+                    radius: Math.min(drawPreview.width, drawPreview.height) / 2,
                     stroke: paint.live,
                     dash: [4, 4],
                     listening: false,
@@ -1624,7 +2000,7 @@ function noMaps(d: DeviceInfo): boolean {
                   ref="trRef"
                   :config="{
                     rotateEnabled: true,
-                    keepRatio: false,
+                    keepRatio,
                     anchorSize: 8,
                     borderStroke: paint.live,
                     anchorStroke: paint.live,
@@ -1684,6 +2060,114 @@ function noMaps(d: DeviceInfo): boolean {
         </div>
       </div>
 
+      <!-- the selected shape: colours and per-kind settings -->
+      <div v-if="editing && selectedShape" class="shape-panel">
+        <div class="sp-head">
+          <Icon :name="shapeIcon(selectedShape)" :size="14" />
+          <span class="sp-kind">{{ shapeKind(selectedShape) }}</span>
+          <span class="sp-input" :class="{ mono: inputText(selectedShape.input).mono }">{{ inputText(selectedShape.input).text }}</span>
+          <div class="grow" />
+          <button type="button" class="row-del" title="Duplicate · Ctrl+D" @click="duplicateShape(selectedShape)">
+            <Icon name="clone" :size="13" />
+          </button>
+          <button type="button" class="row-del" title="Delete · Del" @click="deleteShape(selectedShape.id)">
+            <Icon name="trash" :size="13" />
+          </button>
+        </div>
+        <template v-if="selectedShape.geometry.kind !== 'image'">
+          <div v-for="role in (['stroke', 'fill'] as const)" :key="role" class="sp-row">
+            <span class="sp-label">{{ role === "stroke" ? "Outline" : "Fill" }}</span>
+            <div class="sp-colour">
+              <div class="swatches">
+                <button
+                  v-for="c in swatches"
+                  :key="c"
+                  type="button"
+                  class="swatch"
+                  :class="{ on: colourHex(roleColour(selectedShape, role)) === c.toLowerCase() }"
+                  :style="{ background: c }"
+                  :title="c"
+                  @click="setRoleHex(selectedShape, role, c)"
+                />
+              </div>
+              <div class="sp-line">
+                <span class="swatch big" :style="{ background: roleColour(selectedShape, role) }" />
+                <input
+                  class="hex mono"
+                  :value="colourHex(roleColour(selectedShape, role))"
+                  maxlength="7"
+                  spellcheck="false"
+                  @change="onHexInput(selectedShape, role, $event)"
+                />
+                <input
+                  type="range"
+                  class="range"
+                  min="0"
+                  max="100"
+                  :value="colourAlpha(roleColour(selectedShape, role))"
+                  title="Opacity"
+                  @input="onAlphaInput(selectedShape, role, $event)"
+                />
+                <span class="mono sp-val">{{ colourAlpha(roleColour(selectedShape, role)) }}%</span>
+                <button
+                  type="button"
+                  class="btn outline small"
+                  :disabled="!selectedShape[role]"
+                  title="Back to the default colour"
+                  @click="resetRole(selectedShape, role)"
+                >
+                  Default
+                </button>
+              </div>
+            </div>
+          </div>
+        </template>
+        <div v-if="selectedShape.geometry.kind === 'rect'" class="sp-row">
+          <span class="sp-label">Corners</span>
+          <div class="sp-line">
+            <input
+              type="range"
+              class="range"
+              min="0"
+              max="50"
+              :value="Math.round(selectedShape.geometry.radius * 100)"
+              @input="onRangeInput($event, (v) => ((selectedShape!.geometry as RectGeometry).radius = v / 100))"
+            />
+            <span class="mono sp-val">{{ Math.round(selectedShape.geometry.radius * 100) }}%</span>
+          </div>
+        </div>
+        <template v-if="selectedShape.geometry.kind === 'arc' || selectedShape.geometry.kind === 'wedge'">
+          <div class="sp-row">
+            <span class="sp-label">Angle</span>
+            <div class="sp-line">
+              <input
+                type="range"
+                class="range"
+                min="5"
+                max="360"
+                :value="Math.round(selectedShape.geometry.angle)"
+                @input="onRangeInput($event, (v) => ((selectedShape!.geometry as ArcGeometry | WedgeGeometry).angle = v))"
+              />
+              <span class="mono sp-val">{{ Math.round(selectedShape.geometry.angle) }}°</span>
+            </div>
+          </div>
+          <div v-if="selectedShape.geometry.kind === 'arc'" class="sp-row">
+            <span class="sp-label">Inner</span>
+            <div class="sp-line">
+              <input
+                type="range"
+                class="range"
+                min="0"
+                max="95"
+                :value="Math.round(selectedShape.geometry.inner * 100)"
+                @input="onRangeInput($event, (v) => ((selectedShape!.geometry as ArcGeometry).inner = v / 100))"
+              />
+              <span class="mono sp-val">{{ Math.round(selectedShape.geometry.inner * 100) }}%</span>
+            </div>
+          </div>
+        </template>
+      </div>
+
       <div class="shapes" :style="{ '--cols': cols.template.value, '--cols-min': `${cols.minWidth.value}px` }">
         <div class="tabs">
           <div class="tab">Shapes</div>
@@ -1723,12 +2207,12 @@ function noMaps(d: DeviceInfo): boolean {
                 :key="a.id"
                 class="row shape-row"
                 :class="{ cur: g.key === currentKey, sel: a.id === selectedId }"
-                @click="pickArea(a)"
+                @click="pickShape(a)"
               >
                 <span />
                 <span class="shape-cell">
-                  <Icon :name="areaIcon(a)" :size="14" class="shape-icon" />
-                  <span class="cell-kind">{{ areaKind(a) }}</span>
+                  <Icon :name="shapeIcon(a)" :size="14" class="shape-icon" />
+                  <span class="cell-kind">{{ shapeKind(a) }}</span>
                   <button v-if="editing" type="button" class="row-del" title="Delete" @click.stop="deleteShape(a.id)">
                     <Icon name="trash" :size="13" />
                   </button>
@@ -1736,7 +2220,7 @@ function noMaps(d: DeviceInfo): boolean {
               </div>
             </template>
           </template>
-          <div v-if="!buckets.length" class="row empty">{{ areas.length ? "No match" : "No shapes" }}</div>
+          <div v-if="!buckets.length" class="row empty">{{ shapes.length ? "No match" : "No shapes" }}</div>
         </div>
       </div>
     </aside>
@@ -2416,6 +2900,136 @@ function noMaps(d: DeviceInfo): boolean {
   color: var(--text);
   font-size: 13px;
   outline: none;
+}
+
+/* --- shape panel --- */
+
+.shape-panel {
+  background: var(--bg-surface);
+  border-radius: var(--radius-panel);
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.sp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.sp-kind {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.sp-input {
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sp-row {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.sp-label {
+  padding-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.sp-colour {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  padding: 0;
+  cursor: pointer;
+}
+
+.swatch.on {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+
+.swatch.big {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  cursor: default;
+}
+
+.sp-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.hex {
+  width: 74px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-surface-2);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.sp-val {
+  width: 40px;
+  flex-shrink: 0;
+  text-align: right;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+/* Own-styled slider (WebKitGTK would paint GTK's). */
+.range {
+  flex: 1;
+  min-width: 40px;
+  height: 4px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--bg-surface-3);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
 }
 
 /* --- the table (mirrors the bindings deck) --- */

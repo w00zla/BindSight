@@ -1,5 +1,5 @@
 {
-  "format": 3,
+  "format": 4,
   "id": "4b7a2c1e-0001-4000-8000-000000000003",
   "name": "Xbox controller",
   "hardware_id": "gamepad",
@@ -8,83 +8,89 @@
     "file": "image.png",
     "label": "Top"
   },
-  "areas": [
+  "shapes": [
     {
       "id": "a1",
       "input": "pad:triggerl",
-      "shape": {
+      "geometry": {
         "kind": "rect",
         "x": 0.175,
         "y": 0.018824,
         "w": 0.145833,
         "h": 0.096471,
-        "rotation": 0.0
+        "rotation": 0.0,
+        "radius": 0.0
       }
     },
     {
       "id": "a2",
       "input": "pad:triggerl_btn",
-      "shape": {
+      "geometry": {
         "kind": "rect",
         "x": 0.186667,
         "y": 0.035294,
         "w": 0.1225,
         "h": 0.063529,
-        "rotation": 0.0
+        "rotation": 0.0,
+        "radius": 0.0
       }
     },
     {
       "id": "a3",
       "input": "pad:triggerr",
-      "shape": {
+      "geometry": {
         "kind": "rect",
         "x": 0.679167,
         "y": 0.018824,
         "w": 0.145833,
         "h": 0.096471,
-        "rotation": 0.0
+        "rotation": 0.0,
+        "radius": 0.0
       }
     },
     {
       "id": "a4",
       "input": "pad:triggerr_btn",
-      "shape": {
+      "geometry": {
         "kind": "rect",
         "x": 0.690833,
         "y": 0.035294,
         "w": 0.1225,
         "h": 0.063529,
-        "rotation": 0.0
+        "rotation": 0.0,
+        "radius": 0.0
       }
     },
     {
       "id": "a5",
       "input": "pad:shoulderl",
-      "shape": {
+      "geometry": {
         "kind": "rect",
         "x": 0.1625,
         "y": 0.122353,
         "w": 0.170833,
         "h": 0.077647,
-        "rotation": 0.0
+        "rotation": 0.0,
+        "radius": 0.0
       }
     },
     {
       "id": "a6",
       "input": "pad:shoulderr",
-      "shape": {
+      "geometry": {
         "kind": "rect",
         "x": 0.666667,
         "y": 0.122353,
         "w": 0.170833,
         "h": 0.077647,
-        "rotation": 0.0
+        "rotation": 0.0,
+        "radius": 0.0
       }
     },
     {
       "id": "a7",
       "input": "pad:thumbl_up",
-      "shape": {
+      "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
         "x": 0.258333,
@@ -97,7 +103,7 @@
     {
       "id": "a8",
       "input": "pad:thumbl_down",
-      "shape": {
+      "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
         "x": 0.258333,
@@ -110,7 +116,7 @@
     {
       "id": "a9",
       "input": "pad:thumbl_left",
-      "shape": {
+      "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
         "x": 0.165,
@@ -123,7 +129,7 @@
     {
       "id": "a10",
       "input": "pad:thumbl_right",
-      "shape": {
+      "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
         "x": 0.351667,
@@ -136,7 +142,7 @@
     {
       "id": "a11",
       "input": "pad:thumbl",
-      "shape": {
+      "geometry": {
         "kind": "ellipse",
         "cx": 0.258333,
         "cy": 0.370588,
@@ -148,7 +154,7 @@
     {
       "id": "a12",
       "input": "pad:thumblx",
-      "shape": {
+      "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
         "x": 0.258333,
@@ -161,7 +167,7 @@
     {
       "id": "a13",
       "input": "pad:thumbly",
-      "shape": {
+      "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
         "x": 0.258333,
@@ -174,7 +180,7 @@
     {
       "id": "a14",
       "input": "pad:thumbr_up",
-      "shape": {
+      "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
         "x": 0.620833,
@@ -187,7 +193,7 @@
     {
       "id": "a15",
       "input": "pad:thumbr_down",
-      "shape": {
+      "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
         "x": 0.620833,
@@ -200,7 +206,7 @@
     {
       "id": "a16",
       "input": "pad:thumbr_left",
-      "shape": {
+      "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
         "x": 0.5275,
@@ -213,7 +219,7 @@
     {
       "id": "a17",
       "input": "pad:thumbr_right",
-      "shape": {
+      "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
         "x": 0.714167,
@@ -226,7 +232,7 @@
     {
       "id": "a18",
       "input": "pad:thumbr",
-      "shape": {
+      "geometry": {
         "kind": "ellipse",
         "cx": 0.620833,
         "cy": 0.605882,
@@ -238,7 +244,7 @@
     {
       "id": "a19",
       "input": "pad:thumbrx",
-      "shape": {
+      "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
         "x": 0.620833,
@@ -251,7 +257,7 @@
     {
       "id": "a20",
       "input": "pad:thumbry",
-      "shape": {
+      "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
         "x": 0.620833,
@@ -264,55 +270,59 @@
     {
       "id": "a21",
       "input": "pad:dpad_up",
-      "shape": {
+      "geometry": {
         "kind": "rect",
         "x": 0.345833,
         "y": 0.478824,
         "w": 0.066667,
         "h": 0.08,
-        "rotation": 0.0
+        "rotation": 0.0,
+        "radius": 0.0
       }
     },
     {
       "id": "a22",
       "input": "pad:dpad_down",
-      "shape": {
+      "geometry": {
         "kind": "rect",
         "x": 0.345833,
         "y": 0.652941,
         "w": 0.066667,
         "h": 0.08,
-        "rotation": 0.0
+        "rotation": 0.0,
+        "radius": 0.0
       }
     },
     {
       "id": "a23",
       "input": "pad:dpad_left",
-      "shape": {
+      "geometry": {
         "kind": "rect",
         "x": 0.289167,
         "y": 0.558824,
         "w": 0.056667,
         "h": 0.094118,
-        "rotation": 0.0
+        "rotation": 0.0,
+        "radius": 0.0
       }
     },
     {
       "id": "a24",
       "input": "pad:dpad_right",
-      "shape": {
+      "geometry": {
         "kind": "rect",
         "x": 0.4125,
         "y": 0.558824,
         "w": 0.056667,
         "h": 0.094118,
-        "rotation": 0.0
+        "rotation": 0.0,
+        "radius": 0.0
       }
     },
     {
       "id": "a25",
       "input": "pad:a",
-      "shape": {
+      "geometry": {
         "kind": "ellipse",
         "cx": 0.741667,
         "cy": 0.445882,
@@ -324,7 +334,7 @@
     {
       "id": "a26",
       "input": "pad:b",
-      "shape": {
+      "geometry": {
         "kind": "ellipse",
         "cx": 0.803333,
         "cy": 0.358824,
@@ -336,7 +346,7 @@
     {
       "id": "a27",
       "input": "pad:x",
-      "shape": {
+      "geometry": {
         "kind": "ellipse",
         "cx": 0.68,
         "cy": 0.358824,
@@ -348,7 +358,7 @@
     {
       "id": "a28",
       "input": "pad:y",
-      "shape": {
+      "geometry": {
         "kind": "ellipse",
         "cx": 0.741667,
         "cy": 0.271765,
@@ -360,7 +370,7 @@
     {
       "id": "a29",
       "input": "pad:back",
-      "shape": {
+      "geometry": {
         "kind": "ellipse",
         "cx": 0.454167,
         "cy": 0.376471,
@@ -372,7 +382,7 @@
     {
       "id": "a30",
       "input": "pad:start",
-      "shape": {
+      "geometry": {
         "kind": "ellipse",
         "cx": 0.545833,
         "cy": 0.376471,

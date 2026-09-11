@@ -1,31 +1,57 @@
-// Image-map types (mirroring imagemap.json, format 3) plus the small helpers
+// Image-map types (mirroring imagemap.json, format 4) plus the small helpers
 // both renderers share.
 
 import type { DeviceInfo, JoyInput } from "./types";
 
-export type SymbolKind = "arrow" | "cw" | "ccw";
+export type SymbolKind = "arrow" | "arrow2" | "rotate";
 
 // All coordinates normalized 0..1 relative to the image's natural size
-// (x/w -> width, y/h -> height); rotation in degrees, clockwise, around the
-// shape's own center. A symbol is its 100x100 path stretched into a w x h box
-// centered at (x, y).
-export type RectShape = { kind: "rect"; x: number; y: number; w: number; h: number; rotation: number };
-export type EllipseShape = { kind: "ellipse"; cx: number; cy: number; rx: number; ry: number; rotation: number };
-export type PolygonShape = { kind: "polygon"; points: [number, number][] };
-export type SymbolShape = { kind: "symbol"; symbol: SymbolKind; x: number; y: number; w: number; h: number; rotation: number };
-export type Shape = RectShape | EllipseShape | PolygonShape | SymbolShape;
+// (x/w -> width, y/h -> height, radii -> width); rotation in degrees,
+// clockwise, around the shape's own center — for an arc or wedge, where its
+// sweep starts. A symbol is its 100x100 path stretched into a w x h box
+// centered at (x, y); an image shape is its file stretched the same way.
+export type RectGeometry = {
+  kind: "rect";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rotation: number;
+  // Corner radius as a fraction of the shorter side (0..0.5).
+  radius: number;
+};
+export type EllipseGeometry = { kind: "ellipse"; cx: number; cy: number; rx: number; ry: number; rotation: number };
+export type PolygonGeometry = { kind: "polygon"; points: [number, number][] };
+export type SymbolGeometry = { kind: "symbol"; symbol: SymbolKind; x: number; y: number; w: number; h: number; rotation: number };
+// `r` outer radius, `inner` the inner one as a fraction of it (0..1).
+export type ArcGeometry = { kind: "arc"; cx: number; cy: number; r: number; inner: number; angle: number; rotation: number };
+export type WedgeGeometry = { kind: "wedge"; cx: number; cy: number; r: number; angle: number; rotation: number };
+export type ImageGeometry = { kind: "image"; file: string; x: number; y: number; w: number; h: number; rotation: number };
+export type Geometry =
+  | RectGeometry
+  | EllipseGeometry
+  | PolygonGeometry
+  | SymbolGeometry
+  | ArcGeometry
+  | WedgeGeometry
+  | ImageGeometry;
+export type GeometryKind = Geometry["kind"];
 
 export interface ImageFile {
   file: string;
   label: string;
 }
 
-export interface Area {
+// A drawn shape, lit on the image while its input is active. `stroke` /
+// `fill` (`#rrggbb` or `#rrggbbaa`) override the app's default lit colours.
+export interface Shape {
   id: string;
   // SDL-level input key: `button:<n>`, `hat:<n>:<dir>`, `axis:<n>` (joystick),
   // `key:<sc name>` (keyboard) or `pad:<sc name>` (gamepad).
   input: string;
-  shape: Shape;
+  stroke?: string;
+  fill?: string;
+  geometry: Geometry;
 }
 
 export interface ImageMap {
@@ -35,7 +61,7 @@ export interface ImageMap {
   hardware_id: string;
   hardware_name: string;
   image: ImageFile;
-  areas: Area[];
+  shapes: Shape[];
 }
 
 export interface ImageMapSummary {
@@ -44,9 +70,17 @@ export interface ImageMapSummary {
   hardware_id: string;
   hardware_name: string;
   source: "bundled" | "user";
-  area_count: number;
+  shape_count: number;
 }
 
+// Files the image shapes of a map reference (the device image not included).
+export function shapeImageFiles(map: ImageMap): string[] {
+  const out: string[] = [];
+  for (const s of map.shapes) {
+    if (s.geometry.kind === "image" && !out.includes(s.geometry.file)) out.push(s.geometry.file);
+  }
+  return out;
+}
 
 // Input key for a live event: buttons and keys only while pressed, hats only
 // when not centered, axes always. `null` when the event does not name an input.
@@ -116,21 +150,52 @@ export function sameHardware(a: string | null | undefined, b: string | null | un
 }
 
 // Symbol outlines in a 100x100 box centered at (50,50), as SVG path data.
-// `arrow` points right; `cw`/`ccw` are a 270° ring with an arrowhead at the
-// bottom, running clockwise / counter-clockwise (screen coordinates, y down).
+// `arrow` points right, `arrow2` both ways; `rotate` is a 270° ring open at
+// the bottom with an arrowhead at each end (SC does not tell the twist
+// directions apart).
 export const SYMBOL_PATHS: Record<SymbolKind, string> = {
   arrow: "M5 40 H60 V20 L95 50 L60 80 V60 H5 Z",
-  cw: "M10 50 A40 40 0 1 1 50 90 L50 100 L30 82 L50 64 L50 74 A24 24 0 1 0 26 50 Z",
-  ccw: "M90 50 A40 40 0 1 0 50 90 L50 100 L70 82 L50 64 L50 74 A24 24 0 1 1 74 50 Z",
+  arrow2: "M5 50 L30 25 V40 H70 V25 L95 50 L70 75 V60 H30 V75 Z",
+  rotate:
+    "M16.1 83.9 L37.3 82.5 L38.7 61.3 L33 67 A24 24 0 1 1 67 67 L61.3 61.3 L62.7 82.5 L83.9 83.9 L78.3 78.3 A40 40 0 1 0 21.7 78.3 Z",
 };
 
-// Pixel placement of a symbol in a W x H pixel space: center, per-axis scale
-// (100 path units == w * W px by h * H px) and rotation.
-export function symbolPx(s: SymbolShape, W: number, H: number): { x: number; y: number; scaleX: number; scaleY: number; rotation: number } {
+// Pixel placement of a symbol or image shape in a W x H pixel space: center,
+// per-axis scale (100 path units == w * W px by h * H px) and rotation.
+export function symbolPx(
+  s: SymbolGeometry | ImageGeometry,
+  W: number,
+  H: number,
+): { x: number; y: number; scaleX: number; scaleY: number; rotation: number } {
   return { x: s.x * W, y: s.y * H, scaleX: (s.w * W) / 100, scaleY: (s.h * H) / 100, rotation: s.rotation };
 }
 
 // Polygon vertices as a flat [x0, y0, x1, y1, ...] pixel list.
-export function polygonPx(p: PolygonShape, W: number, H: number): number[] {
+export function polygonPx(p: PolygonGeometry, W: number, H: number): number[] {
   return p.points.flatMap(([x, y]) => [x * W, y * H]);
+}
+
+function polar(cx: number, cy: number, r: number, deg: number): [number, number] {
+  const a = (deg * Math.PI) / 180;
+  return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+}
+
+// SVG path of a ring segment (`inner` > 0) or pie slice (`inner` == 0) in
+// pixels: `angle` degrees of sweep clockwise from `rotation`. A full 360° is
+// drawn a hair short, so the arc commands stay well defined.
+export function arcPath(cx: number, cy: number, r: number, inner: number, angle: number, rotation: number): string {
+  const sweep = Math.min(Math.max(angle, 0), 359.99);
+  const large = sweep > 180 ? 1 : 0;
+  const [x0, y0] = polar(cx, cy, r, rotation);
+  const [x1, y1] = polar(cx, cy, r, rotation + sweep);
+  if (inner <= 0) return `M${cx} ${cy} L${x0} ${y0} A${r} ${r} 0 ${large} 1 ${x1} ${y1} Z`;
+  const ri = r * inner;
+  const [xi0, yi0] = polar(cx, cy, ri, rotation);
+  const [xi1, yi1] = polar(cx, cy, ri, rotation + sweep);
+  return `M${x0} ${y0} A${r} ${r} 0 ${large} 1 ${x1} ${y1} L${xi1} ${yi1} A${ri} ${ri} 0 ${large} 0 ${xi0} ${yi0} Z`;
+}
+
+// Corner radius of a rect in pixels.
+export function rectRadiusPx(r: RectGeometry, W: number, H: number): number {
+  return r.radius * Math.min(r.w * W, r.h * H);
 }

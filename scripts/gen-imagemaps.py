@@ -5,7 +5,7 @@ Usage: scripts/gen-imagemaps.py [--out DIR] [--overlays DIR]
 
 Each device's geometry is defined exactly once, in pixel space, and drives both
 the rendered `image.png` (via an SVG built here and rasterized with cairosvg)
-and the `imagemap.json` (format 3) whose area coordinates are that same
+and the `imagemap.json` (format 4) whose shape coordinates are that same
 geometry normalized to 0..1 of the PNG size.
 
   --out       image-map root to write `<id>/imagemap.json` + `<id>/image.png`
@@ -197,7 +197,7 @@ class Areas:
     def to_json(self) -> list[dict]:
         out = []
         for i, (input_key, shape) in enumerate(self.items, start=1):
-            out.append({"id": f"a{i}", "input": input_key, "shape": self._norm(shape)})
+            out.append({"id": f"a{i}", "input": input_key, "geometry": self._norm(shape)})
         return out
 
     def _norm(self, shape: dict) -> dict:
@@ -206,7 +206,7 @@ class Areas:
         k = shape["kind"]
         if k == "rect":
             return {"kind": "rect", "x": r(shape["x"] / w), "y": r(shape["y"] / h),
-                    "w": r(shape["w"] / w), "h": r(shape["h"] / h), "rotation": 0.0}
+                    "w": r(shape["w"] / w), "h": r(shape["h"] / h), "rotation": 0.0, "radius": 0.0}
         if k == "ellipse":
             return {"kind": "ellipse", "cx": r(shape["cx"] / w), "cy": r(shape["cy"] / h),
                     "rx": r(shape["rx"] / w), "ry": r(shape["ry"] / h), "rotation": 0.0}
@@ -675,13 +675,13 @@ def write_map(out_root: Path, meta: tuple[str, str, str, str], doc: Doc, areas: 
     folder.mkdir(parents=True, exist_ok=True)
     doc.write_png(folder / "image.png")
     data = {
-        "format": 3,
+        "format": 4,
         "id": map_id,
         "name": name,
         "hardware_id": hardware_id,
         "hardware_name": hardware_name,
         "image": {"file": "image.png", "label": "Top"},
-        "areas": areas.to_json(),
+        "shapes": areas.to_json(),
     }
     (folder / "imagemap.json").write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     return data
@@ -690,8 +690,8 @@ def write_map(out_root: Path, meta: tuple[str, str, str, str], doc: Doc, areas: 
 def check(data: dict) -> list[str]:
     """Structural checks matching imagemap.rs plus the 0..1 bound."""
     problems = []
-    for area in data["areas"]:
-        s = area["shape"]
+    for shape in data["shapes"]:
+        s = shape["geometry"]
         vals: list[tuple[str, float]] = []
         if s["kind"] == "rect":
             vals = [("x", s["x"]), ("y", s["y"]), ("x+w", s["x"] + s["w"]), ("y+h", s["y"] + s["h"])]
@@ -762,11 +762,11 @@ def main() -> int:
         problems += check(data)
 
         png = args.out / meta[0] / "image.png"
-        inputs = [a["input"] for a in data["areas"]]
+        inputs = [a["input"] for a in data["shapes"]]
         dupes = sorted({i for i in inputs if inputs.count(i) > 1})
-        print(f"{meta[1]:<24} {len(data['areas']):>4} areas  "
+        print(f"{meta[1]:<24} {len(data['shapes']):>4} shapes  "
               f"{png.stat().st_size / 1024:>7.1f} KiB  {int(doc.width)}x{int(doc.height)}"
-              + (f"  multi-area inputs: {', '.join(dupes)}" if dupes else ""))
+              + (f"  multi-shape inputs: {', '.join(dupes)}" if dupes else ""))
 
         if args.overlays:
             args.overlays.mkdir(parents=True, exist_ok=True)

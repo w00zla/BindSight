@@ -68,8 +68,11 @@ export const ICONS = {
   // Any shape: a square behind a circle.
   shape: '<rect x="3" y="3" width="11" height="11" rx="1"/><circle cx="16" cy="16" r="5"/>',
   'shape-arrow': '<path d="M4 12h14M13 6l6 6-6 6"/>',
-  'shape-cw': '<path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/>',
-  'shape-ccw': '<path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v5h5"/>',
+  'shape-arrow2': '<path d="M4 12h16"/><path d="m8 8-4 4 4 4"/><path d="m16 8 4 4-4 4"/>',
+  // A ring open at the bottom with an arrowhead at each end: rotation either way.
+  'shape-rotate': '<path d="M6.3 17.7a8 8 0 1 1 11.4 0"/><path d="M3 15l3.3 2.7 3-2.7"/><path d="M21 15l-3.3 2.7-3-2.7"/>',
+  'shape-arc': '<path d="M4 16a8 8 0 0 1 16 0"/><path d="M8 16a4 4 0 0 1 8 0"/><path d="M4 16h4M16 16h4"/>',
+  'shape-wedge': '<path d="M12 12V3a9 9 0 0 1 9 9z"/>',
 } as const
 
 export type IconName = keyof typeof ICONS

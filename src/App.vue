@@ -41,6 +41,7 @@ import {
   inputKeyForToken,
   inputKeysForToken,
   sameHardware,
+  shapeImageFiles,
   type ImageMap,
   type ImageMapSummary,
 } from "./imagemap";
@@ -304,6 +305,7 @@ async function loadChosenMaps() {
       const p = await invoke<ImageMap>("get_imagemap", { id });
       loadedMaps.value[id] = p;
       await loadMapImage(p.id, p.image.file);
+      for (const f of shapeImageFiles(p)) await loadMapImage(p.id, f);
     } catch {
       /* skip a map that will not load */
     }
@@ -320,7 +322,7 @@ async function reloadMaps() {
   await loadChosenMaps();
 }
 
-// A save in the editor can change the image and areas — drop the caches.
+// A save in the editor can change the images and shapes — drop the caches.
 async function onMapsSaved() {
   loadedMaps.value = {};
   mapImages.value = {};
@@ -403,7 +405,7 @@ function inMap(sdlGuid: string, key: string): boolean | null {
   const id = chosenMapId(deviceOf(sdlGuid));
   const p = id ? loadedMaps.value[id] : null;
   if (!p) return null;
-  return p.areas.some((a) => a.input === key);
+  return p.shapes.some((a) => a.input === key);
 }
 
 function deviceOf(sdlGuid: string): DeviceInfo | undefined {
@@ -420,7 +422,7 @@ function deviceForBinding(b: ResolvedBinding): DeviceInfo | undefined {
 
 // Where a pinned binding lights up: the device and its input's key, plus
 // every key of the map that gets lit (a combo's modifiers too, when the
-// map has areas for them).
+// map has shapes for them).
 interface PinTarget {
   guid: string;
   key: string;
