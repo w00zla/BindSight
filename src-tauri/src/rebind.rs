@@ -6,8 +6,10 @@
 //! endings, `<options>`, `<deviceoptions>`, other actions) stays byte for
 //! byte. SC keeps one binding per action and device kind (joystick, keyboard,
 //! gamepad), so a change replaces every existing rebind of that kind under
-//! the action; a missing `<action>` or `<actionmap>` element is created in
-//! SC's own layout (one-space indent, the file's line endings).
+//! the action — the first one keeps its other attributes (`activationMode`,
+//! `multiTap`, …), only its `input` changes; a missing `<action>` or
+//! `<actionmap>` element is created in SC's own layout (one-space indent,
+//! the file's line endings).
 
 use serde::Deserialize;
 
@@ -204,16 +206,28 @@ fn apply_one(xml: &str, change: &RebindChange) -> Result<String, String> {
         }
         Some((first_start, first_end)) => {
             // Remove the duplicates back to front (whole lines), then swap
-            // the first one's tag.
+            // the first one's input, keeping its other attributes
+            // (`activationMode`, `multiTap`, …).
             for &(start, end) in spans.iter().skip(1).rev() {
                 let line_start = start - indent_before(&xml, start).len();
                 let line_end = if xml[end..].starts_with(layout.eol) { end + layout.eol.len() } else { end };
                 xml.replace_range(line_start..line_end, "");
             }
-            xml.replace_range(first_start..first_end, &rebind);
+            let swapped = set_attr(&xml[first_start..first_end], "input", &change.input)
+                .ok_or("<rebind> without an input attribute")?;
+            xml.replace_range(first_start..first_end, &swapped);
         }
     }
     Ok(xml)
+}
+
+/// `tag` with the value of its `name="..."` attribute replaced; `None` when
+/// the attribute is missing.
+fn set_attr(tag: &str, name: &str, value: &str) -> Option<String> {
+    let key = format!(" {name}=\"");
+    let vstart = tag.find(&key)? + key.len();
+    let vend = tag[vstart..].find('"')? + vstart;
+    Some(format!("{}{value}{}", &tag[..vstart], &tag[vend..]))
 }
 
 #[cfg(test)]
@@ -283,6 +297,14 @@ mod tests {
         assert!(out.contains("  <actionmap name=\"spaceship_general_extra\">\n   <action name=\"v_extra\">\n    <rebind input=\"kb1_e\"/>\n   </action>\n  </actionmap>\n"));
         let profile = parse_user_profile(&out).unwrap();
         assert_eq!(profile.rebinds.len(), 7);
+    }
+
+    #[test]
+    fn keeps_the_other_attributes_of_a_replaced_rebind() {
+        let xml = XML.replace("<rebind input=\"kb1_ralt+y\"/>", "<rebind input=\"kb1_ralt+y\" activationMode=\"hold\" multiTap=\"2\"/>");
+        let out = apply_rebinds(&xml, &[change("spaceship_general", "v_eject", DeviceKind::Keyboard, "kb1_e")]).unwrap();
+        assert!(out.contains("<rebind input=\"kb1_e\" activationMode=\"hold\" multiTap=\"2\"/>"));
+        assert!(!out.contains("kb1_ralt+y"));
     }
 
     #[test]

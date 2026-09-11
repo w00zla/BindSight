@@ -131,8 +131,9 @@ presentational components:
   counterpart of `pp_resortdevices`.
 - `rebind.rs` — textual `actionmaps.xml` rewrite writing rebinds (one
   binding per action and device kind, like SC: every `<rebind>` of that kind
-  under the action is replaced; missing `<action>` / `<actionmap>` elements
-  are created in SC's layout), the out-of-game counterpart of the keybinding
+  under the action is replaced, the first one keeping its other attributes
+  such as `activationMode`; missing `<action>` / `<actionmap>` elements are
+  created in SC's layout), the out-of-game counterpart of the keybinding
   screen. `lib.rs::save_rebinds` backs up first (reason "before rebind").
 - `config.rs` — JSON in the app config dir: the SC environments
   (`ENVIRONMENTS` = LIVE / HOTFIX / PTU / EPTU, each a base path + optional
