@@ -233,7 +233,10 @@ async function createBackup() {
   }
 }
 
+// Restoring overwrites the file underneath any pending rebinds: settle
+// them first.
 async function restoreBackup(b: BackupSummary) {
+  if (!(await requestLeave())) return;
   const choice = await ask("Restore backup?", "rotate", [
     { label: "Restore", kind: "primary", value: "restore" },
     { label: "Cancel", kind: "outline", value: "cancel" },
