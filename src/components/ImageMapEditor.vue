@@ -334,11 +334,14 @@ watch([() => map.value?.id, () => map.value?.image.file], () => {
   loadCanvasImage();
 });
 
-// Keep the device selection on something that exists.
+// Keep the device selection on something that exists — unless the open map
+// has unsaved changes: the map does not depend on its device being plugged
+// in, and a hot-plug must not throw the edits away.
 watch(
   () => props.devices,
   (list) => {
     if (list.some((d) => d.sdl_guid === selectedGuid.value)) return;
+    if (dirty.value) return;
     selectedGuid.value = list.find((d) => d.hardware_id)?.sdl_guid ?? "";
     currentKey.value = null;
     recording.value = false;
@@ -1015,6 +1018,16 @@ const polyPreview = computed(() => {
 
 const showDeviceInfo = ref(false);
 
+// Device Info replaces the map on screen, so unsaved changes are settled
+// first; a discard puts the saved state back, like Cancel does.
+async function toggleDeviceInfo() {
+  if (!showDeviceInfo.value) {
+    if (!(await requestLeave())) return;
+    if (dirty.value) await cancelEdit();
+  }
+  showDeviceInfo.value = !showDeviceInfo.value;
+}
+
 // Last 8 hex chars of an SDL GUID: enough to tell devices apart in the log.
 function shortGuid(guid: string): string {
   return guid.slice(-8);
@@ -1258,7 +1271,7 @@ function noMaps(d: DeviceInfo): boolean {
           <span class="head-title">System</span>
         </div>
         <div class="foot">
-          <button type="button" class="btn wide" :class="showDeviceInfo ? 'primary' : 'outline'" @click="showDeviceInfo = !showDeviceInfo">
+          <button type="button" class="btn wide" :class="showDeviceInfo ? 'primary' : 'outline'" @click="toggleDeviceInfo">
             <Icon name="log" :size="14" />
             Device Info
           </button>

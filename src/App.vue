@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import ImageMapEditor from "./components/ImageMapEditor.vue";
 import TopBar from "./components/TopBar.vue";
 import DeviceTile from "./components/DeviceTile.vue";
@@ -332,12 +333,23 @@ async function onMapsSaved() {
 const editor = ref<InstanceType<typeof ImageMapEditor> | null>(null);
 const bindingsView = ref<InstanceType<typeof BindingsView> | null>(null);
 
+// Pending rebinds settled (saved, discarded, or none)? Anything that re-reads
+// or swaps the bindings file underneath them asks first.
+async function bindingsSettled(): Promise<boolean> {
+  return (await bindingsView.value?.requestLeave()) !== false;
+}
+
+// Both modes' unsaved changes settled — before the window goes away.
+async function allSettled(): Promise<boolean> {
+  return (await editor.value?.requestLeave()) !== false && (await bindingsSettled());
+}
+
 async function setMode(m: Mode) {
   if (mode.value === "devices" && m !== "devices") {
     if ((await editor.value?.requestLeave()) === false) return;
   }
   if (mode.value === "bindings" && m !== "bindings") {
-    if ((await bindingsView.value?.requestLeave()) === false) return;
+    if (!(await bindingsSettled())) return;
   }
   mode.value = m;
   // Inputs released while the editor was open were never seen here.
@@ -589,6 +601,11 @@ async function applySettings(s: {
   autoBackup: boolean;
   debugLogging: boolean;
 }) {
+  // A changed active environment means another bindings file: settle the
+  // pending rebinds first.
+  const envChanged =
+    JSON.stringify(s.environments[activeEnv.value] ?? null) !== JSON.stringify(environments.value[activeEnv.value] ?? null);
+  if (envChanged && !(await bindingsSettled())) return;
   showSettings.value = false;
   try {
     excludedDevices.value = await invoke<string[]>("set_excluded_devices", { guids: s.excluded });
@@ -611,6 +628,7 @@ async function applySettings(s: {
 
 // Top-bar chip: switch the environment the app reads.
 async function switchEnv(slug: string) {
+  if (slug === activeEnv.value || !(await bindingsSettled())) return;
   try {
     const changed = await invoke<boolean>("set_active_env", { slug });
     activeEnv.value = slug;
@@ -901,6 +919,7 @@ async function onScDataChanged(s: LoadStatus) {
 // Refresh = everything from scratch: devices, actionmaps.xml, Game.log, then
 // the clash report on top of those.
 async function refresh() {
+  if (!(await bindingsSettled())) return;
   loading.value = true;
   error.value = null;
   try {
@@ -973,6 +992,15 @@ onMounted(async () => {
     keyboardLayout.value = null;
   }
   window.addEventListener("blur", clearHeld);
+  // Closing (top-bar button or the window manager) settles unsaved changes
+  // first; `destroy` skips this handler, `close` would run it again.
+  const win = getCurrentWindow();
+  unlisten.push(
+    await win.onCloseRequested(async (e) => {
+      e.preventDefault();
+      if (await allSettled()) await win.destroy();
+    }),
+  );
   unlisten.push(await listen<JoyInput>("joy-input", (e) => onInput(e.payload)));
   unlisten.push(
     await listen("devices-changed", async () => {

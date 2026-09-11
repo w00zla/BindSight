@@ -918,7 +918,10 @@ function showList() {
   view.value = "list";
 }
 
-function compareWith(key: string) {
+// Compare replaces the list and its action tile, so pending rebinds are
+// settled first.
+async function compareWith(key: string) {
+  if (!(await requestLeave())) return;
   bKey.value = key;
   view.value = "compare";
 }
