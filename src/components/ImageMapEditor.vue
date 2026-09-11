@@ -122,7 +122,8 @@ const paint = ref({
   tipText: "",
 });
 
-// Swatches of the colour picker: the app's own colours plus a few plain ones.
+// Swatches of the colour picker: the default lit colour first (clicking it
+// drops the shape's own colour), then the `--shape-palette` token.
 const swatches = ref<string[]>([]);
 
 function readPaint() {
@@ -135,13 +136,12 @@ function readPaint() {
     tipBg: withAlpha(cssVar("--bg-base"), 0.85),
     tipText: cssVar("--text"),
   };
-  swatches.value = [
-    ...["--shape-stroke", "--live", "--accent", "--ok", "--warn", "--err", "--text"].map(cssVar),
-    "#ff5500",
-    "#ff2d8a",
-    "#9b5cff",
-    "#000000",
-  ].filter((c) => /^#[0-9a-f]{6}$/i.test(c));
+  const stroke = paint.value.shapeStroke.toLowerCase();
+  const palette = cssVar("--shape-palette")
+    .split(",")
+    .map((c) => c.trim().toLowerCase())
+    .filter((c) => /^#[0-9a-f]{6}$/.test(c) && c !== stroke);
+  swatches.value = [stroke, ...palette];
 }
 
 // --- device / image-map selection -----------------------------------------
@@ -262,9 +262,6 @@ const hover = ref<{ x: number; y: number; text: string } | null>(null);
 // The recorded input new shapes go to. Only Record changes it; it is dropped
 // whenever the map, the device, the view or the edit mode changes.
 const currentKey = ref<string | null>(null);
-const currentCount = computed(() =>
-  currentKey.value ? shapes.value.filter((a) => a.input === currentKey.value).length : 0,
-);
 // Headline of the input card: the input's native name. No SC token or
 // label — an image-map does not know which jsN its device is.
 const currentText = computed(() => (currentKey.value ? keyName(currentKey.value) : ""));
@@ -272,8 +269,7 @@ const currentText = computed(() => (currentKey.value ? keyName(currentKey.value)
 const inputStatus = computed<{ kind: "warn" | "ok"; icon: IconName; text: string }>(() => {
   if (!device.value) return { kind: "warn", icon: "warning", text: "Device not connected" };
   if (!currentKey.value) return { kind: "warn", icon: "warning", text: "Record an input before adding shapes" };
-  const n = currentCount.value;
-  return { kind: "ok", icon: "check", text: n ? `Ready to add shapes · ${n} so far` : "Ready to add shapes" };
+  return { kind: "ok", icon: "check", text: "Ready to add shapes" };
 });
 
 function dropInput() {
@@ -344,6 +340,21 @@ const buckets = computed<Bucket[]>(() => {
   }
   return list;
 });
+
+// Shapes hidden on the canvas while working (editor state only, never
+// saved): by shape id, dropped whenever another map opens.
+const hidden = ref(new Set<string>());
+const visibleShapes = computed(() => shapes.value.filter((a) => !hidden.value.has(a.id)));
+const anyHidden = computed(() => shapes.value.some((a) => hidden.value.has(a.id)));
+function toggleHidden(id: string) {
+  const s = new Set(hidden.value);
+  if (!s.delete(id)) s.add(id);
+  hidden.value = s;
+}
+// Show everything again when anything is hidden, else hide everything.
+function toggleAllHidden() {
+  hidden.value = anyHidden.value ? new Set() : new Set(shapes.value.map((a) => a.id));
+}
 
 // Expanded buckets; everything starts collapsed. A filter forces them open,
 // and so does recording an input or selecting one of a bucket's shapes.
@@ -450,6 +461,7 @@ async function loadMap(id: string) {
   selectedId.value = null;
   tool.value = null;
   zoom.value = 1;
+  hidden.value = new Set();
   dropInput();
   // A map always opens read-only; the callers that want the editor say so.
   state.value = "view";
@@ -1061,12 +1073,14 @@ function setRoleHex(a: Shape, role: ColourRole, hex: string) {
   a[role] = composeColour(full, colourAlpha(roleColour(a, role)));
 }
 
-function setRoleAlpha(a: Shape, role: ColourRole, alpha: number) {
-  a[role] = composeColour(colourHex(roleColour(a, role)), alpha);
+// The first swatch: back to the token colour (no colour stored).
+function pickSwatch(a: Shape, role: ColourRole, i: number, c: string) {
+  if (i === 0) delete a[role];
+  else setRoleHex(a, role, c);
 }
 
-function resetRole(a: Shape, role: ColourRole) {
-  delete a[role];
+function setRoleAlpha(a: Shape, role: ColourRole, alpha: number) {
+  a[role] = composeColour(colourHex(roleColour(a, role)), alpha);
 }
 
 function onHexInput(a: Shape, role: ColourRole, e: Event) {
@@ -1082,6 +1096,13 @@ function onRangeInput(e: Event, apply: (v: number) => void) {
 }
 
 // --- zoom ------------------------------------------------------------------
+
+// Ctrl + wheel zooms a step; a plain wheel keeps scrolling the box.
+function onWheel(e: WheelEvent) {
+  if (!e.ctrlKey || !e.deltaY) return;
+  e.preventDefault();
+  zoomStep(e.deltaY < 0 ? 1 : -1);
+}
 
 function zoomStep(dir: number) {
   const i = ZOOMS.indexOf(zoom.value);
@@ -1485,7 +1506,7 @@ function onTransformEnd(a: Shape, e: KonvaEventObject<Event>) {
 // Polygon vertex anchors (select mode, polygon selected).
 const vertexAnchors = computed(() => {
   const a = selectedShape.value;
-  if (!a || a.geometry.kind !== "polygon" || !canDrag.value) return [];
+  if (!a || a.geometry.kind !== "polygon" || !canDrag.value || hidden.value.has(a.id)) return [];
   return a.geometry.points.map(([x, y], i) => ({ i, x: x * W.value, y: y * H.value }));
 });
 
@@ -1994,114 +2015,8 @@ function noMaps(d: DeviceInfo): boolean {
           </div>
         </div>
 
-        <div ref="stageBox" class="stage-box" @mousedown.capture="onBoxMouseDown">
-          <!-- the selected shape's panel floats over the canvas, top left -->
-          <div v-if="editing && selectedShape" class="shape-panel">
-            <div class="sp-head">
-              <Icon :name="shapeIcon(selectedShape)" :size="14" />
-              <span class="sp-kind">{{ shapeKind(selectedShape) }}</span>
-              <span class="sp-input mono">{{ keyName(selectedShape.input) }}</span>
-              <div class="grow" />
-              <button type="button" class="row-del" title="Duplicate · Ctrl+D" @click="duplicateShape(selectedShape)">
-                <Icon name="clone" :size="13" />
-              </button>
-              <button type="button" class="row-del" title="Delete · Del" @click="deleteShape(selectedShape.id)">
-                <Icon name="close" :size="13" />
-              </button>
-            </div>
-            <template v-if="selectedShape.geometry.kind !== 'image'">
-              <div v-for="role in (['stroke', 'fill'] as const)" :key="role" class="sp-row">
-                <span class="sp-label">{{ role === "stroke" ? "Outline" : "Fill" }}</span>
-                <div class="sp-colour">
-                  <div class="swatches">
-                    <button
-                      v-for="c in swatches"
-                      :key="c"
-                      type="button"
-                      class="swatch"
-                      :class="{ on: colourHex(roleColour(selectedShape, role)) === c.toLowerCase() }"
-                      :style="{ background: c }"
-                      :title="c"
-                      @click="setRoleHex(selectedShape, role, c)"
-                    />
-                  </div>
-                  <div class="sp-line">
-                    <span class="swatch big" :style="{ background: roleColour(selectedShape, role) }" />
-                    <input
-                      class="hex mono"
-                      :value="colourHex(roleColour(selectedShape, role))"
-                      maxlength="7"
-                      spellcheck="false"
-                      @change="onHexInput(selectedShape, role, $event)"
-                    />
-                    <input
-                      type="range"
-                      class="range"
-                      min="0"
-                      max="100"
-                      :value="colourAlpha(roleColour(selectedShape, role))"
-                      title="Opacity"
-                      @input="onAlphaInput(selectedShape, role, $event)"
-                    />
-                    <span class="mono sp-val">{{ colourAlpha(roleColour(selectedShape, role)) }}%</span>
-                    <button
-                      type="button"
-                      class="btn outline small"
-                      :disabled="!selectedShape[role]"
-                      title="Back to the default colour"
-                      @click="resetRole(selectedShape, role)"
-                    >
-                      Default
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </template>
-            <div v-if="selectedShape.geometry.kind === 'rect'" class="sp-row">
-              <span class="sp-label">Corners</span>
-              <div class="sp-line">
-                <input
-                  type="range"
-                  class="range"
-                  min="0"
-                  max="50"
-                  :value="Math.round(selectedShape.geometry.radius * 100)"
-                  @input="onRangeInput($event, (v) => ((selectedShape!.geometry as RectGeometry).radius = v / 100))"
-                />
-                <span class="mono sp-val">{{ Math.round(selectedShape.geometry.radius * 100) }}%</span>
-              </div>
-            </div>
-            <template v-if="selectedShape.geometry.kind === 'arc' || selectedShape.geometry.kind === 'wedge'">
-              <div class="sp-row">
-                <span class="sp-label">Angle</span>
-                <div class="sp-line">
-                  <input
-                    type="range"
-                    class="range"
-                    min="5"
-                    max="360"
-                    :value="Math.round(selectedShape.geometry.angle)"
-                    @input="onRangeInput($event, (v) => ((selectedShape!.geometry as ArcGeometry | WedgeGeometry).angle = v))"
-                  />
-                  <span class="mono sp-val">{{ Math.round(selectedShape.geometry.angle) }}°</span>
-                </div>
-              </div>
-              <div v-if="selectedShape.geometry.kind === 'arc'" class="sp-row">
-                <span class="sp-label">Inner</span>
-                <div class="sp-line">
-                  <input
-                    type="range"
-                    class="range"
-                    min="0"
-                    max="95"
-                    :value="Math.round(selectedShape.geometry.inner * 100)"
-                    @input="onRangeInput($event, (v) => ((selectedShape!.geometry as ArcGeometry).inner = v / 100))"
-                  />
-                  <span class="mono sp-val">{{ Math.round(selectedShape.geometry.inner * 100) }}%</span>
-                </div>
-              </div>
-            </template>
-          </div>
+        <div class="stage-wrap">
+        <div ref="stageBox" class="stage-box" @mousedown.capture="onBoxMouseDown" @wheel="onWheel">
           <div class="stage-centre">
             <v-stage
               v-if="imgEl && W"
@@ -2116,7 +2031,7 @@ function noMaps(d: DeviceInfo): boolean {
                 <v-image :config="{ image: imgEl, width: W, height: H, name: 'bg' }" />
               </v-layer>
               <v-layer>
-                <template v-for="a in shapes" :key="a.id">
+                <template v-for="a in visibleShapes" :key="a.id">
                   <v-rect
                     v-if="a.geometry.kind === 'rect'"
                     :config="rectCfg(a)"
@@ -2249,6 +2164,100 @@ function noMaps(d: DeviceInfo): boolean {
             </v-stage>
           </div>
         </div>
+        <!-- the selected shape's panel floats over the canvas, top left; it
+             sits next to the scrolling box, so it neither moves the canvas
+             nor scrolls with it -->
+        <div v-if="editing && selectedShape" class="shape-panel">
+            <div class="sp-head">
+              <Icon :name="shapeIcon(selectedShape)" :size="14" />
+              <span class="sp-kind">{{ shapeKind(selectedShape) }}</span>
+              <span class="sp-input mono">{{ keyName(selectedShape.input) }}</span>
+            </div>
+            <template v-if="selectedShape.geometry.kind !== 'image'">
+              <div v-for="role in (['stroke', 'fill'] as const)" :key="role" class="sp-row">
+                <span class="sp-label">{{ role === "stroke" ? "Outline" : "Fill" }}</span>
+                <div class="sp-colour">
+                  <div class="swatches">
+                    <button
+                      v-for="(c, i) in swatches"
+                      :key="c"
+                      type="button"
+                      class="swatch"
+                      :class="{ on: colourHex(roleColour(selectedShape, role)) === c }"
+                      :style="{ background: c }"
+                      :title="i === 0 ? `Default · ${c}` : c"
+                      @click="pickSwatch(selectedShape, role, i, c)"
+                    />
+                  </div>
+                  <div class="sp-line">
+                    <span class="swatch big" :style="{ background: roleColour(selectedShape, role) }" />
+                    <input
+                      class="hex mono"
+                      :value="colourHex(roleColour(selectedShape, role))"
+                      maxlength="7"
+                      spellcheck="false"
+                      @change="onHexInput(selectedShape, role, $event)"
+                    />
+                    <input
+                      type="range"
+                      class="range"
+                      min="0"
+                      max="100"
+                      :value="colourAlpha(roleColour(selectedShape, role))"
+                      title="Opacity"
+                      @input="onAlphaInput(selectedShape, role, $event)"
+                    />
+                    <span class="mono sp-val">{{ colourAlpha(roleColour(selectedShape, role)) }}%</span>
+                  </div>
+                </div>
+              </div>
+            </template>
+            <div v-if="selectedShape.geometry.kind === 'rect'" class="sp-row">
+              <span class="sp-label">Corners</span>
+              <div class="sp-line">
+                <input
+                  type="range"
+                  class="range"
+                  min="0"
+                  max="50"
+                  :value="Math.round(selectedShape.geometry.radius * 100)"
+                  @input="onRangeInput($event, (v) => ((selectedShape!.geometry as RectGeometry).radius = v / 100))"
+                />
+                <span class="mono sp-val">{{ Math.round(selectedShape.geometry.radius * 100) }}%</span>
+              </div>
+            </div>
+            <template v-if="selectedShape.geometry.kind === 'arc' || selectedShape.geometry.kind === 'wedge'">
+              <div class="sp-row">
+                <span class="sp-label">Angle</span>
+                <div class="sp-line">
+                  <input
+                    type="range"
+                    class="range"
+                    min="5"
+                    max="360"
+                    :value="Math.round(selectedShape.geometry.angle)"
+                    @input="onRangeInput($event, (v) => ((selectedShape!.geometry as ArcGeometry | WedgeGeometry).angle = v))"
+                  />
+                  <span class="mono sp-val">{{ Math.round(selectedShape.geometry.angle) }}°</span>
+                </div>
+              </div>
+              <div v-if="selectedShape.geometry.kind === 'arc'" class="sp-row">
+                <span class="sp-label">Inner</span>
+                <div class="sp-line">
+                  <input
+                    type="range"
+                    class="range"
+                    min="0"
+                    max="95"
+                    :value="Math.round(selectedShape.geometry.inner * 100)"
+                    @input="onRangeInput($event, (v) => ((selectedShape!.geometry as ArcGeometry).inner = v / 100))"
+                  />
+                  <span class="mono sp-val">{{ Math.round(selectedShape.geometry.inner * 100) }}%</span>
+                </div>
+              </div>
+            </template>
+        </div>
+        </div>
       </template>
       <template v-else-if="isNew">
         <div class="none">Choose image…</div>
@@ -2298,11 +2307,21 @@ function noMaps(d: DeviceInfo): boolean {
         <div class="shapes-head">
           <div class="panel-title">Shapes</div>
           <div class="divider" />
-          <button type="button" class="btn outline small square" title="Expand all" :disabled="allExpanded" @click="expandAll">
+          <button type="button" class="hbtn framed" title="Expand all" :disabled="allExpanded" @click="expandAll">
             <Icon name="unfold" :size="14" />
           </button>
-          <button type="button" class="btn outline small square" title="Collapse all" :disabled="!expanded.size" @click="collapseAll">
+          <button type="button" class="hbtn framed" title="Collapse all" :disabled="!expanded.size" @click="collapseAll">
             <Icon name="fold" :size="14" />
+          </button>
+          <div class="divider" />
+          <button
+            type="button"
+            class="hbtn framed"
+            :title="anyHidden ? 'Show all' : 'Hide all'"
+            :disabled="!shapes.length"
+            @click="toggleAllHidden"
+          >
+            <Icon :name="anyHidden ? 'eye-off' : 'eye'" :size="14" />
           </button>
           <div class="grow" />
           <div class="search">
@@ -2333,16 +2352,24 @@ function noMaps(d: DeviceInfo): boolean {
                 v-for="a in g.rows"
                 :key="a.id"
                 class="row shape-row"
-                :class="{ cur: g.key === currentKey, sel: a.id === selectedId }"
+                :class="{ cur: g.key === currentKey, sel: a.id === selectedId, off: hidden.has(a.id) }"
                 @click="pickShape(a)"
               >
                 <span />
                 <span class="shape-cell">
                   <Icon :name="shapeIcon(a)" :size="14" class="shape-icon" />
                   <span class="cell-kind">{{ shapeKind(a) }}</span>
-                  <button v-if="editing" type="button" class="row-del" title="Delete" @click.stop="deleteShape(a.id)">
-                    <Icon name="close" :size="13" />
+                  <button type="button" class="hbtn" :title="hidden.has(a.id) ? 'Show' : 'Hide'" @click.stop="toggleHidden(a.id)">
+                    <Icon :name="hidden.has(a.id) ? 'eye-off' : 'eye'" :size="13" />
                   </button>
+                  <template v-if="editing">
+                    <button type="button" class="hbtn" title="Duplicate · Ctrl+D" @click.stop="duplicateShape(a)">
+                      <Icon name="clone" :size="13" />
+                    </button>
+                    <button type="button" class="row-del" title="Delete · Del" @click.stop="deleteShape(a.id)">
+                      <Icon name="close" :size="13" />
+                    </button>
+                  </template>
                 </span>
               </div>
             </template>
@@ -3078,14 +3105,20 @@ function noMaps(d: DeviceInfo): boolean {
 /* --- shape panel: floats over the canvas in its top-left corner, sticky so
    it stays there while the canvas scrolls --- */
 
+.stage-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
 .shape-panel {
-  position: sticky;
-  top: 0;
-  left: 0;
-  align-self: flex-start;
+  position: absolute;
+  top: 8px;
+  left: 8px;
   z-index: 2;
-  width: 330px;
-  margin: -8px 0 0 -8px;
+  width: 390px;
+  max-width: calc(100% - 16px);
   background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
   border: 1px solid var(--border-dim);
   border-radius: var(--radius-panel);
@@ -3194,8 +3227,7 @@ function noMaps(d: DeviceInfo): boolean {
 
 /* Own-styled slider (WebKitGTK would paint GTK's). */
 .range {
-  flex: 1;
-  min-width: 40px;
+  flex: 0 0 90px;
   height: 4px;
   appearance: none;
   -webkit-appearance: none;
@@ -3348,6 +3380,47 @@ function noMaps(d: DeviceInfo): boolean {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Small neutral icon button (head and rows). */
+.hbtn {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.hbtn:hover:not(:disabled) {
+  background: var(--bg-surface-2);
+  color: var(--text);
+}
+
+/* Head buttons look like the bindings deck's: chip-sized, white outline. */
+.hbtn.framed {
+  width: var(--h-chip-sm);
+  height: var(--h-chip-sm);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  color: var(--text);
+}
+
+.hbtn.framed:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.hbtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.shape-row.off .cell-kind,
+.shape-row.off .shape-icon {
+  opacity: 0.45;
 }
 
 .row-del {

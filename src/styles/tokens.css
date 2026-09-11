@@ -16,6 +16,11 @@
   /* A lit shape on an image-map image (the default a shape can override). */
   --shape-stroke: #396cd8;
   --shape-fill: rgba(57, 108, 216, 0.55);
+  /* Shape colour palette (the editor's picker): one family of bright hues
+     that read on a dark photo, roughly evenly spaced, the default lit blue
+     first, then cyan (live), green (ok), lime, amber (warn), orange, red
+     (err), pink, violet, white. */
+  --shape-palette: #396cd8, #4ee0ff, #4fd28a, #c8f04a, #f2b34c, #ff7a3d, #ff5c6c, #ff5fb4, #b07cff, #ffffff;
 
   --text: #ffffff;
   --text-2: #add3eb;
