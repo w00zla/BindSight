@@ -98,6 +98,18 @@ export function inputKeyForToken(token: string, d: DeviceInfo): string | null {
   return null;
 }
 
+// Every image-map key a token lights up: a keyboard / gamepad combo lights
+// its modifiers too (`kb1_ralt+mwheel_up` -> `key:ralt`, `key:mwheel_up`),
+// anything else just its own key. The token's own key comes last.
+export function inputKeysForToken(token: string, d: DeviceInfo): string[] {
+  const main = inputKeyForToken(token, d);
+  if (!main) return [];
+  const prefix = token.startsWith("kb1_") ? "key" : token.startsWith("gp1_") ? "pad" : null;
+  if (!prefix) return [main];
+  const modifiers = token.slice(4).split("+").slice(0, -1).filter(Boolean);
+  return [...modifiers.map((m) => `${prefix}:${m}`), main];
+}
+
 // Hardware ids are SC Product GUIDs (or "keyboard" / "gamepad"); compare
 // case-insensitively.
 export function sameHardware(a: string | null | undefined, b: string | null | undefined): boolean {

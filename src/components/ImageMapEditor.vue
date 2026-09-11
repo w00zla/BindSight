@@ -15,7 +15,7 @@ import Icon, { type IconName } from "./Icon.vue";
 import ConfirmDialog, { type ConfirmButton, type ConfirmIcon } from "./ConfirmDialog.vue";
 import type { DeviceInfo, JoyInput, LoggedInput } from "../types";
 import { deviceIcon, deviceName } from "../devices";
-import { KEY_COUNT } from "../keyboard";
+import { KEY_COUNT, MOUSE_INPUTS, recording } from "../keyboard";
 import {
   SYMBOL_PATHS,
   symbolPx,
@@ -341,6 +341,7 @@ watch(
     if (list.some((d) => d.sdl_guid === selectedGuid.value)) return;
     selectedGuid.value = list.find((d) => d.hardware_id)?.sdl_guid ?? "";
     currentKey.value = null;
+    recording.value = false;
     closeMap();
     void openFirst();
   },
@@ -360,6 +361,7 @@ async function selectDevice(d: DeviceInfo) {
   if (!(await requestLeave())) return;
   selectedGuid.value = d.sdl_guid;
   currentKey.value = null;
+  recording.value = false;
   closeMap();
   await openFirst();
 }
@@ -580,11 +582,24 @@ async function replaceImage() {
 
 let unlisten: UnlistenFn[] = [];
 
+// Record takes the next input of the selected device as the current one
+// (mouse included, see keyboard.ts); Escape stops a recording instead.
 function takeInput(ev: JoyInput) {
-  if (ev.guid !== selectedGuid.value) return;
+  if (ev.kind === "key" && ev.pressed && ev.name === "escape") {
+    recording.value = false;
+    return;
+  }
+  if (!recording.value || ev.guid !== selectedGuid.value) return;
   const key = inputKey(ev);
-  if (key) currentKey.value = key;
+  if (!key) return;
+  currentKey.value = key;
+  recording.value = false;
 }
+
+// Recording ends with editing.
+watch(editing, (on) => {
+  if (!on) recording.value = false;
+});
 
 // Keys arrive as a prop (App captures them), joystick and pad events directly.
 watch(
@@ -604,6 +619,7 @@ onMounted(async () => {
 onUnmounted(() => {
   unlisten.forEach((fn) => fn());
   unlisten = [];
+  recording.value = false;
   ro?.disconnect();
   ro = null;
 });
@@ -1072,13 +1088,15 @@ function compactUsages(usages: string[]): string {
 }
 
 // Key/value rows of everything known about a device. The keyboard is a
-// synthetic device — it has nothing but its name and its hardware id.
+// synthetic device (the mouse is part of it, as in the game) — it has
+// nothing but its name, its hardware id and what the capture knows.
 function deviceRows(d: DeviceInfo): [string, string][] {
   if (d.kind === "keyboard") {
     return [
       ["kind", d.kind],
       ["sdl name", d.sdl_name],
       ["hardware id", d.hardware_id ?? "—"],
+      ["io", `${KEY_COUNT} keys · mouse ${MOUSE_INPUTS.join(" ")}`],
     ];
   }
   return [
@@ -1159,7 +1177,7 @@ function deviceLine(d: DeviceInfo): string {
   if (d.kind === "gamepad" && d.gamepad_slot === null) return "no slot";
   const parts: string[] = [];
   if (d.kind === "keyboard") {
-    parts.push(`${KEY_COUNT} keys`);
+    parts.push(`${KEY_COUNT} keys`, `${MOUSE_INPUTS.length} buttons`);
   } else {
     if (d.num_buttons) parts.push(`${d.num_buttons} btns`);
     if (d.num_axes) parts.push(`${d.num_axes} axes`);
@@ -1532,10 +1550,20 @@ function noMaps(d: DeviceInfo): boolean {
         <div class="ic-key">
           <Icon name="bolt" :size="22" />
           <span v-if="currentKey" class="mono key">{{ currentKey }}</span>
-          <span v-else class="key idle">Trigger input…</span>
+          <span v-else class="key idle">{{ recording ? "Press an input…" : "No input" }}</span>
         </div>
         <div class="ic-sub">{{ selectedName }} · {{ currentCountText }}</div>
         <div class="ic-btns">
+          <button
+            type="button"
+            class="btn small"
+            :class="recording ? 'primary' : 'outline'"
+            title="Take the next input of this device · Esc stops"
+            @click="recording = true"
+          >
+            <Icon name="target" :size="13" />
+            {{ recording ? "Recording…" : "Record" }}
+          </button>
           <button type="button" class="btn primary small" :disabled="!currentKey" @click="addDefaultArea">
             <Icon name="plus" :size="13" />
             Add area

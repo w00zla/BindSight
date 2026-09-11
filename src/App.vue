@@ -38,12 +38,13 @@ import type {
 import {
   inputKey,
   inputKeyForToken,
+  inputKeysForToken,
   sameHardware,
   type HighlightClass,
   type ImageMap,
   type ImageMapSummary,
 } from "./imagemap";
-import { startKeyboardCapture } from "./keyboard";
+import { startKeyboardCapture, startMouseCapture } from "./keyboard";
 
 const MAX_EVENTS = 500;
 
@@ -361,7 +362,7 @@ const pinnedTarget = computed(() => (pinned.value ? pinTarget(pinned.value) : nu
 function activeFor(guid: string): Map<string, HighlightClass> {
   const m = new Map<string, HighlightClass>(Object.entries(activeInputs.value[guid] ?? {}));
   const t = pinnedTarget.value;
-  if (t?.guid === guid) m.set(t.key, "bound");
+  if (t?.guid === guid) for (const k of t.keys) m.set(k, "bound");
   return m;
 }
 
@@ -386,15 +387,24 @@ function deviceForBinding(b: ResolvedBinding): DeviceInfo | undefined {
   return devices.value.find((d) => !!b.device_guid && sameHardware(d.hardware_id, b.device_guid));
 }
 
+// Where a pinned binding lights up: the device and its input's key, plus
+// every key of the map that gets lit (a combo's modifiers too, when the
+// map has areas for them).
+interface PinTarget {
+  guid: string;
+  key: string;
+  keys: string[];
+}
+
 // Can a binding in the list be lit on an image-map image? Needs a connected
 // device with an image-map and a mappable token.
-function pinTarget(b: ResolvedBinding): { guid: string; key: string } | null {
+function pinTarget(b: ResolvedBinding): PinTarget | null {
   const r = resolvePin(b);
   return "reason" in r ? null : r;
 }
 
 // Where a binding would light up, or why it cannot.
-function resolvePin(b: ResolvedBinding): { guid: string; key: string } | { reason: string } {
+function resolvePin(b: ResolvedBinding): PinTarget | { reason: string } {
   const d = deviceForBinding(b);
   if (!d) return { reason: `${b.device ?? "Device"} not connected` };
   const key = inputKeyForToken(b.token, d);
@@ -402,7 +412,8 @@ function resolvePin(b: ResolvedBinding): { guid: string; key: string } | { reaso
   const has = inMap(d.sdl_guid, key);
   if (has === null) return { reason: `${deviceName(d)} has no image-map` };
   if (!has) return { reason: `No area for ${tokenLabel(b.token)}` };
-  return { guid: d.sdl_guid, key };
+  const keys = inputKeysForToken(b.token, d).filter((k) => inMap(d.sdl_guid, k));
+  return { guid: d.sdl_guid, key, keys };
 }
 
 // The device has an image-map, but no area for this binding's input.
@@ -929,6 +940,7 @@ function liveState(): "unseen" | "bound" | "none" {
 
 let unlisten: UnlistenFn[] = [];
 let stopKeyboard: (() => void) | null = null;
+let stopMouse: (() => void) | null = null;
 
 // Keys are captured in every mode (the webview never gets to act on them;
 // text fields and open dialogs are skipped inside the capture), so a rebind
@@ -944,6 +956,8 @@ function clearHeld() {
 
 onMounted(async () => {
   stopKeyboard = startKeyboardCapture(onInput, keyboardActive);
+  // The mouse only while a Record button armed it (see keyboard.ts).
+  stopMouse = startMouseCapture(onInput);
   try {
     keyboardLayout.value = await invoke<string | null>("keyboard_layout");
   } catch {
@@ -998,6 +1012,8 @@ onUnmounted(() => {
   unlisten = [];
   stopKeyboard?.();
   stopKeyboard = null;
+  stopMouse?.();
+  stopMouse = null;
   window.removeEventListener("blur", clearHeld);
   axisTimers.forEach((t) => clearTimeout(t));
   axisTimers.clear();

@@ -342,6 +342,7 @@ mod tests {
                     joystick_default: None,
                     keyboard_default: None,
                     gamepad_default: None,
+                    mouse_default: None,
                 },
                 scdata::Action {
                     name: "v_toggle_flight_mode".into(),
@@ -350,6 +351,7 @@ mod tests {
                     joystick_default: None,
                     keyboard_default: None,
                     gamepad_default: None,
+                    mouse_default: None,
                 },
                 scdata::Action {
                     name: "v_open_menu".into(),
@@ -358,6 +360,7 @@ mod tests {
                     joystick_default: None,
                     keyboard_default: None,
                     gamepad_default: None,
+                    mouse_default: None,
                 },
             ],
         }]

@@ -3,7 +3,7 @@ import { computed } from "vue";
 import Icon from "./Icon.vue";
 import type { DeviceInfo, SlotStatus } from "../types";
 import { deviceIcon, deviceName } from "../devices";
-import { KEY_COUNT } from "../keyboard";
+import { KEY_COUNT, MOUSE_INPUTS } from "../keyboard";
 
 const props = defineProps<{
   device: DeviceInfo;
@@ -46,7 +46,7 @@ const state = computed(() => {
   if (noSlot.value) return "no slot";
   if (props.unseen) return "not seen by game";
   const counts =
-    d.kind === "keyboard" ? [`${KEY_COUNT} keys`] : [`${d.num_buttons} btns`, `${d.num_axes} axes`, `${d.num_hats} hats`];
+    d.kind === "keyboard" ? [`${KEY_COUNT} keys`, `${MOUSE_INPUTS.length} btns`] : [`${d.num_buttons} btns`, `${d.num_axes} axes`, `${d.num_hats} hats`];
   return [`${props.bindingCount} bindings`, ...counts].join(" · ");
 });
 

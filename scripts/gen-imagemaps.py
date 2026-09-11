@@ -51,8 +51,8 @@ CHAR_W = 0.60
 ARROW_PATH = "M5 40 H60 V20 L95 50 L60 80 V60 H5 Z"
 
 BUNDLED = [
-    ("4b7a2c1e-0001-4000-8000-000000000001", "Keyboard US", "keyboard", "Keyboard"),
-    ("4b7a2c1e-0001-4000-8000-000000000002", "Keyboard DE", "keyboard", "Keyboard"),
+    ("4b7a2c1e-0001-4000-8000-000000000001", "Keyboard US", "keyboard", "Keyboard/Mouse"),
+    ("4b7a2c1e-0001-4000-8000-000000000002", "Keyboard DE", "keyboard", "Keyboard/Mouse"),
     ("4b7a2c1e-0001-4000-8000-000000000003", "Xbox controller", "gamepad", "Gamepad"),
     ("4b7a2c1e-0001-4000-8000-000000000004", "PlayStation controller", "gamepad", "Gamepad"),
 ]
@@ -225,7 +225,7 @@ class Areas:
 U = 104.0        # key pitch in px (1u)
 INSET = 5.0      # half the gap between two caps
 MARGIN = 44.0
-COLS = 22.5      # full-size width in units
+COLS = 26.0      # full-size width in units, mouse block included
 ROWS = 6.5       # F-row + 0.5u gap + 5 rows
 
 KB_W = MARGIN * 2 + COLS * U
@@ -236,6 +236,7 @@ R1, R2, R3, R4, R5 = 1.5, 2.5, 3.5, 4.5, 5.5
 
 NAV_X = 15.25
 NUM_X = 18.5
+MOUSE_X = 23.0   # the mouse sits right of the numpad: SC binds it as kb1_
 
 
 def kx(col: float) -> float:
@@ -387,12 +388,49 @@ def kb_de() -> tuple[list, list]:
     return keys, extras
 
 
+def mouse(doc: Doc, areas: Areas) -> None:
+    """A mouse in the block right of the numpad: mouse1 / mouse2 (left /
+    right), the wheel (mouse3 = click, arrows = mwheel_up / mwheel_down)
+    and the two thumb buttons (mouse5 front, mouse4 rear)."""
+    bw, bh = 2.4 * U, 4.6 * U
+    bx = kx(MOUSE_X) + (3.0 * U - bw) / 2 + 12   # nudged right: the thumb buttons stick out left
+    by = ky(R_F) + (ROWS * U - bh) / 2
+    cx = bx + bw / 2
+    doc.add(svg_rrect(bx, by, bw, bh, bw / 2 - 8, BG_SURFACE_2, BORDER, 2))
+
+    # Main buttons: the top 42 % of the body, a channel for the wheel between.
+    top_h = 0.42 * bh
+    gap = 34.0
+    for name, x0, x1, label in (("mouse1", bx + 10, cx - gap, "1"), ("mouse2", cx + gap, bx + bw - 10, "2")):
+        doc.add(svg_rrect(x0, by + 10, x1 - x0, top_h - 10, 40, BG_SURFACE, BORDER, 2))
+        doc.add(svg_text((x0 + x1) / 2, by + top_h * 0.58, label, 34, TEXT_2))
+        areas.rect(f"key:{name}", x0, by + 10, x1 - x0, top_h - 10)
+
+    # Wheel with an arrow above and below.
+    ww, wh = 40.0, 110.0
+    wy = by + 64
+    doc.add(svg_rrect(cx - ww / 2, wy, ww, wh, 12, BG_SURFACE, BORDER, 2))
+    areas.rect("key:mouse3", cx - ww / 2, wy, ww, wh)
+    arrow = 34.0
+    for name, cy, rot in (("mwheel_up", wy - 24, -90), ("mwheel_down", wy + wh + 24, 90)):
+        doc.add(svg_arrow(cx, cy, arrow, arrow, rot, TEXT_2))
+        areas.arrow(f"key:{name}", cx, cy, arrow, arrow, rot)
+
+    # Thumb buttons on the left flank.
+    tw, th = 44.0, 62.0
+    tx = bx - tw + 14
+    for name, ty, label in (("mouse5", by + top_h + 30, "5"), ("mouse4", by + top_h + 30 + th + 14, "4")):
+        doc.add(svg_rrect(tx, ty, tw, th, 12, BG_SURFACE, BORDER, 2))
+        doc.add(svg_text(tx + tw / 2 - 4, ty + th / 2, label, 24, TEXT_2))
+        areas.rect(f"key:{name}", tx, ty, tw, th)
+
+
 def build_keyboard(keys: list, extras: list) -> tuple[Doc, Areas]:
     doc = Doc(KB_W, KB_H, BG_BASE)
     areas = Areas(KB_W, KB_H)
 
-    # Block backdrops, so the three clusters read as blocks.
-    for x0, w in ((0.0, 15.0), (NAV_X, 3.0), (NUM_X, 4.0)):
+    # Block backdrops, so the four clusters read as blocks.
+    for x0, w in ((0.0, 15.0), (NAV_X, 3.0), (NUM_X, 4.0), (MOUSE_X, 3.0)):
         doc.add(svg_rrect(kx(x0) - 10, ky(R_F) - 10, w * U + 20, ROWS * U + 20, 14, BG_SURFACE))
 
     for col, row, w, h, label, name in keys:
@@ -411,6 +449,7 @@ def build_keyboard(keys: list, extras: list) -> tuple[Doc, Areas]:
         doc.add(svg_text(kx(14.375), ky(R3) + 14, label, 26, TEXT_2))
         areas.polygon(f"key:{name}", points)
 
+    mouse(doc, areas)
     return doc, areas
 
 

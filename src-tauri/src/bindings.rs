@@ -42,13 +42,22 @@ fn default_token_of(kind: DeviceKind, token: &str) -> String {
     format!("{}{DEFAULT_INSTANCE}_{token}", kind.token_prefix())
 }
 
-/// The default binding an action ships with for one device kind.
-fn default_of(action: &Action, kind: DeviceKind) -> Option<&String> {
-    match kind {
-        DeviceKind::Joystick => action.joystick_default.as_ref(),
-        DeviceKind::Keyboard => action.keyboard_default.as_ref(),
-        DeviceKind::Gamepad => action.gamepad_default.as_ref(),
+/// The default bindings an action ships with for one device kind. The
+/// keyboard kind carries up to two: `defaultProfile.xml`'s `keyboard=` and
+/// `mouse=` (SC binds the mouse as `kb1_mouse1`, one device).
+fn defaults_of(action: &Action, kind: DeviceKind) -> Vec<&String> {
+    let slots = match kind {
+        DeviceKind::Joystick => vec![&action.joystick_default],
+        DeviceKind::Keyboard => vec![&action.keyboard_default, &action.mouse_default],
+        DeviceKind::Gamepad => vec![&action.gamepad_default],
+    };
+    let mut out: Vec<&String> = Vec::new();
+    for token in slots.into_iter().flatten() {
+        if !out.contains(&token) {
+            out.push(token);
+        }
     }
+    out
 }
 
 /// Every device kind that carries defaults and bindings, in display order.
@@ -111,17 +120,18 @@ impl BindingIndex {
         for map in maps {
             for action in &map.actions {
                 for kind in KINDS {
-                    let Some(token) = default_of(action, kind) else { continue };
                     if touched.contains(&(kind, map.name.as_str(), action.name.as_str())) {
                         continue;
                     }
-                    by_token.entry(default_token_of(kind, token)).or_default().push(BoundAction {
-                        actionmap: map.name.clone(),
-                        action: action.name.clone(),
-                        label: action.label.clone(),
-                        is_default: true,
-                        device_kind: kind,
-                    });
+                    for token in defaults_of(action, kind) {
+                        by_token.entry(default_token_of(kind, token)).or_default().push(BoundAction {
+                            actionmap: map.name.clone(),
+                            action: action.name.clone(),
+                            label: action.label.clone(),
+                            is_default: true,
+                            device_kind: kind,
+                        });
+                    }
                 }
             }
         }
@@ -184,14 +194,14 @@ pub struct ResolvedBinding {
 fn fixed_device_name(kind: DeviceKind) -> Option<String> {
     match kind {
         DeviceKind::Joystick => None,
-        DeviceKind::Keyboard => Some("Keyboard".to_string()),
+        DeviceKind::Keyboard => Some("Keyboard/Mouse".to_string()),
         DeviceKind::Gamepad => Some("Gamepad".to_string()),
     }
 }
 
 /// Flatten the user's rebinds into resolved bindings: each real (bound) input
 /// with its SC token, the device it sits on, and the action's label. Unbound
-/// (blank) and mouse rebinds are skipped. Shipped instance-1 defaults are
+/// (blank) rebinds are skipped. Shipped instance-1 defaults are
 /// appended for every action/device kind the user never touched (see
 /// [`touched_per_kind`]).
 pub fn resolve_bindings(maps: &[ActionMap], profile: &UserProfile) -> Vec<ResolvedBinding> {
@@ -240,22 +250,23 @@ pub fn resolve_bindings(maps: &[ActionMap], profile: &UserProfile) -> Vec<Resolv
     for map in maps {
         for action in &map.actions {
             for kind in KINDS {
-                let Some(token) = default_of(action, kind) else { continue };
                 if touched.contains(&(kind, map.name.as_str(), action.name.as_str())) {
                     continue;
                 }
-                let (device, device_guid) = device_for(kind, DEFAULT_INSTANCE);
-                out.push(ResolvedBinding {
-                    token: default_token_of(kind, token),
-                    device,
-                    device_guid,
-                    device_kind: kind,
-                    instance: DEFAULT_INSTANCE,
-                    actionmap: map.name.clone(),
-                    action: action.name.clone(),
-                    label: action.label.clone(),
-                    is_default: true,
-                });
+                for token in defaults_of(action, kind) {
+                    let (device, device_guid) = device_for(kind, DEFAULT_INSTANCE);
+                    out.push(ResolvedBinding {
+                        token: default_token_of(kind, token),
+                        device,
+                        device_guid,
+                        device_kind: kind,
+                        instance: DEFAULT_INSTANCE,
+                        actionmap: map.name.clone(),
+                        action: action.name.clone(),
+                        label: action.label.clone(),
+                        is_default: true,
+                    });
+                }
             }
         }
     }
@@ -915,7 +926,7 @@ mod tests {
         assert!(js.is_default);
         let kb = k.iter().find(|b| b.device_kind == DeviceKind::Keyboard).unwrap();
         assert_eq!(kb.token, "kb1_k");
-        assert_eq!((kb.instance, kb.device.as_deref(), &kb.device_guid), (1, Some("Keyboard"), &None));
+        assert_eq!((kb.instance, kb.device.as_deref(), &kb.device_guid), (1, Some("Keyboard/Mouse"), &None));
         assert!(!kb.is_default);
 
         assert!(find("no_default").is_empty());
@@ -927,6 +938,52 @@ mod tests {
         assert!(hit[0].is_default);
         assert!(index.resolve("js1_x").is_empty()); // replaced by the js2_rotz rebind
         assert!(index.resolve("js1_y").is_empty()); // unbound
+    }
+
+    #[test]
+    fn mouse_defaults_are_keyboard_bindings() {
+        // `mouse=` is a second keyboard-kind default (SC binds it as
+        // `kb1_mouse1`); a keyboard rebind replaces both, a joystick one neither.
+        let profile_xml = r#"<profile>
+          <actionmap name="m" UILabel="@m">
+            <action name="both" keyboard="w" mouse="mouse1" joystick="button1"/>
+            <action name="same" keyboard="mwheel_up" mouse="mwheel_up"/>
+            <action name="kb_rebound" keyboard="w" mouse="mouse2"/>
+            <action name="js_rebound" keyboard="e" mouse="mouse3" joystick="button2"/>
+          </actionmap>
+        </profile>"#;
+        let maps = parse_default_profile(profile_xml, &HashMap::new()).unwrap();
+
+        let user_xml = r#"<ActionMaps>
+          <actionmap name="m">
+            <action name="kb_rebound"><rebind input="kb1_mwheel_down"/></action>
+            <action name="js_rebound"><rebind input="js1_button9"/></action>
+          </actionmap>
+        </ActionMaps>"#;
+        let profile = parse_user_profile(user_xml).unwrap();
+
+        let resolved = resolve_bindings(&maps, &profile);
+        let tokens = |action: &str| {
+            let mut t: Vec<&str> = resolved.iter().filter(|b| b.action == action).map(|b| b.token.as_str()).collect();
+            t.sort();
+            t
+        };
+
+        assert_eq!(tokens("both"), vec!["js1_button1", "kb1_mouse1", "kb1_w"]);
+        assert!(resolved.iter().filter(|b| b.action == "both").all(|b| b.is_default));
+        assert!(resolved
+            .iter()
+            .filter(|b| b.action == "both" && b.token.starts_with("kb1_"))
+            .all(|b| b.device_kind == DeviceKind::Keyboard && b.device.as_deref() == Some("Keyboard/Mouse")));
+        // The same token in both slots is one binding, not two.
+        assert_eq!(tokens("same"), vec!["kb1_mwheel_up"]);
+        assert_eq!(tokens("kb_rebound"), vec!["kb1_mwheel_down"]);
+        assert_eq!(tokens("js_rebound"), vec!["js1_button9", "kb1_e", "kb1_mouse3"]);
+
+        let index = BindingIndex::build(&maps, &profile);
+        assert_eq!(index.resolve("kb1_mouse1").len(), 1);
+        assert!(index.resolve("kb1_mouse2").is_empty());
+        assert_eq!(index.resolve("kb1_mouse3").len(), 1);
     }
 
     #[test]

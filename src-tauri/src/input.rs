@@ -214,8 +214,8 @@ fn keyboard_device() -> DeviceInfo {
         kind: DeviceKind::Keyboard,
         hardware_id: Some(KEYBOARD_HARDWARE_ID.to_string()),
         index: KEYBOARD_INDEX,
-        sc_name: Some("Keyboard".to_string()),
-        sdl_name: "Keyboard".to_string(),
+        sc_name: Some("Keyboard/Mouse".to_string()),
+        sdl_name: "Keyboard/Mouse".to_string(),
         sdl_guid: KEYBOARD_HARDWARE_ID.to_string(),
         power_level: String::new(),
         ..DeviceInfo::default()
@@ -712,7 +712,7 @@ mod tests {
         assert_eq!(kb.kind, DeviceKind::Keyboard);
         assert_eq!(kb.hardware_id.as_deref(), Some("keyboard"));
         assert_eq!(kb.sdl_guid, "keyboard");
-        assert_eq!(kb.sc_name.as_deref(), Some("Keyboard"));
+        assert_eq!(kb.sc_name.as_deref(), Some("Keyboard/Mouse"));
         assert_eq!(kb.sc_product_guid, None); // cannot be excluded, has no GUID
         assert_eq!(kb.gamepad_slot, None);
         assert_eq!((kb.num_buttons, kb.num_axes, kb.num_hats), (0, 0, 0));

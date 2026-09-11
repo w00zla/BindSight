@@ -10,6 +10,7 @@ import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableCo
 import ConfirmDialog, { type ConfirmButton, type ConfirmIcon } from "./ConfirmDialog.vue";
 import { KIND_RANK } from "../devices";
 import { persistedRef } from "../persist";
+import { recording } from "../keyboard";
 import type {
   ActionMap,
   ActionRef,
@@ -416,7 +417,7 @@ interface DeviceCol {
 }
 
 const deviceCols = computed<DeviceCol[]>(() => [
-  { key: "kb1", kind: "keyboard", instance: 1, label: "kb1 · Keyboard" },
+  { key: "kb1", kind: "keyboard", instance: 1, label: "kb1 · Keyboard/Mouse" },
   { key: "gp1", kind: "gamepad", instance: 1, label: "gp1 · Gamepad" },
   ...[...(info.value?.joysticks ?? [])]
     .sort((a, b) => a.instance - b.instance)
@@ -649,29 +650,24 @@ const AXIS_PRESS = 16384;
 interface RebindState {
   row: ListRow;
   category: string;
-  // The device column on show (dropdown); starts on the double-clicked one
-  // and follows a captured input.
-  device: string;
-  // The change gathered so far: the captured token, or the blank token for
-  // a clear, for one device kind (SC keeps one binding per kind). Dropped
-  // when the device on show switches to another kind.
-  change: { kind: DeviceKind; input: string } | null;
+  // The changes gathered so far, one per device kind (SC keeps one binding
+  // per kind): the recorded token, or the blank token for a clear. Every
+  // device the file names is on show at once.
+  changes: Map<DeviceKind, string>;
 }
 
 const rebind = ref<RebindState | null>(null);
 
-function openRebind(row: ListRow, group: ListGroup, col?: DeviceCol) {
+function openRebind(row: ListRow, group: ListGroup) {
   if (!props.hasCurrent) return;
-  const device = col?.key ?? visibleCols.value[0]?.key ?? deviceCols.value[0].key;
-  rebind.value = { row, category: group.label, device, change: null };
+  recording.value = false;
+  rebind.value = { row, category: group.label, changes: new Map() };
 }
 
-const rebindDevices = computed(() => deviceCols.value.map((c) => ({ value: c.key, label: c.label })));
-
-// The device column on show, and its kind's columns (a joystick binding may
-// sit on another instance than the one picked).
-const rebindCol = computed(() => deviceCols.value.find((c) => c.key === rebind.value?.device) ?? null);
-const rebindKindCols = computed(() => deviceCols.value.filter((c) => c.kind === rebindCol.value?.kind));
+// Nothing records once the dialog is gone.
+watch(rebind, (r) => {
+  if (!r) recording.value = false;
+});
 
 interface RebindLine {
   device: string;
@@ -680,59 +676,51 @@ interface RebindLine {
   changed: boolean;
 }
 
-// Current bindings of the action for the device kind on show (pending ones
-// included).
+// Current bindings of the action on every device (pending ones included).
 const rebindBefore = computed<RebindLine[]>(() => {
   const r = rebind.value;
   if (!r) return [];
-  return rebindKindCols.value.flatMap((col) =>
+  return deviceCols.value.flatMap((col) =>
     cellTokens(r.row, col).tokens.map((t) => ({ device: col.key, kind: col.kind, text: inputText(t), changed: false })),
   );
 });
 
-// The same once the dialog's change applies: the new token on its device,
-// nothing for a clear, else unchanged.
+// The same once the dialog's changes apply: a kind with a change shows its
+// new token on its device (nothing for a clear), the other kinds stay.
 const rebindAfter = computed<RebindLine[]>(() => {
   const r = rebind.value;
-  const kind = rebindCol.value?.kind;
-  if (!r || !kind) return [];
-  const change = r.change;
-  if (!change || change.kind !== kind) return rebindBefore.value;
-  const target = parseToken(change.input);
-  if (isBlank(change.input) || !target) return [];
-  return [{ device: deviceKeyOf(kind, target.instance), kind, text: inputText(change.input), changed: true }];
+  if (!r) return [];
+  return deviceCols.value.flatMap((col) => {
+    const change = r.changes.get(col.kind);
+    if (change === undefined) return rebindBefore.value.filter((b) => b.device === col.key);
+    const target = parseToken(change);
+    if (isBlank(change) || !target || deviceKeyOf(col.kind, target.instance) !== col.key) return [];
+    return [{ device: col.key, kind: col.kind, text: inputText(change), changed: true }];
+  });
 });
 
 const rebindButtons = computed<ConfirmButton[]>(() => [
-  { label: "Clear", kind: "danger", value: "clear", side: "left", disabled: !rebindAfter.value.length },
-  { label: "Apply", kind: "primary", value: "apply", disabled: !rebind.value?.change },
+  { label: "Clear all", kind: "danger", value: "clearall", side: "left", disabled: !rebindAfter.value.length },
+  { label: "Apply", kind: "primary", value: "apply", disabled: !rebind.value?.changes.size },
   { label: "Cancel", kind: "outline", value: "cancel" },
 ]);
 
-// Clear the kind on show: no binding on any of its devices.
-function clearKind() {
-  const r = rebind.value;
-  const kind = rebindCol.value?.kind;
-  if (r && kind) r.change = { kind, input: blankToken(kind) };
+// Clear one kind: no binding on any of its devices.
+function clearKind(kind: DeviceKind) {
+  rebind.value?.changes.set(kind, blankToken(kind));
 }
 
-// Switching the device on show (by hand or by a captured input) drops a
-// change of another kind: the dialog edits one input at a time.
-watch(
-  () => rebind.value?.device,
-  () => {
-    const r = rebind.value;
-    if (r?.change && r.change.kind !== rebindCol.value?.kind) r.change = null;
-  },
-);
+// Clear every kind that still has a binding on show.
+function clearAll() {
+  for (const kind of new Set(rebindAfter.value.map((l) => l.kind))) clearKind(kind);
+}
 
-// A captured input becomes the change and brings its device on show.
+// A recorded input becomes its kind's change.
 function setCaptured(token: string | null) {
   const r = rebind.value;
   const target = token ? parseToken(token) : null;
   if (!r || !token || !target) return;
-  r.change = { kind: target.kind, input: token };
-  r.device = deviceKeyOf(target.kind, target.instance);
+  r.changes.set(target.kind, token);
 }
 
 // What an event is: a press (buttons / keys / pad buttons on the way down,
@@ -784,12 +772,14 @@ async function tokenOf(p: JoyInput): Promise<string | null> {
   }
 }
 
-// A press lights its rows in the list and, while the dialog is open,
-// becomes its change; a release puts the light out. Escape cancels the
-// dialog instead (so it cannot be bound here).
+// A press lights its rows in the list and, while the dialog is recording,
+// becomes its change (and ends the recording); a release puts the light
+// out. Escape stops a recording, else cancels the dialog (so it cannot be
+// bound here).
 async function takeInput(p: JoyInput) {
   if (p.kind === "key" && p.pressed && p.name === "escape" && rebind.value) {
-    rebind.value = null;
+    if (recording.value) recording.value = false;
+    else rebind.value = null;
     return;
   }
   const { edge, momentary } = edgeOf(p);
@@ -801,26 +791,30 @@ async function takeInput(p: JoyInput) {
     return;
   }
   light(token, momentary);
-  if (rebind.value) setCaptured(token);
+  if (rebind.value && recording.value) {
+    setCaptured(token);
+    recording.value = false;
+  }
 }
 
 function onRebindChoose(value: string) {
   const r = rebind.value;
   if (!r) return;
-  if (value === "clear") {
-    clearKind();
+  if (value === "clearall") {
+    clearAll();
     return;
   }
   rebind.value = null;
-  if (value !== "apply" || !r.change) return;
+  if (value !== "apply") return;
   const { actionmap, action } = r.row;
-  const { kind, input } = r.change;
-  const key = pendingKey(actionmap, action, kind);
-  // Back to what the file has: no change to keep.
-  const inFile = props.bindings.filter((b) => b.actionmap === actionmap && b.action === action && b.device_kind === kind);
-  const same = isBlank(input) ? inFile.length === 0 : inFile.length === 1 && inFile[0].token === input;
-  if (same) pending.value.delete(key);
-  else pending.value.set(key, { actionmap, action, kind, input });
+  for (const [kind, input] of r.changes) {
+    const key = pendingKey(actionmap, action, kind);
+    // Back to what the file has: no change to keep.
+    const inFile = props.bindings.filter((b) => b.actionmap === actionmap && b.action === action && b.device_kind === kind);
+    const same = isBlank(input) ? inFile.length === 0 : inFile.length === 1 && inFile[0].token === input;
+    if (same) pending.value.delete(key);
+    else pending.value.set(key, { actionmap, action, kind, input });
+  }
 }
 
 // --- save / discard --------------------------------------------------------
@@ -899,6 +893,7 @@ let unlisten: UnlistenFn[] = [];
 onUnmounted(() => {
   unlisten.forEach((fn) => fn());
   unlisten = [];
+  recording.value = false;
 });
 
 // The live bindings changed (reload, restore, resort) — re-diff if a side is Current.
@@ -1120,7 +1115,7 @@ function compareWith(key: string) {
                 class="bind-cell"
                 :class="{ pending: cellTokens(r, c).pending, empty: !bindText(r, c), live: liveOn && isLiveCell(r, c) }"
                 :title="cellTokens(r, c).tokens.join(', ')"
-                @dblclick.stop="openRebind(r, g, c)"
+                @dblclick.stop="openRebind(r, g)"
               ><Icon name="bolt" :size="12" class="live-mark" />{{ bindText(r, c) || "—" }}</span>
             </div>
           </template>
@@ -1211,7 +1206,7 @@ function compareWith(key: string) {
 
     <ConfirmDialog v-if="confirm" :title="confirm.title" :icon="confirm.icon" :buttons="confirm.buttons" @choose="onConfirm" />
 
-    <!-- rebind: the next input pressed (or Clear) becomes the change, Apply queues it -->
+    <!-- rebind: every device at once; Record or Clear changes a kind, Apply queues the changes -->
     <ConfirmDialog
       v-if="rebind"
       :title="rebind.row.label"
@@ -1221,16 +1216,15 @@ function compareWith(key: string) {
       captureKeys
       @choose="onRebindChoose"
     >
-      <div class="rb-device">
-        <span class="rb-label">Device</span>
-        <Dropdown v-model="rebind.device" :options="rebindDevices" variant="small" title="Device" />
-      </div>
       <div class="rb-columns">
         <div class="rb-block">
           <span class="rb-label">Before</span>
           <div v-for="b in rebindBefore" :key="`${b.device}:${b.text}`" class="rb-line">
-            <span v-if="b.device !== rebind.device" class="mono dim">{{ b.device }}</span>
+            <span class="mono dim">{{ b.device }}</span>
             <span class="rb-text">{{ b.text }}</span>
+            <button type="button" class="icon-btn rb-clear" title="Clear" @click="clearKind(b.kind)">
+              <Icon name="close" :size="12" />
+            </button>
           </div>
           <div v-if="!rebindBefore.length" class="rb-line dim">—</div>
         </div>
@@ -1238,15 +1232,20 @@ function compareWith(key: string) {
         <div class="rb-block">
           <span class="rb-label">After</span>
           <div v-for="a in rebindAfter" :key="`${a.device}:${a.text}`" class="rb-line">
-            <span v-if="a.device !== rebind.device" class="mono dim">{{ a.device }}</span>
+            <span class="mono dim">{{ a.device }}</span>
             <span class="rb-text" :class="{ 'rb-new': a.changed }">{{ a.text }}</span>
           </div>
           <div v-if="!rebindAfter.length" class="rb-line dim">—</div>
         </div>
       </div>
-      <div class="rb-hint">
-        <Icon name="target" :size="14" />
-        <span>Press an input on any device to bind it.</span>
+      <div class="rb-record">
+        <button type="button" class="btn small" :class="recording ? 'primary' : 'outline'" @click="recording = true">
+          <Icon name="target" :size="13" />
+          {{ recording ? "Recording…" : "Record" }}
+        </button>
+        <span class="rb-hint" :class="{ on: recording }">
+          {{ recording ? "Press an input on any device · Esc stops" : "Record input from any device" }}
+        </span>
       </div>
     </ConfirmDialog>
   </div>
@@ -1844,12 +1843,6 @@ function compareWith(key: string) {
 
 /* --- rebind dialog --- */
 
-.rb-device {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
 /* Before and After side by side, an arrow between them. */
 .rb-columns {
   display: grid;
@@ -1878,12 +1871,18 @@ function compareWith(key: string) {
 
 .rb-line {
   display: flex;
+  align-items: center;
   gap: 12px;
   font-size: 14px;
 }
 
 .rb-line .mono {
   flex-shrink: 0;
+  min-width: 3ch;
+}
+
+.rb-clear {
+  margin-left: auto;
 }
 
 .rb-text {
@@ -1899,11 +1898,18 @@ function compareWith(key: string) {
   font-weight: 600;
 }
 
-.rb-hint {
+.rb-record {
   display: flex;
   align-items: center;
-  gap: 8px;
-  color: var(--accent);
+  gap: 12px;
+}
+
+.rb-hint {
+  color: var(--text-2);
   font-size: 13px;
+}
+
+.rb-hint.on {
+  color: var(--accent);
 }
 </style>

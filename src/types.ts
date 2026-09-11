@@ -113,6 +113,8 @@ export interface Action {
   joystick_default: string | null;
   keyboard_default: string | null;
   gamepad_default: string | null;
+  // The mouse is part of the keyboard device (SC binds it as kb1_mouse1).
+  mouse_default: string | null;
 }
 
 export interface ActionMap {

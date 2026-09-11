@@ -63,6 +63,11 @@ pub struct Action {
     pub keyboard_default: Option<String>,
     /// Default gamepad binding (prefix-less, modifiers included: `shoulderl+y`).
     pub gamepad_default: Option<String>,
+    /// Default mouse binding (`mouse1`, `mwheel_up`, `maxis_x`). SC binds the
+    /// mouse under the keyboard prefix (`kb1_mouse1`), so this is a second
+    /// keyboard-kind default, not a device kind of its own.
+    #[serde(default)]
+    pub mouse_default: Option<String>,
 }
 
 /// A group of actions (SC's `<actionmap>`), with its resolved label.
@@ -152,12 +157,13 @@ pub fn parse_default_profile(xml: &str, loc: &HashMap<String, String>) -> Result
     Ok(maps)
 }
 
-/// Apply a `<keyboard|gamepad|joystick input="…"/>` child of an `<action>`:
+/// Apply a `<keyboard|mouse|gamepad|joystick input="…"/>` child of an `<action>`:
 /// it overrides the attribute of the same kind, blank input included (that is
 /// how SC unbinds a default it otherwise inherits).
 fn apply_default_child(e: &BytesStart, action: &mut Action) {
     let field = match e.name().as_ref() {
         b"keyboard" => &mut action.keyboard_default,
+        b"mouse" => &mut action.mouse_default,
         b"gamepad" => &mut action.gamepad_default,
         b"joystick" => &mut action.joystick_default,
         _ => return,
@@ -188,6 +194,7 @@ fn action_from(e: &BytesStart, loc: &HashMap<String, String>) -> Action {
         joystick_default: binding_value(attrs.get("joystick")),
         keyboard_default: binding_value(attrs.get("keyboard")),
         gamepad_default: binding_value(attrs.get("gamepad")),
+        mouse_default: binding_value(attrs.get("mouse")),
     }
 }
 
@@ -214,13 +221,13 @@ fn resolve(key: Option<&String>, loc: &HashMap<String, String>) -> Option<String
 }
 
 /// The token prefix a `<device name="...">` in `keybinding_localization.xml`
-/// contributes to, or `None` for devices we do not bind (`mouse`).
-/// `joystickN` -> `jsN_`, `keyboard` -> `kb1_`, `control_pad` -> `gp1_`.
+/// contributes to, or `None` for a device we do not know. `joystickN` ->
+/// `jsN_`, `keyboard` and `mouse` -> `kb1_` (SC binds the mouse under the
+/// keyboard prefix: `kb1_mouse1`), `control_pad` -> `gp1_`.
 fn token_prefix_for_device(name: &str) -> Option<String> {
     match name {
-        "keyboard" => Some("kb1_".to_string()),
+        "keyboard" | "mouse" => Some("kb1_".to_string()),
         "control_pad" => Some("gp1_".to_string()),
-        "mouse" => None,
         _ => name
             .strip_prefix("joystick")
             .and_then(|n| n.parse::<u32>().ok())
@@ -236,7 +243,7 @@ fn token_prefix_for_device(name: &str) -> Option<String> {
 /// treated as canonical; keyboard and gamepad exist exactly once. The
 /// `localizationString` is taken from the XML (hat directions use camelCase
 /// keys like `hat1Up`, so it must not be rebuilt) and resolved against `loc`.
-/// The `mouse` device is skipped — mouse input is out of scope.
+/// The `mouse` device lands under `kb1_` too (`kb1_mouse1`, `kb1_mwheel_up`).
 pub fn parse_token_labels(xml: &str, loc: &HashMap<String, String>) -> HashMap<String, String> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
@@ -407,7 +414,7 @@ impl RebindTarget {
 /// Keyboard and gamepad tokens carry their modifiers *inside* the token, after
 /// the single prefix (`kb1_lalt+x`, `gp1_shoulderl+y`), while a joystick token
 /// puts the modifier in front of the prefix (`lctrl+js1_button1`) — hence the
-/// two different parses. Returns `None` for anything else (mouse, empty).
+/// two different parses. Returns `None` for anything else (no prefix, empty).
 pub fn parse_rebind(input: &str) -> Option<RebindTarget> {
     let trimmed = input.trim_start();
     for kind in [DeviceKind::Keyboard, DeviceKind::Gamepad] {
@@ -497,7 +504,7 @@ mod tests {
     fn parses_token_labels_per_instance_and_device_kind() {
         // js1 has no suffix; js2+ carry "(Input N)". Axis/hat keys differ from
         // the bind token name (hat1_up -> hat1Up). The keyboard and the
-        // control_pad exist once each (kb1_/gp1_); the mouse is skipped.
+        // control_pad exist once each (kb1_/gp1_); the mouse shares kb1_.
         let loc = parse_localization(concat!(
             "input_key_joystick1_button1=Button 1\r\n",
             "input_key_joystick2_button1=Button 1 (Input 2)\r\n",
@@ -531,8 +538,8 @@ mod tests {
         assert_eq!(tokens.get("js1_hat1_up").map(String::as_str), Some("Up (Hat 1)"));
         assert_eq!(tokens.get("kb1_a").map(String::as_str), Some("A"));
         assert_eq!(tokens.get("gp1_dpad_up").map(String::as_str), Some("D-Pad Up"));
-        assert!(!tokens.keys().any(|k| k.contains("mouse")));
-        assert_eq!(tokens.len(), 5); // mouse device ignored
+        assert_eq!(tokens.get("kb1_mouse1").map(String::as_str), Some("Mouse 1"));
+        assert_eq!(tokens.len(), 6);
     }
 
     #[test]
@@ -547,10 +554,11 @@ mod tests {
             <joystick label="@x" image="JoystickDefault"/>
           </CustomisationUIHeader>
           <actionmap name="m">
-            <action name="attrs_only" keyboard="lalt+x" gamepad="a" joystick="button1"/>
-            <action name="blank_attrs" keyboard=" " gamepad=" " joystick=" "/>
-            <action name="child_wins" keyboard="q" gamepad="a">
+            <action name="attrs_only" keyboard="lalt+x" mouse="mouse1" gamepad="a" joystick="button1"/>
+            <action name="blank_attrs" keyboard=" " mouse="" gamepad=" " joystick=" "/>
+            <action name="child_wins" keyboard="q" mouse="mouse2" gamepad="a">
               <keyboard activationMode="double_tap" input="e"/>
+              <mouse activationMode="tap" input="mwheel_up"/>
               <gamepad activationMode="tap" input="shoulderl+thumbl_left"/>
             </action>
             <action name="child_unbinds" gamepad="a">
@@ -568,14 +576,16 @@ mod tests {
 
         let a = find("attrs_only");
         assert_eq!(a.keyboard_default.as_deref(), Some("lalt+x"));
+        assert_eq!(a.mouse_default.as_deref(), Some("mouse1"));
         assert_eq!(a.gamepad_default.as_deref(), Some("a"));
         assert_eq!(a.joystick_default.as_deref(), Some("button1"));
 
         let b = find("blank_attrs");
-        assert_eq!((&b.keyboard_default, &b.gamepad_default, &b.joystick_default), (&None, &None, &None));
+        assert_eq!((&b.keyboard_default, &b.mouse_default, &b.gamepad_default, &b.joystick_default), (&None, &None, &None, &None));
 
         let c = find("child_wins");
         assert_eq!(c.keyboard_default.as_deref(), Some("e"));
+        assert_eq!(c.mouse_default.as_deref(), Some("mwheel_up"));
         assert_eq!(c.gamepad_default.as_deref(), Some("shoulderl+thumbl_left"));
 
         // A blank child unbinds what the attribute set.

@@ -451,6 +451,7 @@ mod tests {
                 joystick_default: None,
                 keyboard_default: None,
                 gamepad_default: None,
+                mouse_default: None,
             }],
         }];
 
