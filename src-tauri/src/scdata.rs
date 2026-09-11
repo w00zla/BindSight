@@ -297,13 +297,13 @@ pub struct Rebind {
 /// The user's `actionmaps.xml`: the joystick instance→device map and every
 /// rebind. Layered on top of the [`ActionMap`] master list.
 #[derive(Debug, Clone, Serialize)]
-pub struct UserProfile {
+pub struct ActionMapsFile {
     pub joysticks: Vec<JoystickDevice>,
     pub rebinds: Vec<Rebind>,
 }
 
 /// Parse the user's `actionmaps.xml`.
-pub fn parse_user_profile(xml: &str) -> Result<UserProfile, String> {
+pub fn parse_actionmaps(xml: &str) -> Result<ActionMapsFile, String> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
 
@@ -342,7 +342,7 @@ pub fn parse_user_profile(xml: &str) -> Result<UserProfile, String> {
         }
     }
 
-    Ok(UserProfile { joysticks, rebinds })
+    Ok(ActionMapsFile { joysticks, rebinds })
 }
 
 fn joystick_device_from(attrs: &HashMap<String, String>) -> Option<JoystickDevice> {
@@ -674,7 +674,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_user_profile() {
+    fn parses_actionmaps() {
         let xml = r#"<ActionMaps>
           <options type="keyboard" instance="1" Product="Wine Keyboard  {6F1D2B61-...}"/>
           <options type="joystick" instance="1" Product=" VKB L {0201231D-...}"/>
@@ -686,7 +686,7 @@ mod tests {
           </actionmap>
         </ActionMaps>"#;
 
-        let profile = parse_user_profile(xml).unwrap();
+        let profile = parse_actionmaps(xml).unwrap();
 
         // only the two joystick options with a Product; the empty slot is skipped
         assert_eq!(profile.joysticks.len(), 2);

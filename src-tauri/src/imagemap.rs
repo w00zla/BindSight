@@ -1,6 +1,7 @@
-//! Image-maps: one image of a physical joystick plus drawn areas that
-//! map an SDL-level input (`button:5`, `hat:0:up`, `axis:2`) to a region of
-//! it, so the live view can light up the physical control.
+//! Image-maps: one image of a physical device plus drawn areas that map an
+//! input to a region of it, so the Monitor can light up the physical
+//! control. Joysticks use SDL-level keys (`button:5`, `hat:0:up`, `axis:2`);
+//! keyboard and gamepad use SC's own names (`key:lshift`, `pad:a`).
 //!
 //! On disk an image-map is one folder — `imagemap.json` plus the image file it
 //! references by bare file name. Two roots are searched:
@@ -88,11 +89,12 @@ pub enum Shape {
     },
 }
 
-/// A drawn region of the image, tied to one SDL-level input key.
+/// A drawn region of the image, tied to one input key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Area {
     pub id: String,
-    /// `button:<n>`, `hat:<n>:<dir>` or `axis:<n>`.
+    /// `button:<n>`, `hat:<n>:<dir>` or `axis:<n>` (joystick, SDL-level);
+    /// `key:<name>` (keyboard) or `pad:<name>` (gamepad), SC's own names.
     pub input: String,
     pub shape: Shape,
 }
@@ -103,7 +105,8 @@ pub struct ImageMap {
     pub format: u32,
     pub id: String,
     pub name: String,
-    /// SC Product GUID (with braces); compared case-insensitively.
+    /// SC Product GUID (with braces) for a joystick, or the literal
+    /// `gamepad` / `keyboard`; compared case-insensitively.
     pub hardware_id: String,
     #[serde(default)]
     pub hardware_name: String,

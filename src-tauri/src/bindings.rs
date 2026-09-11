@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use crate::gamelog::{GameLogError, LogEnumeration};
 use crate::input::DeviceInfo;
-use crate::scdata::{parse_rebind, Action, ActionMap, DeviceKind, UserProfile};
+use crate::scdata::{parse_rebind, Action, ActionMap, DeviceKind, ActionMapsFile};
 
 /// An action a token is bound to, with the context (actionmap) it applies in.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -68,7 +68,7 @@ const KINDS: [DeviceKind; 3] = [DeviceKind::Joystick, DeviceKind::Keyboard, Devi
 /// (`js1_ `, `kb1_ `) that unbinds the shipped default. For those the default
 /// no longer applies. "Touched" is per kind: a keyboard rebind leaves the
 /// joystick default alone, and vice versa.
-fn touched_per_kind(profile: &UserProfile) -> HashSet<(DeviceKind, &str, &str)> {
+fn touched_per_kind(profile: &ActionMapsFile) -> HashSet<(DeviceKind, &str, &str)> {
     profile
         .rebinds
         .iter()
@@ -88,7 +88,7 @@ pub struct BindingIndex {
 
 impl BindingIndex {
     /// Build the index from the action master list and the user's rebinds.
-    pub fn build(maps: &[ActionMap], profile: &UserProfile) -> Self {
+    pub fn build(maps: &[ActionMap], profile: &ActionMapsFile) -> Self {
         // (actionmap, action) -> resolved label
         let mut label_of: HashMap<(&str, &str), Option<String>> = HashMap::new();
         for map in maps {
@@ -204,7 +204,7 @@ fn fixed_device_name(kind: DeviceKind) -> Option<String> {
 /// (blank) rebinds are skipped. Shipped instance-1 defaults are
 /// appended for every action/device kind the user never touched (see
 /// [`touched_per_kind`]).
-pub fn resolve_bindings(maps: &[ActionMap], profile: &UserProfile) -> Vec<ResolvedBinding> {
+pub fn resolve_bindings(maps: &[ActionMap], profile: &ActionMapsFile) -> Vec<ResolvedBinding> {
     let mut label_of: HashMap<(&str, &str), Option<String>> = HashMap::new();
     for map in maps {
         for action in &map.actions {
@@ -360,10 +360,10 @@ fn guid_eq(a: Option<&str>, b: Option<&str>) -> bool {
 /// Drop devices the user declared invisible to SC ("SC doesn't see this
 /// device", e.g. a keyboard Wine hides from the game). They then count as
 /// unplugged for the analysis. Matched by SC Product GUID, case-insensitively.
-pub fn without_ignored(devices: &[DeviceInfo], ignored: &[String]) -> Vec<DeviceInfo> {
+pub fn without_excluded(devices: &[DeviceInfo], excluded: &[String]) -> Vec<DeviceInfo> {
     devices
         .iter()
-        .filter(|d| !ignored.iter().any(|g| guid_eq(Some(g), d.sc_product_guid.as_deref())))
+        .filter(|d| !excluded.iter().any(|g| guid_eq(Some(g), d.sc_product_guid.as_deref())))
         .cloned()
         .collect()
 }
@@ -377,7 +377,7 @@ pub fn without_ignored(devices: &[DeviceInfo], ignored: &[String]) -> Vec<Device
 /// `log` is SC's own enumeration from `Game.log`, the only order source.
 /// Without it the report carries just the error.
 pub fn analyze_clash(
-    profile: &UserProfile,
+    profile: &ActionMapsFile,
     devices: &[DeviceInfo],
     log: Result<&LogEnumeration, GameLogError>,
 ) -> ClashReport {
@@ -512,7 +512,7 @@ pub fn resort_commands(moves: &[ResortMove]) -> Vec<String> {
 }
 
 /// Find the SC `jsN` instance for a device by its SC Product GUID.
-pub fn instance_for_guid(profile: &UserProfile, sc_product_guid: &str) -> Option<u32> {
+pub fn instance_for_guid(profile: &ActionMapsFile, sc_product_guid: &str) -> Option<u32> {
     profile
         .joysticks
         .iter()
@@ -527,7 +527,7 @@ pub fn instance_for_guid(profile: &UserProfile, sc_product_guid: &str) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scdata::{parse_default_profile, parse_user_profile};
+    use crate::scdata::{parse_default_profile, parse_actionmaps};
 
     /// A minimal connected device for clash tests; only GUID/name/order matter.
     fn dev(guid: &str, name: &str) -> DeviceInfo {
@@ -563,7 +563,7 @@ mod tests {
           <options type="joystick" instance="2" Product=" VKB L {0201231D-0000-0000-0000-504944564944}"/>
           <options type="joystick" instance="3" Product=" VKB R {0200231D-0000-0000-0000-504944564944}"/>
         </ActionMaps>"#;
-        let profile = parse_user_profile(xml).unwrap();
+        let profile = parse_actionmaps(xml).unwrap();
         let all = [dev(KEYCHRON_K2HE, "Keychron"), dev(VKB_L, "VKB L"), dev(VKB_R, "VKB R")];
 
         // SC lists all three in the saved order -> no clash, nothing to resort.
@@ -626,7 +626,7 @@ mod tests {
           <options type="joystick" instance="1" Product=" VKBsim Gladiator EVO  R    {0200231D-0000-0000-0000-504944564944}"/>
           <options type="joystick" instance="2" Product=" VKBsim Gladiator EVO  L    {0201231D-0000-0000-0000-504944564944}"/>
         </ActionMaps>"#;
-        let profile = parse_user_profile(xml).unwrap();
+        let profile = parse_actionmaps(xml).unwrap();
         // SDL sees the K2 HE too (Linux), in an order that is NOT SC's.
         let sdl = [dev(KEYCHRON_K2HE, "K2 HE"), dev(VKB_R, "VKB R"), dev(VKB_L, "VKB L")];
         let log = linux_log();
@@ -658,7 +658,7 @@ mod tests {
           <options type="joystick" instance="2" Product=" VKBsim Gladiator EVO  R    {0200231D-0000-0000-0000-504944564944}"/>
           <options type="joystick" instance="3" Product=" VKBsim Gladiator EVO  L    {0201231D-0000-0000-0000-504944564944}"/>
         </ActionMaps>"#;
-        let profile = parse_user_profile(xml).unwrap();
+        let profile = parse_actionmaps(xml).unwrap();
         let sdl = [dev(KEYCHRON_K2HE, "K2 HE"), dev(VKB_R, "VKB R"), dev(VKB_L, "VKB L")];
         let log = linux_log();
         let report = analyze_clash(&profile, &sdl, Ok(&log));
@@ -676,7 +676,7 @@ mod tests {
 
     #[test]
     fn game_log_flags_device_unplugged_since_sc_start() {
-        let profile = parse_user_profile("<ActionMaps/>").unwrap();
+        let profile = parse_actionmaps("<ActionMaps/>").unwrap();
         // SC saw R and L at start; L has since been unplugged.
         let sdl = [dev(VKB_R, "VKB R")];
         let log = linux_log();
@@ -692,7 +692,7 @@ mod tests {
         let xml = r#"<ActionMaps>
           <options type="joystick" instance="1" Product=" VKB L {0201231D-0000-0000-0000-504944564944}"/>
         </ActionMaps>"#;
-        let profile = parse_user_profile(xml).unwrap();
+        let profile = parse_actionmaps(xml).unwrap();
         let err = GameLogError::NoDeviceLines { path: "x/Game.log".into() };
         let report = analyze_clash(&profile, &[dev(VKB_R, "R")], Err(err.clone()));
         // Nothing is derived from SDL's order: no slots, no missing, no clash.
@@ -700,14 +700,14 @@ mod tests {
     }
 
     #[test]
-    fn ignored_devices_are_dropped_by_guid_case_insensitively() {
+    fn excluded_devices_are_dropped_by_guid_case_insensitively() {
         let devs = [dev(KEYCHRON_K2HE, "K2 HE"), dev(VKB_R, "R")];
-        let ignored = vec![KEYCHRON_K2HE.to_ascii_lowercase()];
-        let kept = without_ignored(&devs, &ignored);
+        let excluded = vec![KEYCHRON_K2HE.to_ascii_lowercase()];
+        let kept = without_excluded(&devs, &excluded);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].sc_product_guid.as_deref(), Some(VKB_R));
-        // Nothing ignored -> untouched.
-        assert_eq!(without_ignored(&devs, &[]).len(), 2);
+        // Nothing excluded -> untouched.
+        assert_eq!(without_excluded(&devs, &[]).len(), 2);
     }
 
     #[test]
@@ -718,7 +718,7 @@ mod tests {
         let xml = r#"<ActionMaps>
           <options type="joystick" instance="1" Product=" VKB L {0201231D-0000-0000-0000-504944564944}"/>
         </ActionMaps>"#;
-        let profile = parse_user_profile(xml).unwrap();
+        let profile = parse_actionmaps(xml).unwrap();
         let devs = [dev(VKB_L, "VKB L"), dev("{DEAD0000-0000-0000-0000-504944564944}", "New Stick")];
         let log = log_of(&[("VKB L", VKB_L), ("New Stick", "{DEAD0000-0000-0000-0000-504944564944}")]);
         let report = analyze_clash(&profile, &devs, Ok(&log));
@@ -840,7 +840,7 @@ mod tests {
             <action name="ready"><rebind input="js2_button1"/></action>
           </actionmap>
         </ActionMaps>"#;
-        let profile = parse_user_profile(user_xml).unwrap();
+        let profile = parse_actionmaps(user_xml).unwrap();
 
         let index = BindingIndex::build(&maps, &profile);
 
@@ -895,7 +895,7 @@ mod tests {
             <action name="kb_only"><rebind input="kb1_k"/></action>
           </actionmap>
         </ActionMaps>"#;
-        let profile = parse_user_profile(user_xml).unwrap();
+        let profile = parse_actionmaps(user_xml).unwrap();
 
         let resolved = resolve_bindings(&maps, &profile);
         let find = |action: &str| resolved.iter().filter(|b| b.action == action).collect::<Vec<_>>();
@@ -960,7 +960,7 @@ mod tests {
             <action name="js_rebound"><rebind input="js1_button9"/></action>
           </actionmap>
         </ActionMaps>"#;
-        let profile = parse_user_profile(user_xml).unwrap();
+        let profile = parse_actionmaps(user_xml).unwrap();
 
         let resolved = resolve_bindings(&maps, &profile);
         let tokens = |action: &str| {
@@ -1011,7 +1011,7 @@ mod tests {
             <action name="gp_unbound"><rebind input="gp1_ "/></action>
           </actionmap>
         </ActionMaps>"#;
-        let profile = parse_user_profile(user_xml).unwrap();
+        let profile = parse_actionmaps(user_xml).unwrap();
 
         let resolved = resolve_bindings(&maps, &profile);
         let tokens = |action: &str| {
@@ -1051,7 +1051,7 @@ mod tests {
         let xml = r#"<ActionMaps>
           <options type="joystick" instance="1" Product=" VKB L {0201231D-0000-0000-0000-504944564944}"/>
         </ActionMaps>"#;
-        let profile = parse_user_profile(xml).unwrap();
+        let profile = parse_actionmaps(xml).unwrap();
         let mut pad = dev("{028E045E-0000-0000-0000-504944564944}", "Gamepad");
         pad.kind = DeviceKind::Gamepad;
         let mut keyboard = DeviceInfo { kind: DeviceKind::Keyboard, ..DeviceInfo::default() };

@@ -1,9 +1,9 @@
 //! Backups of the live `actionmaps.xml`: one folder per backup under
 //! `<app_data_dir>/backups/<id>/`, holding a copy of the file (`actionmaps.xml`)
 //! plus `meta.json` (when it was made, why, and for which game version). Taken
-//! manually (the Tools UI) and — while `Config::auto_backup` is on — before a
-//! resort (`apply_resort` in `lib.rs`) and before a restore (so a restore is
-//! itself undoable).
+//! manually (Bindings mode) and — while `Config::auto_backup` is on — before a
+//! resort (`apply_resort` in `lib.rs`), before a rebind (`save_rebinds`) and
+//! before a restore (so a restore is itself undoable).
 //!
 //! The pure logic works on `&Path` roots so it is testable without an
 //! `AppHandle`; the `#[tauri::command]` wrappers only resolve the root.
@@ -264,7 +264,7 @@ pub(crate) fn restore_backup(id: String, app: AppHandle, data: State<Mutex<AppDa
     let version = data.sc.version.as_ref().map(|v| v.label.as_str());
     restore(&root, &id, &path, data.config.auto_backup, version, &data.sc.data.actions)?;
     info!("backup {id} restored to {}", path.display());
-    Ok(crate::reload_profile(&mut data))
+    Ok(crate::reload_bindings(&mut data))
 }
 
 /// Open backup `id`'s folder in the system file manager.

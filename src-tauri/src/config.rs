@@ -64,14 +64,16 @@ pub struct Config {
     /// game. Lives in the per-OS config dir, so the list is naturally
     /// platform-specific — the same device can be visible on Windows and
     /// hidden under Wine. Older config files without the field still load.
-    #[serde(default)]
-    pub ignored_devices: Vec<String>,
+    /// Wire name kept as `ignored_devices` (serde rename) so existing
+    /// config.json files keep applying their exclusion list.
+    #[serde(default, rename = "ignored_devices")]
+    pub excluded_devices: Vec<String>,
     /// Which image-map to show per device: lowercase SC Product GUID -> image-map
     /// id. Only needed when several image-maps exist for one device.
     #[serde(default)]
     pub imagemap_choices: HashMap<String, String>,
     /// Back up `actionmaps.xml` before BindSight overwrites it (Fix via config,
-    /// restore). On unless the user switched it off.
+    /// before rebind, restore). On unless the user switched it off.
     #[serde(default = "default_auto_backup")]
     pub auto_backup: bool,
     /// Write DEBUG records to the app log; INFO and up otherwise.
@@ -88,7 +90,7 @@ impl Default for Config {
         Self {
             environments: default_environments(),
             active_env: default_active_env(),
-            ignored_devices: Vec::new(),
+            excluded_devices: Vec::new(),
             imagemap_choices: HashMap::new(),
             auto_backup: default_auto_backup(),
             debug_logging: false,
@@ -207,7 +209,7 @@ mod tests {
         assert_eq!(c.environments.len(), ENVIRONMENTS.len());
         assert_eq!(c.base_path(), "/sc/PTU");
         assert_eq!(c.global_ini_override(), Some(PathBuf::from("/x/global.ini")));
-        assert!(c.ignored_devices.is_empty());
+        assert!(c.excluded_devices.is_empty());
         // Auto-backups are on unless switched off explicitly; debug logging is
         // off unless switched on.
         assert!(c.auto_backup);

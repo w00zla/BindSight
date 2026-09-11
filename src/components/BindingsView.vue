@@ -24,7 +24,7 @@ import type {
   DiffSource,
   JoyInput,
   LoadStatus,
-  ProfileInfo,
+  CurrentBindingsInfo,
   RebindChange,
   ResolvedBinding,
 } from "../types";
@@ -396,11 +396,11 @@ const sameSource = computed(() => aKey.value === bKey.value);
 // --- bindings list ---------------------------------------------------------
 
 // Facts about the live file; null while nothing is loaded.
-const info = ref<ProfileInfo | null>(null);
+const info = ref<CurrentBindingsInfo | null>(null);
 
 async function loadInfo() {
   try {
-    info.value = await invoke<ProfileInfo | null>("get_profile_info");
+    info.value = await invoke<CurrentBindingsInfo | null>("get_current_bindings_info");
   } catch (e) {
     info.value = null;
     emit("notify", String(e), "error");
@@ -431,7 +431,7 @@ const deviceCols = computed<DeviceCol[]>(() => [
 
 // Columns the user switched off (remembered; a device new to the file
 // starts visible).
-const hiddenCols = persistedRef<string[]>("bindsight.bindings.hidden", []);
+const hiddenCols = persistedRef<string[]>("bindsight.bindingslist.hiddencols", []);
 const visibleCols = computed(() => deviceCols.value.filter((c) => !hiddenCols.value.includes(c.key)));
 
 function toggleCol(key: string) {
@@ -462,7 +462,7 @@ const listColumns = computed<ColumnSpec[]>(() => [
     icon: d.kind === "keyboard" ? "keyboard" : d.kind === "gamepad" ? "gamepad" : "devices",
   })),
 ]);
-const listCols = useTableColumns("bindsight.columns.bindings", listColumns, { key: "action", dir: "asc" });
+const listCols = useTableColumns("bindsight.columns.bindingslist", listColumns, { key: "action", dir: "asc" });
 
 interface ListRow {
   actionmap: string;
@@ -925,7 +925,7 @@ function compareWith(key: string) {
 </script>
 
 <template>
-  <div class="tools">
+  <div class="bindings-view">
     <div class="left">
       <!-- game bindings: the live file -->
       <section class="panel">
@@ -1256,7 +1256,7 @@ function compareWith(key: string) {
 </template>
 
 <style scoped>
-.tools {
+.bindings-view {
   flex: 1;
   display: grid;
   grid-template-columns: 360px minmax(0, 1fr);

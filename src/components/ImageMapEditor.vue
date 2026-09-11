@@ -356,7 +356,7 @@ async function openFirst() {
 }
 
 async function selectDevice(d: DeviceInfo) {
-  showLog.value = false;
+  showDeviceInfo.value = false;
   if (!d.hardware_id || d.sdl_guid === selectedGuid.value) return;
   if (!(await requestLeave())) return;
   selectedGuid.value = d.sdl_guid;
@@ -367,7 +367,7 @@ async function selectDevice(d: DeviceInfo) {
 }
 
 async function openMap(id: string) {
-  showLog.value = false;
+  showDeviceInfo.value = false;
   if (id === openId.value) return;
   if (!(await requestLeave())) return;
   await loadMap(id);
@@ -396,7 +396,7 @@ async function pickImage(): Promise<string | null> {
 async function newMap() {
   const d = device.value;
   if (!d?.hardware_id) return;
-  showLog.value = false;
+  showDeviceInfo.value = false;
   if (!(await requestLeave())) return;
   closeMap();
   state.value = "new";
@@ -1011,11 +1011,9 @@ const polyPreview = computed(() => {
 
 // --- left column text ------------------------------------------------------
 
-// "28 btn · 8 axes · 2 hats", plus the image count for a device that is not
-// the selected one (its image-maps are listed below the card).
 // --- raw log (device dump + events, replaces the canvas while shown) --------
 
-const showLog = ref(false);
+const showDeviceInfo = ref(false);
 
 // Last 8 hex chars of an SDL GUID: enough to tell devices apart in the log.
 function shortGuid(guid: string): string {
@@ -1194,7 +1192,7 @@ function noMaps(d: DeviceInfo): boolean {
 </script>
 
 <template>
-  <section class="devices" :class="{ log: showLog }">
+  <section class="devices" :class="{ 'device-info': showDeviceInfo }">
     <!-- left: devices and their image-maps, and the system panel -->
     <aside class="col-left">
       <section class="panel grow">
@@ -1260,7 +1258,7 @@ function noMaps(d: DeviceInfo): boolean {
           <span class="head-title">System</span>
         </div>
         <div class="foot">
-          <button type="button" class="btn wide" :class="showLog ? 'primary' : 'outline'" @click="showLog = !showLog">
+          <button type="button" class="btn wide" :class="showDeviceInfo ? 'primary' : 'outline'" @click="showDeviceInfo = !showDeviceInfo">
             <Icon name="log" :size="14" />
             Device Info
           </button>
@@ -1269,7 +1267,7 @@ function noMaps(d: DeviceInfo): boolean {
     </aside>
 
     <!-- what can be done with the open (or not yet created) image-map -->
-    <div v-if="!showLog && (map || isNew)" class="action-tile">
+    <div v-if="!showDeviceInfo && (map || isNew)" class="action-tile">
       <div class="tile-name">
         <Icon :name="editing ? 'edit' : 'image'" :size="14" />
         <input
@@ -1341,8 +1339,8 @@ function noMaps(d: DeviceInfo): boolean {
     </div>
 
     <!-- centre: the canvas -->
-    <section class="col-centre" :class="{ split: showLog }">
-      <template v-if="showLog">
+    <section class="col-centre" :class="{ split: showDeviceInfo }">
+      <template v-if="showDeviceInfo">
         <section class="panel log-tile">
           <div class="head">
             <Icon name="list" :size="15" />
@@ -1545,7 +1543,7 @@ function noMaps(d: DeviceInfo): boolean {
     </section>
 
     <!-- right: live input and areas -->
-    <aside v-if="!showLog" class="col-right">
+    <aside v-if="!showDeviceInfo" class="col-right">
       <div v-if="editing" class="input-card">
         <div class="ic-key">
           <Icon name="bolt" :size="22" />
@@ -1621,8 +1619,8 @@ function noMaps(d: DeviceInfo): boolean {
   min-height: 0;
 }
 
-/* The log takes the canvas column and the right one. */
-.devices.log {
+/* Device Info takes the canvas column and the right one. */
+.devices.device-info {
   grid-template-columns: 300px minmax(0, 1fr);
   grid-template-areas:
     "left tile"

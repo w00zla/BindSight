@@ -81,7 +81,7 @@ export type JoyInput =
 export type LoggedInput = JoyInput & { at: number; token: string | null };
 
 // Top-level GUI mode.
-export type Mode = "live" | "tools" | "devices";
+export type Mode = "monitor" | "bindings" | "devices";
 
 // SC channels, in GUI order; the config always holds all of them.
 export const ENVIRONMENTS = ["LIVE", "HOTFIX", "PTU", "EPTU"] as const;
@@ -98,6 +98,8 @@ export interface Environment {
 export interface Config {
   environments: Record<string, Environment>;
   active_env: string;
+  // Wire name kept as `ignored_devices` (Rust serde rename on the renamed
+  // `excluded_devices` field) so existing config.json files still apply.
   ignored_devices: string[];
   imagemap_choices: Record<string, string>;
   // Back up actionmaps.xml before BindSight overwrites it.
@@ -242,7 +244,7 @@ export interface CurrentInput {
   in_imagemap: boolean | null;
 }
 
-// --- Tools mode: binding profiles, backups, compare ------------------------
+// --- Bindings mode: binding profiles, backups, compare ----------------------
 
 // One exported SC keybinding layout in the binding profiles folder.
 export interface BindingProfileSummary {
@@ -271,8 +273,8 @@ export interface JoystickDevice {
   product_guid: string | null;
 }
 
-// Facts about the loaded actionmaps.xml (lib.rs `ProfileInfo`).
-export interface ProfileInfo {
+// Facts about the loaded actionmaps.xml (lib.rs `CurrentBindingsInfo`).
+export interface CurrentBindingsInfo {
   path: string;
   // Unix seconds; 0 if unknown.
   modified: number;

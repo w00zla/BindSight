@@ -68,7 +68,7 @@ pub struct DiffReport {
     pub changed: usize,
 }
 
-/// One side of a comparison, as chosen in the Tools UI.
+/// One side of a comparison, as chosen in Bindings mode (Compare).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Source {
@@ -260,13 +260,13 @@ fn load_source(
             }
             let path = config::binding_profiles_dir(base_path).join(file);
             let xml = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            let profile = scdata::parse_user_profile(&xml)?;
+            let profile = scdata::parse_actionmaps(&xml)?;
             Ok(bindings::resolve_bindings(actions, &profile))
         }
         Source::Backup { id } => {
             let path = backups::path_of(backups_root, id)?;
             let xml = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            let profile = scdata::parse_user_profile(&xml)?;
+            let profile = scdata::parse_actionmaps(&xml)?;
             Ok(bindings::resolve_bindings(actions, &profile))
         }
     }

@@ -36,16 +36,15 @@ where does each action live?" by joining SC's config with live joystick input.
 `App.vue` is the orchestrator (all state, invokes, listeners) and composes
 presentational components:
 
-- `TopBar` — modes **Monitor / Bindings / Devices** (code `Mode` ids are
-  still `live` / `tools` / `devices`), environment chip + dropdown, version
-  chip, Refresh, gear. It is also the title bar (see the undecorated-window
-  gotcha).
+- `TopBar` — modes **Monitor / Bindings / Devices**, environment chip +
+  dropdown, version chip, Refresh, gear. It is also the title bar (see the
+  undecorated-window gotcha).
 - `StartupTile` — covers every mode while the first game-data load after
   start runs, whatever its outcome.
 - Monitor: `DeviceTile`, `StatusPanel`, `ImageStage` (+ `Splitter`),
-  `LiveCard`, `BindingsDeck` (flat rows or one bucket per input, same head
+  `LastInputCard`, `BindingsDeck` (flat rows or one bucket per input, same head
   as the Bindings List).
-- `ToolsView` — the whole Bindings mode: Game Bindings (the live file as
+- `BindingsView` — the whole Bindings mode: Game Bindings (the live file as
   the one item "Current"), binding profiles, backups, and on the right
   either the Bindings List (Current: the game's keybinding screen as a
   table, one toggleable column per device the file names, categories
@@ -65,7 +64,8 @@ presentational components:
   stroke SVGs by name — never emoji), `WindowEdges`.
 - Shared modules: `imagemap.ts` (image-map types/helpers incl. token <->
   input key), `keyboard.ts` (webview keyboard capture, `KeyboardEvent.code`
-  -> SC key name, feeds the same handler as `joy-input`), `devices.ts`
+  -> SC key name, feeds the same handler as `joy-input`; also drives mouse
+  capture, armed only while `recording` is on), `devices.ts`
   (`deviceName` / `deviceKey` / `deviceIcon`; remembered GUI state is keyed
   by hardware id, never by SDL's index), `types.ts` (all device/input/
   binding types), `logging.ts` (console forwarding, see Logging),
@@ -101,13 +101,14 @@ presentational components:
 - `scdata.rs` — parse `defaultProfile.xml` (action master list with the
   `joystick=` / `keyboard=` / `gamepad=` defaults, attribute or child-element
   form, child wins), `global.ini` (labels), `keybinding_localization.xml`
-  (input token labels `jsN_` / `kb1_` / `gp1_`; mouse skipped), and the
+  (input token labels `jsN_` / `kb1_` / `gp1_`; the mouse device lands
+  under `kb1_` too, see `Action.mouse_default`), and the
   user's `actionmaps.xml` (rebinds + `<options>` device map). `DeviceKind`
   and `parse_rebind` (prefix -> kind; kb/gp tokens keep their `+` modifiers).
 - `scinstall.rs` — the configured install. `validate_install` first
   (`REQUIRED_FILES` = `Data.p4k`, `build_manifest.id`, the live
   `actionmaps.xml`; anything missing aborts the whole load with one message
-  and `ScState::invalid_install` keeps `reload_profile` from reading
+  and `ScState::invalid_install` keeps `reload_bindings` from reading
   anything). Version from `build_manifest.id` (`ScVersion`, label
   `<branch minus sc-alpha->.<P4 changelist>`, e.g. `4.10.0-hotfix.12572603`).
   Game data (`ScData`: action master list + token labels): StarBreaker
@@ -163,9 +164,9 @@ presentational components:
 - `kblayout.rs` — `keyboard_layout` command: xkb code (`de`, `us`, …) via
   `localectl` / `vconsole.conf` on Linux, `GetKeyboardLayoutNameW` on Windows.
 - `lib.rs` — Tauri commands, state wiring (`AppData`: config, game data +
-  load status, profile + its load error, binding index, Game.log snapshot;
-  `get_load_status` hands the last profile outcome to a frontend that
-  mounts after the first load already finished), thread spawns, the
+  load status, the bindings file + its load error, binding index, Game.log
+  snapshot; `get_load_status` hands the last load outcome to a frontend
+  that mounts after the first load already finished), thread spawns, the
   Wayland DMABUF workaround, logging setup.
 
 ## Logging
@@ -182,9 +183,9 @@ match); the plugin's `log` command bypasses the level cap, so `logging.ts`
 drops webview debug records itself (`setDebugLogging`).
 
 Severities: ERROR = a feature is broken (config not saved, SC data failed,
-input thread died, panic); WARN = degraded but running (profile not loaded,
+input thread died, panic); WARN = degraded but running (bindings not loaded,
 Game.log missing, unreadable cache); INFO = state changes and facts (startup
-environment, SC version, extraction, profile / Game.log contents, user
+environment, SC version, extraction, bindings / Game.log contents, user
 actions); DEBUG = detail (command lines, load steps). **Device runtime detail
 never goes to the app log** — no enumeration lines, no axis derivation, no
 input events, only real failures (hidapi init, joystick open, thread death).
@@ -280,8 +281,10 @@ The game data cache lives per version under `~/.cache/com.w00zla.bindsight/
   `kb2_` / `gp2_`, no instance logic, no order clash. Key names are
   DirectInput scancode names (physical, layout independent): on a German
   keyboard the cap labelled `Y` is `kb1_z`; `KeyboardEvent.code` is physical
-  too, hence the static table in `keyboard.ts`. `kb1_` also carries mouse
-  buttons/wheel; mouse is not supported.
+  too, hence the static table in `keyboard.ts`. The mouse is part of the
+  keyboard device (`kb1_mouse1`, `kb1_mwheel_up`), captured only while a
+  Record button is armed (rebind dialog, image-map editor); `maxis_*` is
+  labeled but not recordable.
 - **Keyboard capture needs the BindSight window focused** (webview keydown;
   SDL2 delivers key events only to its own window). It runs in every mode
   and `preventDefault`s every mapped key (deliberate: a rebind flow must own

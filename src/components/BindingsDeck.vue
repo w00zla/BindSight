@@ -25,7 +25,7 @@ const emit = defineEmits<{ pin: [b: ResolvedBinding] }>();
 
 // Toggled device chips; none toggled = every device. Remembered, like the
 // grouping switch.
-const deviceFilter = persistedRef<string[]>("bindsight.deck.devices", []);
+const deviceFilter = persistedRef<string[]>("bindsight.monitor.devices", []);
 
 function toggleDevice(label: string) {
   deviceFilter.value = deviceFilter.value.includes(label)
@@ -36,7 +36,7 @@ const search = ref("");
 
 // Flat rows, or one collapsible bucket per input (device + input, the
 // actions inside) like the Bindings List's categories.
-const grouped = persistedRef<boolean>("bindsight.deck.grouped", false);
+const grouped = persistedRef<boolean>("bindsight.monitor.grouped", false);
 
 interface Bucket {
   token: string;
@@ -110,7 +110,7 @@ const COLUMNS: ColumnSpec[] = [
   { key: "action", label: "ACTION", width: 320, icon: "target" },
   { key: "category", label: "CATEGORY", width: null, icon: "list" },
 ];
-const cols = useTableColumns("bindsight.columns.bindings", COLUMNS, { key: "action", dir: "asc" });
+const cols = useTableColumns("bindsight.columns.monitor", COLUMNS, { key: "action", dir: "asc" });
 
 function cellValue(b: ResolvedBinding, key: string): string | number {
   switch (key) {

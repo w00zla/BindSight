@@ -3,7 +3,7 @@
 // consistent style). Sourced from the design mockups where available; see
 // Icon.vue's usage sites for any hand-drawn fallbacks noted at the call site.
 export const ICONS = {
-  live: '<path d="M2 12h4l3-8 4 16 3-8h6"/>',
+  monitor: '<path d="M2 12h4l3-8 4 16 3-8h6"/>',
   // Two inputs wired to one action: the binding.
   bindings: '<rect x="3" y="4" width="7" height="6" rx="1"/><rect x="3" y="14" width="7" height="6" rx="1"/><rect x="14" y="9" width="7" height="6" rx="1"/><path d="M10 7h2a2 2 0 0 1 2 2"/><path d="M10 17h2a2 2 0 0 0 2-2"/>',
   devices: '<path d="M12 13V7"/><circle cx="12" cy="5" r="2"/><path d="M5 17h14l-1.5-4h-11z"/><path d="M4 17v2h16v-2"/>',

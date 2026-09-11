@@ -1,5 +1,6 @@
 // Resizable, sortable column state for the grid-based tables (Bindings deck,
-// Compare). Widths and the sort choice persist per table in localStorage.
+// Compare, Bindings List). Widths and the sort choice persist per table in
+// localStorage.
 import { computed, ref, toValue, watch, type MaybeRefOrGetter } from "vue";
 
 export type SortDir = "asc" | "desc";

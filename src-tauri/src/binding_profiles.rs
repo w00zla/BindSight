@@ -4,7 +4,7 @@
 //! `<options>`/`<actionmap>`/`<action>`/`<rebind>` content as the live
 //! `actionmaps.xml`, just wrapped in an `<ActionMaps profileName="...">` root
 //! with a `<CustomisationUIHeader>` instead of `<ActionMaps><ActionProfiles>`
-//! — [`scdata::parse_user_profile`] reads both, since it scans by element
+//! — [`scdata::parse_actionmaps`] reads both, since it scans by element
 //! name rather than depth.
 //!
 //! This module only lists what is on disk and copies files in/out of that
@@ -88,7 +88,7 @@ fn modified_secs(path: &Path) -> u64 {
 /// Read, parse and resolve one binding profile file into its summary.
 pub fn summarize(path: &Path, actions: &[scdata::ActionMap]) -> Result<BindingProfileSummary, String> {
     let xml = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let profile = scdata::parse_user_profile(&xml)?;
+    let profile = scdata::parse_actionmaps(&xml)?;
     let resolved = bindings::resolve_bindings(actions, &profile);
 
     let file = path

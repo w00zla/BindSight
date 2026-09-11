@@ -32,7 +32,8 @@ struct ScState {
     progress: u8,
     error: Option<String>,
     /// The active environment failed `scinstall::validate_install`: nothing
-    /// of it is read (no game data, no profile, no Game.log) until it changes.
+    /// of it is read (no game data, no bindings file, no Game.log) until it
+    /// changes.
     invalid_install: bool,
     /// Bumped per load request so a slow, superseded load discards its result.
     generation: u64,
@@ -60,18 +61,19 @@ struct ScStatus {
     error: Option<String>,
 }
 
-/// Runtime state that depends on the configured SC install. `profile`,
-/// `index` and `game_log` are snapshots taken by [`reload_sc`] — at start, on
-/// a base-path change, after a resort, and on every Refresh.
+/// Runtime state that depends on the configured SC install. `bindings_file`,
+/// `index` and `game_log` are snapshots taken by [`reload_bindings`] — at
+/// start, on a base-path change, after a resort, and on every Refresh.
 pub(crate) struct AppData {
     pub(crate) config: config::Config,
     sc: ScState,
-    profile: Option<scdata::UserProfile>,
+    bindings_file: Option<scdata::ActionMapsFile>,
     index: bindings::BindingIndex,
     /// SC's device enumeration from `Game.log` as of the last reload.
     game_log: Result<gamelog::LogEnumeration, gamelog::GameLogError>,
-    /// Why the last `reload_profile` left `profile` empty, for `get_load_status`.
-    profile_error: Option<String>,
+    /// Why the last `reload_bindings` left `bindings_file` empty, for
+    /// `get_load_status`.
+    bindings_error: Option<String>,
 }
 
 /// Result of (re)loading the user's actionmaps.xml.
@@ -116,36 +118,37 @@ fn get_config(data: State<Mutex<AppData>>) -> config::Config {
     data.lock().unwrap().config.clone()
 }
 
-/// Return the resolved bindings (all devices) from the currently loaded profile.
+/// Return the resolved bindings (all devices) from the currently loaded
+/// actionmaps.xml.
 #[tauri::command]
 fn get_bindings(data: State<Mutex<AppData>>) -> Vec<bindings::ResolvedBinding> {
     current_bindings(&data.lock().unwrap())
 }
 
-/// The resolved bindings for the loaded profile ("Current" in `diff.rs`'s
-/// terms), or empty when nothing (or no game data) is loaded.
+/// The resolved bindings for the loaded actionmaps.xml ("Current" in
+/// `diff.rs`'s terms), or empty when nothing (or no game data) is loaded.
 pub(crate) fn current_bindings(data: &AppData) -> Vec<bindings::ResolvedBinding> {
-    match &data.profile {
+    match &data.bindings_file {
         Some(profile) if !data.sc.data.actions.is_empty() => bindings::resolve_bindings(&data.sc.data.actions, profile),
         _ => Vec::new(),
     }
 }
 
-/// The clash report for the loaded profile against the last loaded `Game.log`
-/// enumeration (see [`reload_sc`]). Devices the user declared invisible to SC
-/// count as unplugged.
+/// The clash report for the loaded actionmaps.xml against the last loaded
+/// `Game.log` enumeration (see [`reload_bindings`]). Devices the user
+/// declared invisible to SC count as unplugged.
 fn clash_report(data: &AppData, devices: &input::DeviceList) -> bindings::ClashReport {
-    let Some(profile) = &data.profile else {
+    let Some(profile) = &data.bindings_file else {
         return bindings::ClashReport::default();
     };
     let devices = devices.lock().map(|d| d.clone()).unwrap_or_default();
-    let devices = bindings::without_ignored(&devices, &data.config.ignored_devices);
+    let devices = bindings::without_excluded(&devices, &data.config.excluded_devices);
     bindings::analyze_clash(profile, &devices, data.game_log.as_ref().map_err(Clone::clone))
 }
 
 /// Compare SC's saved device order against SC's actual device order to detect
 /// the `jsN` switch clash (SC assigns `jsN` by start-time device order, ignoring
-/// name/GUID). Empty when no profile is loaded.
+/// name/GUID). Empty when no actionmaps.xml is loaded.
 #[tauri::command]
 fn get_clash_report(
     devices: State<input::DeviceList>,
@@ -159,7 +162,8 @@ fn get_clash_report(
 /// not be running (it would overwrite the file on exit). While auto-backups
 /// are on, a backup of the original is taken first via `backups::create`
 /// (reason "before order fix"). Reloads the
-/// profile afterwards and returns the load status, like `set_base_path`.
+/// bindings afterwards and returns the load status, like `set_environments`
+/// / `set_active_env`.
 #[tauri::command]
 fn apply_resort(
     app: AppHandle,
@@ -192,13 +196,13 @@ fn apply_resort(
     let backup = backup.map_or_else(|| "auto-backup off".to_string(), |id| format!("backup {id}"));
     info!("resort applied to {}: {} ({backup})", path.display(), moves.join(" "));
 
-    Ok(reload_profile(&mut data))
+    Ok(reload_bindings(&mut data))
 }
 
 /// Write rebinds into the live `actionmaps.xml` — what the in-game keybinding
 /// screen does, applied from outside. The game must not be running (it would
 /// overwrite the file on exit). While auto-backups are on, a backup of the
-/// original is taken first (reason "before rebind"). Reloads the profile
+/// original is taken first (reason "before rebind"). Reloads the bindings
 /// afterwards and returns the load status, like `apply_resort`.
 #[tauri::command]
 fn save_rebinds(
@@ -207,7 +211,7 @@ fn save_rebinds(
     data: State<Mutex<AppData>>,
 ) -> Result<LoadStatus, String> {
     let mut data = data.lock().unwrap();
-    if data.profile.is_none() {
+    if data.bindings_file.is_none() {
         return Err("No bindings loaded".into());
     }
     let path = config::actionmaps_path(data.config.base_path());
@@ -229,14 +233,14 @@ fn save_rebinds(
     let backup = backup.map_or_else(|| "auto-backup off".to_string(), |id| format!("backup {id}"));
     info!("rebinds written to {}: {} ({backup})", path.display(), summary.join(" "));
 
-    Ok(reload_profile(&mut data))
+    Ok(reload_bindings(&mut data))
 }
 
 /// Facts about the loaded `actionmaps.xml` for the Bindings mode: where it
 /// is, its size and mtime, how many rebinds it holds and which joysticks its
 /// `<options>` name.
 #[derive(Serialize)]
-struct ProfileInfo {
+struct CurrentBindingsInfo {
     path: String,
     /// Unix seconds; 0 if unknown.
     modified: u64,
@@ -245,11 +249,11 @@ struct ProfileInfo {
     joysticks: Vec<scdata::JoystickDevice>,
 }
 
-/// `None` while no profile is loaded.
+/// `None` while no actionmaps.xml is loaded.
 #[tauri::command]
-fn get_profile_info(data: State<Mutex<AppData>>) -> Option<ProfileInfo> {
+fn get_current_bindings_info(data: State<Mutex<AppData>>) -> Option<CurrentBindingsInfo> {
     let data = data.lock().unwrap();
-    let profile = data.profile.as_ref()?;
+    let profile = data.bindings_file.as_ref()?;
     let path = config::actionmaps_path(data.config.base_path());
     let meta = std::fs::metadata(&path).ok();
     let modified = meta
@@ -257,7 +261,7 @@ fn get_profile_info(data: State<Mutex<AppData>>) -> Option<ProfileInfo> {
         .and_then(|m| m.modified().ok())
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map_or(0, |d| d.as_secs());
-    Some(ProfileInfo {
+    Some(CurrentBindingsInfo {
         path: path.display().to_string(),
         modified,
         size: meta.map_or(0, |m| m.len()),
@@ -270,24 +274,24 @@ fn get_profile_info(data: State<Mutex<AppData>>) -> Option<ProfileInfo> {
 /// without touching the config — what Refresh does.
 #[tauri::command]
 fn reload(data: State<Mutex<AppData>>) -> LoadStatus {
-    reload_profile(&mut data.lock().unwrap())
+    reload_bindings(&mut data.lock().unwrap())
 }
 
 /// Persist which connected devices the user declared invisible to SC (by SC
 /// Product GUID). Returns the stored list.
 #[tauri::command]
-fn set_ignored_devices(
+fn set_excluded_devices(
     guids: Vec<String>,
     app: AppHandle,
     data: State<Mutex<AppData>>,
 ) -> Vec<String> {
     let mut data = data.lock().unwrap();
-    data.config.ignored_devices = guids;
-    info!("ignored devices set: {:?}", data.config.ignored_devices);
+    data.config.excluded_devices = guids;
+    info!("excluded devices set: {:?}", data.config.excluded_devices);
     if let Err(e) = config::save(&app, &data.config) {
         error!("failed to save config: {e}");
     }
-    data.config.ignored_devices.clone()
+    data.config.excluded_devices.clone()
 }
 
 /// Persist whether BindSight backs up `actionmaps.xml` before overwriting it
@@ -399,8 +403,8 @@ fn set_active_env(slug: String, app: AppHandle, data: State<Mutex<AppData>>) -> 
     Ok(true)
 }
 
-/// The SC token a live input resolves to (if the device is in the SC profile)
-/// and the action(s) bound to it.
+/// The SC token a live input resolves to (if the device is in the loaded
+/// actionmaps.xml) and the action(s) bound to it.
 #[derive(Default, Serialize)]
 struct InputResolution {
     token: Option<String>,
@@ -421,7 +425,7 @@ fn resolve_input(
     data: State<Mutex<AppData>>,
 ) -> InputResolution {
     let data = data.lock().unwrap();
-    let Some(profile) = &data.profile else {
+    let Some(profile) = &data.bindings_file else {
         return InputResolution::default();
     };
     let Some(sc_guid) = guid::sdl_guid_to_sc_product(&guid) else {
@@ -464,11 +468,11 @@ fn resolve_tokens(candidates: Vec<String>, data: State<Mutex<AppData>>) -> Input
 }
 
 /// Snapshot the SC install into `data`: parse actionmaps.xml and resolve it
-/// against the current game data (profile + binding index), then read
+/// against the current game data (bindings file + binding index), then read
 /// Game.log. Returns the actionmaps load status. Called at start (once the
 /// game data is in), on a base-path change, after a resort or restore, and
 /// on every Refresh.
-pub(crate) fn reload_profile(data: &mut AppData) -> LoadStatus {
+pub(crate) fn reload_bindings(data: &mut AppData) -> LoadStatus {
     let am_path = config::actionmaps_path(data.config.base_path());
 
     let mut status = LoadStatus {
@@ -483,7 +487,7 @@ pub(crate) fn reload_profile(data: &mut AppData) -> LoadStatus {
     // An invalid environment is reported once (the SC-data error) and
     // otherwise left alone: nothing of it is read.
     if data.sc.invalid_install {
-        data.profile = None;
+        data.bindings_file = None;
         data.index = bindings::BindingIndex::default();
         data.game_log = Err(gamelog::GameLogError::NotFound {
             path: config::game_log_path(data.config.base_path()).display().to_string(),
@@ -495,14 +499,14 @@ pub(crate) fn reload_profile(data: &mut AppData) -> LoadStatus {
     let profile = std::fs::read_to_string(&am_path)
         .map_err(|e| format!("actionmaps.xml not found: {} ({e})", status.actionmaps_path))
         .and_then(|xml| {
-            scdata::parse_user_profile(&xml).map_err(|e| format!("actionmaps.xml could not be parsed: {e}"))
+            scdata::parse_actionmaps(&xml).map_err(|e| format!("actionmaps.xml could not be parsed: {e}"))
         });
     match profile {
         Ok(profile) => {
             status.loaded = true;
             // Without game data there is nothing to resolve against (the
-            // Status panel says why); the profile itself still serves the
-            // clash report.
+            // Status panel says why); the bindings file itself still serves
+            // the clash report.
             if data.sc.data.actions.is_empty() {
                 data.index = bindings::BindingIndex::default();
             } else {
@@ -515,28 +519,28 @@ pub(crate) fn reload_profile(data: &mut AppData) -> LoadStatus {
                 .map(|j| format!("js{}={} {}", j.instance, j.product_name, j.product_guid.as_deref().unwrap_or("?")))
                 .collect();
             info!(
-                "profile loaded from {}: {} rebinds, {} resolved bindings, options: [{}]",
+                "bindings loaded from {}: {} rebinds, {} resolved bindings, options: [{}]",
                 status.actionmaps_path,
                 profile.rebinds.len(),
                 status.bindings.len(),
                 options.join(", ")
             );
-            data.profile = Some(profile);
-            data.profile_error = None;
+            data.bindings_file = Some(profile);
+            data.bindings_error = None;
         }
         Err(e) => {
-            warn!("profile not loaded: {e}");
+            warn!("bindings not loaded: {e}");
             status.error = Some(e.clone());
             data.index = bindings::BindingIndex::default();
-            data.profile = None;
-            data.profile_error = Some(e);
+            data.bindings_file = None;
+            data.bindings_error = Some(e);
         }
     }
     data.game_log = read_game_log(data.config.base_path());
     status
 }
 
-/// The outcome of the last `reload_profile` without reading anything again —
+/// The outcome of the last `reload_bindings` without reading anything again —
 /// for a frontend that mounts after the first load already finished (its
 /// `scdata-changed` listener was not up yet).
 #[tauri::command]
@@ -545,8 +549,8 @@ fn get_load_status(data: State<Mutex<AppData>>) -> LoadStatus {
     LoadStatus {
         base_path: data.config.base_path().to_string(),
         actionmaps_path: config::actionmaps_path(data.config.base_path()).display().to_string(),
-        loaded: data.profile.is_some(),
-        error: data.profile_error.clone(),
+        loaded: data.bindings_file.is_some(),
+        error: data.bindings_error.clone(),
         bindings: current_bindings(&data),
         sc: data.sc.status(),
     }
@@ -579,7 +583,7 @@ fn read_game_log(base_path: &str) -> Result<gamelog::LogEnumeration, gamelog::Ga
 
 /// Load the configured install's game data in the background (version from
 /// `build_manifest.id`, then the cached JSON or a fresh StarBreaker extraction
-/// of `Data.p4k`), reload the profile against it and emit `scdata-changed`
+/// of `Data.p4k`), reload the bindings against it and emit `scdata-changed`
 /// with the load status. Completed steps are reported as `scdata-progress`
 /// (payload: the `ScStatus`). A load superseded by a newer one discards its
 /// result.
@@ -654,7 +658,7 @@ fn spawn_sc_load(app: AppHandle) {
                 data.sc.error = Some(e);
             }
         }
-        let status = reload_profile(&mut data);
+        let status = reload_bindings(&mut data);
         drop(data);
         let _ = app.emit("scdata-changed", &status);
     });
@@ -705,8 +709,8 @@ fn log_startup(app: &AppHandle, config: &config::Config) {
         );
     }
     info!(
-        "config: active_env={} environments={:?} ignored_devices={:?} imagemap_choices={:?}",
-        config.active_env, config.environments, config.ignored_devices, config.imagemap_choices
+        "config: active_env={} environments={:?} excluded_devices={:?} imagemap_choices={:?}",
+        config.active_env, config.environments, config.excluded_devices, config.imagemap_choices
     );
 }
 
@@ -748,8 +752,8 @@ pub fn run() {
             let config = config::load(app.handle());
             apply_log_level(config.debug_logging);
             log_startup(app.handle(), &config);
-            // The profile and Game.log are read once the game data is in
-            // (`spawn_sc_load` -> `reload_profile`).
+            // The bindings file and Game.log are read once the game data is
+            // in (`spawn_sc_load` -> `reload_bindings`).
             app.manage(Mutex::new(AppData {
                 game_log: Err(gamelog::GameLogError::NotFound {
                     path: config::game_log_path(config.base_path()).display().to_string(),
@@ -757,9 +761,9 @@ pub fn run() {
                 }),
                 config,
                 sc: ScState::default(),
-                profile: None,
+                bindings_file: None,
                 index: bindings::BindingIndex::default(),
-                profile_error: None,
+                bindings_error: None,
             }));
             spawn_sc_load(app.handle().clone());
 
@@ -781,8 +785,8 @@ pub fn run() {
             get_clash_report,
             apply_resort,
             save_rebinds,
-            get_profile_info,
-            set_ignored_devices,
+            get_current_bindings_info,
+            set_excluded_devices,
             set_environments,
             set_active_env,
             resolve_input,

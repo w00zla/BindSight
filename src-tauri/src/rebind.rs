@@ -13,7 +13,7 @@
 
 use serde::Deserialize;
 
-use crate::scdata::{parse_rebind, parse_user_profile, DeviceKind};
+use crate::scdata::{parse_rebind, parse_actionmaps, DeviceKind};
 
 /// One rebind to write: the action and the full SC input as SC stores it
 /// (`js2_button5`, `kb1_lalt+x`, `gp1_a`, or a blank `js1_ ` to unbind).
@@ -41,7 +41,7 @@ pub fn apply_rebinds(xml: &str, changes: &[RebindChange]) -> Result<String, Stri
         }
         out = apply_one(&out, change)?;
     }
-    parse_user_profile(&out).map_err(|e| format!("rewrite produced unreadable XML: {e}"))?;
+    parse_actionmaps(&out).map_err(|e| format!("rewrite produced unreadable XML: {e}"))?;
     Ok(out)
 }
 
@@ -295,7 +295,7 @@ mod tests {
         assert!(out.contains("  <actionmap name=\"player\">\n   <action name=\"pl_jump\">\n    <rebind input=\"gp1_a\"/>\n   </action>\n  </actionmap>\n </ActionProfiles>\n"));
         // The self-closing actionmap was opened up.
         assert!(out.contains("  <actionmap name=\"spaceship_general_extra\">\n   <action name=\"v_extra\">\n    <rebind input=\"kb1_e\"/>\n   </action>\n  </actionmap>\n"));
-        let profile = parse_user_profile(&out).unwrap();
+        let profile = parse_actionmaps(&out).unwrap();
         assert_eq!(profile.rebinds.len(), 7);
     }
 
@@ -311,7 +311,7 @@ mod tests {
     fn unbinds_with_a_blank_rebind() {
         let out = apply_rebinds(XML, &[change("spaceship_general", "v_boost", DeviceKind::Joystick, "js1_ ")]).unwrap();
         assert!(out.contains("   <action name=\"v_boost\">\n    <rebind input=\"js1_ \"/>\n   </action>\n"));
-        let profile = parse_user_profile(&out).unwrap();
+        let profile = parse_actionmaps(&out).unwrap();
         assert!(profile.rebinds.iter().any(|r| r.action == "v_boost" && r.input == "js1_ "));
     }
 

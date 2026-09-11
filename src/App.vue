@@ -7,9 +7,9 @@ import TopBar from "./components/TopBar.vue";
 import DeviceTile from "./components/DeviceTile.vue";
 import StatusPanel from "./components/StatusPanel.vue";
 import ImageStage from "./components/ImageStage.vue";
-import LiveCard from "./components/LiveCard.vue";
+import LastInputCard from "./components/LastInputCard.vue";
 import BindingsDeck from "./components/BindingsDeck.vue";
-import ToolsView from "./components/ToolsView.vue";
+import BindingsView from "./components/BindingsView.vue";
 import Toasts from "./components/Toasts.vue";
 import WindowEdges from "./components/WindowEdges.vue";
 import { deviceKey, deviceName } from "./devices";
@@ -129,10 +129,10 @@ function endStartup() {
 // Set while a base-path change is being loaded, so its result gets a toast.
 let awaitingPathLoad = false;
 // SC Product GUIDs the user marked "SC doesn't see this device" (persisted per OS).
-const ignoredDevices = ref<string[]>([]);
+const excludedDevices = ref<string[]>([]);
 const error = ref<string | null>(null);
 // The live actionmaps.xml is parsed (from the last LoadStatus).
-const profileLoaded = ref(false);
+const currentLoaded = ref(false);
 const loading = ref(false);
 const showSettings = ref(false);
 // Back up actionmaps.xml before BindSight overwrites it (Settings).
@@ -145,7 +145,7 @@ const debugLogging = ref(false);
 // How long an axis stays highlighted after its last event (axes never rest).
 const AXIS_PULSE_MS = 400;
 
-const mode = ref<Mode>("live");
+const mode = ref<Mode>("monitor");
 const mapSummaries = ref<ImageMapSummary[]>([]);
 // Map id -> full image-map, and `<map id>/<file>` -> image data URL.
 const loadedMaps = ref<Record<string, ImageMap>>({});
@@ -181,7 +181,7 @@ function imgSrc(id: string, file: string): string {
 // bindings and no tile, and the user can hide any device by hand.
 function onStage(d: DeviceInfo): boolean {
   if (d.kind === "gamepad" && d.gamepad_slot === null) return false;
-  if (isIgnored(d.sc_product_guid)) return false;
+  if (isExcluded(d.sc_product_guid)) return false;
   return !isStageHidden(d);
 }
 
@@ -221,31 +221,33 @@ function toggleStageHidden(d: DeviceInfo) {
   }
 }
 
-// Resizable layout: stage height and live-card width, remembered locally.
+// Resizable layout: stage height and input-card width, remembered locally.
 const LAYOUT_KEY = "bindsight.layout";
 const STAGE_H = { def: 440, min: 120 };
-const LIVE_W = { def: 400, min: 280 };
-// The deck never gets narrower / lower than this; stage and live card take
+const INPUT_CARD_W = { def: 400, min: 280 };
+// The deck never gets narrower / lower than this; stage and input card take
 // the rest.
 const DECK_MIN = 320;
 const DECK_MIN_H = 160;
 const stageHeight = ref(STAGE_H.def);
-const liveWidth = ref(LIVE_W.def);
+const inputCardWidth = ref(INPUT_CARD_W.def);
 try {
+  // `liveWidth` is the persisted property name from before the input card
+  // was renamed; kept as-is so existing localStorage records still apply.
   const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? "{}") as { stageHeight?: number; liveWidth?: number };
   if (typeof saved.stageHeight === "number") stageHeight.value = saved.stageHeight;
-  if (typeof saved.liveWidth === "number") liveWidth.value = saved.liveWidth;
+  if (typeof saved.liveWidth === "number") inputCardWidth.value = saved.liveWidth;
 } catch {
   /* defaults */
 }
-// Stage height / live width when a drag began, plus the deck's height then:
-// stage and deck share the column, so the stage may grow by what the deck
-// has above DECK_MIN_H.
-let layoutStart: { stageHeight: number; liveWidth: number; deckHeight: number } | null = null;
+// Stage height / input-card width when a drag began, plus the deck's height
+// then: stage and deck share the column, so the stage may grow by what the
+// deck has above DECK_MIN_H.
+let layoutStart: { stageHeight: number; inputCardWidth: number; deckHeight: number } | null = null;
 const clamp = (v: number, r: { min: number; max: number }) => Math.min(Math.max(v, r.min), r.max);
 const deckRow = ref<HTMLElement | null>(null);
 function startLayout() {
-  layoutStart ??= { stageHeight: stageHeight.value, liveWidth: liveWidth.value, deckHeight: deckRow.value?.clientHeight ?? Infinity };
+  layoutStart ??= { stageHeight: stageHeight.value, inputCardWidth: inputCardWidth.value, deckHeight: deckRow.value?.clientHeight ?? Infinity };
   return layoutStart;
 }
 function dragStage(delta: number) {
@@ -253,16 +255,17 @@ function dragStage(delta: number) {
   const max = start.stageHeight + start.deckHeight - DECK_MIN_H;
   stageHeight.value = clamp(start.stageHeight + delta, { min: STAGE_H.min, max: Math.max(max, STAGE_H.min) });
 }
-// The live card grows until the deck is down to DECK_MIN in the current row.
-function dragLive(delta: number) {
+// The input card grows until the deck is down to DECK_MIN in the current row.
+function dragInputCard(delta: number) {
   const start = startLayout();
   const max = (deckRow.value?.clientWidth ?? Infinity) - 16 - DECK_MIN;
-  liveWidth.value = clamp(start.liveWidth + delta, { min: LIVE_W.min, max: Math.max(max, LIVE_W.min) });
+  inputCardWidth.value = clamp(start.inputCardWidth + delta, { min: INPUT_CARD_W.min, max: Math.max(max, INPUT_CARD_W.min) });
 }
 function saveLayout() {
   layoutStart = null;
   try {
-    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ stageHeight: stageHeight.value, liveWidth: liveWidth.value }));
+    // `liveWidth` kept as the persisted property name on purpose (see above).
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ stageHeight: stageHeight.value, liveWidth: inputCardWidth.value }));
   } catch {
     /* ignore */
   }
@@ -271,8 +274,8 @@ function resetStage() {
   stageHeight.value = STAGE_H.def;
   saveLayout();
 }
-function resetLive() {
-  liveWidth.value = LIVE_W.def;
+function resetInputCard() {
+  inputCardWidth.value = INPUT_CARD_W.def;
   saveLayout();
 }
 
@@ -327,19 +330,19 @@ async function onMapsSaved() {
 // The editor and the Bindings mode guard their unsaved changes; leaving
 // Devices or Bindings can be refused.
 const editor = ref<InstanceType<typeof ImageMapEditor> | null>(null);
-const tools = ref<InstanceType<typeof ToolsView> | null>(null);
+const bindingsView = ref<InstanceType<typeof BindingsView> | null>(null);
 
 async function setMode(m: Mode) {
   if (mode.value === "devices" && m !== "devices") {
     if ((await editor.value?.requestLeave()) === false) return;
   }
-  if (mode.value === "tools" && m !== "tools") {
-    if ((await tools.value?.requestLeave()) === false) return;
+  if (mode.value === "bindings" && m !== "bindings") {
+    if ((await bindingsView.value?.requestLeave()) === false) return;
   }
   mode.value = m;
   // Inputs released while the editor was open were never seen here.
   activeInputs.value = {};
-  if (m === "live") await reloadMaps();
+  if (m === "monitor") await reloadMaps();
 }
 
 async function setMapChoice(hardwareId: string | null, id: string) {
@@ -562,8 +565,8 @@ function isUnseen(guid: string | null): boolean {
   return !!guid && unseenGuids.value.has(guid);
 }
 
-function isIgnored(guid: string | null): boolean {
-  return !!guid && ignoredDevices.value.some((g) => g.toLowerCase() === guid.toLowerCase());
+function isExcluded(guid: string | null): boolean {
+  return !!guid && excludedDevices.value.some((g) => g.toLowerCase() === guid.toLowerCase());
 }
 
 // Display order everywhere a device list is shown: the keyboard, the slotted
@@ -572,7 +575,7 @@ function isIgnored(guid: string | null): boolean {
 function deviceRank(d: DeviceInfo): number {
   if (d.kind === "keyboard") return 0;
   if (d.kind === "gamepad" && d.gamepad_slot === null) return 3;
-  if (deviceUnseen(d) || isIgnored(d.sc_product_guid)) return 3;
+  if (deviceUnseen(d) || isExcluded(d.sc_product_guid)) return 3;
   return d.kind === "gamepad" ? 1 : 2;
 }
 const orderedDevices = computed<DeviceInfo[]>(() =>
@@ -582,13 +585,13 @@ const orderedDevices = computed<DeviceInfo[]>(() =>
 // backend reloads when the active environment changed.
 async function applySettings(s: {
   environments: Record<string, Environment>;
-  ignored: string[];
+  excluded: string[];
   autoBackup: boolean;
   debugLogging: boolean;
 }) {
   showSettings.value = false;
   try {
-    ignoredDevices.value = await invoke<string[]>("set_ignored_devices", { guids: s.ignored });
+    excludedDevices.value = await invoke<string[]>("set_excluded_devices", { guids: s.excluded });
     await invoke("set_auto_backup", { enabled: s.autoBackup });
     autoBackup.value = s.autoBackup;
     await invoke("set_debug_logging", { enabled: s.debugLogging });
@@ -643,8 +646,6 @@ async function loadClash() {
     clash.value = null;
   }
 }
-
-// Whether the clash panel has anything to show (a clash, or no usable order source).
 
 // Put the pp_resortdevices command line from the Fix via console dialog on the
 // clipboard.
@@ -792,7 +793,7 @@ function onInput(p: JoyInput) {
   if (events.value.length > MAX_EVENTS) events.value.pop();
   trackHeld(p);
   if (p.kind === "key") keyInput.value = p;
-  if (mode.value !== "live") return;
+  if (mode.value !== "monitor") return;
   trackActive(p);
   // A pad without a slot is not gp1 — SC has no bindings for it.
   if ((p.kind === "padbutton" || p.kind === "padaxis") && deviceOf(p.guid)?.gamepad_slot === null) return;
@@ -840,7 +841,7 @@ function notify(message: string, type: "ok" | "error" = "ok") {
 // for the Status panel.
 function takeStatus(s: LoadStatus) {
   bindings.value = s.bindings;
-  profileLoaded.value = s.loaded;
+  currentLoaded.value = s.loaded;
   error.value = s.loaded ? null : s.error;
 }
 
@@ -947,8 +948,8 @@ function sdlInputName(p: JoyInput): string {
 function liveState(): "unseen" | "bound" | "none" {
   const c = currentInput.value;
   if (!c) return "none";
-  if (c.kind === "joystick" && (isIgnored(c.sc_guid) || isUnseen(c.sc_guid))) return "unseen";
-  if (c.kind === "gamepad" && (isIgnored(c.sc_guid) || clash.value?.gamepad_seen === false)) return "unseen";
+  if (c.kind === "joystick" && (isExcluded(c.sc_guid) || isUnseen(c.sc_guid))) return "unseen";
+  if (c.kind === "gamepad" && (isExcluded(c.sc_guid) || clash.value?.gamepad_seen === false)) return "unseen";
   return c.actions.length ? "bound" : "none";
 }
 
@@ -957,20 +958,13 @@ let unlisten: UnlistenFn[] = [];
 let stopKeyboard: (() => void) | null = null;
 let stopMouse: (() => void) | null = null;
 
-// Keys are captured in every mode (the webview never gets to act on them;
-// text fields and open dialogs are skipped inside the capture), so a rebind
-// flow can rely on it anywhere.
-function keyboardActive(): boolean {
-  return true;
-}
-
 // A pad button held while the window loses focus would stay a modifier.
 function clearHeld() {
   heldNames.clear();
 }
 
 onMounted(async () => {
-  stopKeyboard = startKeyboardCapture(onInput, keyboardActive);
+  stopKeyboard = startKeyboardCapture(onInput);
   // The mouse only while a Record button armed it (see keyboard.ts).
   stopMouse = startMouseCapture(onInput);
   try {
@@ -1006,7 +1000,7 @@ onMounted(async () => {
     const cfg = await invoke<Config>("get_config");
     environments.value = cfg.environments;
     activeEnv.value = cfg.active_env;
-    ignoredDevices.value = cfg.ignored_devices;
+    excludedDevices.value = cfg.ignored_devices;
     autoBackup.value = cfg.auto_backup;
     debugLogging.value = cfg.debug_logging;
     setDebugLogging(cfg.debug_logging);
@@ -1052,7 +1046,7 @@ onUnmounted(() => {
       v-if="showSettings"
       :environments="environments"
       :devices="orderedDevices"
-      :ignored="ignoredDevices"
+      :excluded="excludedDevices"
       :autoBackup="autoBackup"
       :debugLogging="debugLogging"
       @close="showSettings = false"
@@ -1064,7 +1058,7 @@ onUnmounted(() => {
       <StartupTile :sc="scStatus" />
     </div>
 
-    <div v-else-if="mode === 'live'" class="content">
+    <div v-else-if="mode === 'monitor'" class="content">
       <div class="top-row">
       <div class="devices-panel">
         <div class="panel-title">Connected Devices</div>
@@ -1074,7 +1068,7 @@ onUnmounted(() => {
           :key="d.index"
           :device="d"
           :slot="slotFor(d.sc_product_guid)"
-          :ignored="isIgnored(d.sc_product_guid)"
+          :excluded="isExcluded(d.sc_product_guid)"
           :unseen="deviceUnseen(d)"
           :bindingCount="bindingCountFor(d)"
           :hidden="isStageHidden(d)"
@@ -1105,16 +1099,16 @@ onUnmounted(() => {
       <div
         ref="deckRow"
         class="deck-row"
-        :style="{ gridTemplateColumns: `minmax(${LIVE_W.min}px, ${liveWidth}px) 16px minmax(${DECK_MIN}px, 1fr)` }"
+        :style="{ gridTemplateColumns: `minmax(${INPUT_CARD_W.min}px, ${inputCardWidth}px) 16px minmax(${DECK_MIN}px, 1fr)` }"
       >
-        <LiveCard
+        <LastInputCard
           :input="currentInput"
           :state="liveState()"
-          :excluded="isIgnored(currentInput?.sc_guid ?? null)"
+          :excluded="isExcluded(currentInput?.sc_guid ?? null)"
           :tokenLabel="tokenLabel"
           :categoryLabel="actionmapLabel"
         />
-        <Splitter direction="col" @drag="dragLive" @end="saveLayout" @reset="resetLive" />
+        <Splitter direction="col" @drag="dragInputCard" @end="saveLayout" @reset="resetInputCard" />
         <BindingsDeck
           :bindings="connectedBindings"
           :currentToken="currentInput?.token ?? null"
@@ -1130,12 +1124,12 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <ToolsView
-      v-else-if="mode === 'tools'"
-      ref="tools"
+    <BindingsView
+      v-else-if="mode === 'bindings'"
+      ref="bindingsView"
       :bindings="bindings"
       :actionMaps="actionMaps"
-      :hasCurrent="profileLoaded"
+      :hasCurrent="currentLoaded"
       :keyInput="keyInput"
       :tokenLabel="tokenLabel"
       :inputToken="rebindToken"

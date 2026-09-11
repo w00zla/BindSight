@@ -116,10 +116,10 @@ function keyEvent(name: string, pressed: boolean): JoyInput {
   };
 }
 
-// Capture keys for as long as `isActive()` says so; returns the stop function.
-// A key that went down is always released, even if capture turned off or the
-// window lost focus in between, so nothing stays stuck.
-export function startKeyboardCapture(handler: (ev: JoyInput) => void, isActive: () => boolean): () => void {
+// Capture keys for as long as the window is mounted; returns the stop
+// function. A key that went down is always released, even if the window
+// lost focus in between, so nothing stays stuck.
+export function startKeyboardCapture(handler: (ev: JoyInput) => void): () => void {
   const held = new Set<string>();
 
   function release(name: string) {
@@ -131,7 +131,7 @@ export function startKeyboardCapture(handler: (ev: JoyInput) => void, isActive: 
     // Auto-repeat is not a new press.
     if (e.repeat) return;
     const name = KEY_CODES[e.code];
-    if (!name || !isActive() || isTextTarget(e.target) || dialogOpen()) return;
+    if (!name || isTextTarget(e.target) || dialogOpen()) return;
     e.preventDefault();
     if (held.has(name)) return;
     held.add(name);

@@ -10,9 +10,9 @@ import { ENVIRONMENTS, type Mode } from "../types";
 defineProps<{ mode: Mode; activeEnv: string; scVersion: string; loading: boolean }>();
 const emit = defineEmits<{ "update:mode": [mode: Mode]; "update:env": [slug: string]; refresh: []; settings: [] }>();
 
-const TABS: { mode: Mode; label: string; icon: "live" | "bindings" | "devices" }[] = [
-  { mode: "live", label: "Monitor", icon: "live" },
-  { mode: "tools", label: "Bindings", icon: "bindings" },
+const TABS: { mode: Mode; label: string; icon: "monitor" | "bindings" | "devices" }[] = [
+  { mode: "monitor", label: "Monitor", icon: "monitor" },
+  { mode: "bindings", label: "Bindings", icon: "bindings" },
   { mode: "devices", label: "Devices", icon: "devices" },
 ];
 

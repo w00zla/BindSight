@@ -10,14 +10,14 @@ import { deviceName } from "../devices";
 const props = defineProps<{
   environments: Record<string, Environment>;
   devices: DeviceInfo[];
-  ignored: string[];
+  excluded: string[];
   autoBackup: boolean;
   debugLogging: boolean;
 }>();
 const emit = defineEmits<{
   close: [];
   save: [
-    settings: { environments: Record<string, Environment>; ignored: string[]; autoBackup: boolean; debugLogging: boolean },
+    settings: { environments: Record<string, Environment>; excluded: string[]; autoBackup: boolean; debugLogging: boolean },
   ];
   notify: [message: string, type: "ok" | "error"];
 }>();
@@ -31,7 +31,7 @@ const envs = ref<Record<string, Environment>>(
     ]),
   ),
 );
-const excluded = ref<string[]>([...props.ignored]);
+const excluded = ref<string[]>([...props.excluded]);
 const autoBackup = ref(props.autoBackup);
 const debugLogging = ref(props.debugLogging);
 const withGuid = computed(() => props.devices.filter((d): d is DeviceInfo & { sc_product_guid: string } => !!d.sc_product_guid));
@@ -162,7 +162,7 @@ async function browseIni(slug: string) {
 
       <div class="foot">
         <button type="button" class="btn outline" @click="emit('close')">Cancel</button>
-        <button type="button" class="btn primary" @click="emit('save', { environments: envs, ignored: excluded, autoBackup, debugLogging })">
+        <button type="button" class="btn primary" @click="emit('save', { environments: envs, excluded, autoBackup, debugLogging })">
           <Icon name="save" :size="14" />
           Save
         </button>
