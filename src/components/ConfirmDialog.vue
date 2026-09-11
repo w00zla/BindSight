@@ -23,12 +23,15 @@ import Icon from "./Icon.vue";
 // `captureKeys`: the keyboard capture stays on while this dialog is open
 // (see keyboard.ts) — for a dialog that waits for a key press.
 // `subtitle`: a dim second line under the title (the rebind dialog's category).
+// `width`: dialog width in px when the default (420, or 560 with body
+// content) is not enough.
 const props = defineProps<{
   title: string;
   subtitle?: string;
   icon: ConfirmIcon;
   buttons: ConfirmButton[];
   captureKeys?: boolean;
+  width?: number;
 }>();
 const emit = defineEmits<{ choose: [value: string] }>();
 
@@ -46,6 +49,7 @@ function onBackdrop() {
     <div
       class="dialog"
       :class="{ wide: !!$slots.default }"
+      :style="width ? { width: `${width}px` } : undefined"
       role="dialog"
       :aria-label="title"
       :data-capture-keys="captureKeys ? '' : undefined"

@@ -59,7 +59,7 @@ function swap(i: number) {
 
 // Width share per tile; draggable gutters between neighbours. Remembered per
 // tile count so a HOTAS/HOSAS split survives a restart.
-const MIN_SHARE = 0.15;
+const MIN_SHARE = 0.06;
 const shares = ref<number[]>([]);
 const storeKey = (n: number) => `bindsight.stage.shares.${n}`;
 
@@ -67,12 +67,19 @@ function equalShares(n: number): number[] {
   return Array.from({ length: n }, () => 1 / n);
 }
 
+// Shares must sum to 1: they are flex-grow weights over the whole width, and
+// a sum below 1 leaves that fraction of the stage empty.
+function normalized(list: number[]): number[] {
+  const sum = list.reduce((a, b) => a + b, 0);
+  return sum > 0 ? list.map((x) => x / sum) : equalShares(list.length);
+}
+
 function loadShares(n: number): number[] {
   try {
     const raw = localStorage.getItem(storeKey(n));
     const parsed = raw ? (JSON.parse(raw) as unknown) : null;
     if (Array.isArray(parsed) && parsed.length === n && parsed.every((x) => typeof x === "number" && x > 0)) {
-      return parsed;
+      return normalized(parsed);
     }
   } catch {
     /* no storage — equal split */
@@ -89,7 +96,9 @@ watch(
 );
 
 const stageEl = ref<HTMLElement | null>(null);
-let dragStart: { left: number; pair: number } | null = null;
+// The gutter being dragged and the pair's shares when the drag began; keyed
+// by gutter so a drag whose end never arrived cannot leak into the next one.
+let dragStart: { gutter: number; left: number; pair: number } | null = null;
 
 function persist() {
   try {
@@ -103,7 +112,7 @@ function persist() {
 function onDrag(i: number, deltaPx: number) {
   const width = stageEl.value?.getBoundingClientRect().width ?? 0;
   if (!width) return;
-  if (!dragStart) dragStart = { left: shares.value[i], pair: shares.value[i] + shares.value[i + 1] };
+  if (dragStart?.gutter !== i) dragStart = { gutter: i, left: shares.value[i], pair: shares.value[i] + shares.value[i + 1] };
   const { left: left0, pair } = dragStart;
   const left = Math.min(Math.max(left0 + deltaPx / width, MIN_SHARE), pair - MIN_SHARE);
   shares.value[i] = left;
@@ -112,6 +121,7 @@ function onDrag(i: number, deltaPx: number) {
 
 function onEnd() {
   dragStart = null;
+  shares.value = normalized(shares.value);
   persist();
 }
 

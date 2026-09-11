@@ -78,10 +78,13 @@ function symbolTransform(a: Area): string {
 </template>
 
 <style scoped>
+/* min-width: 0 — as a flex item the box would otherwise refuse to shrink
+   below the image's natural width and get clipped instead of scaling. */
 .device-image {
   position: relative;
   display: inline-block;
   max-width: 100%;
+  min-width: 0;
   line-height: 0;
 }
 

@@ -1213,39 +1213,43 @@ function compareWith(key: string) {
       :subtitle="rebind.category"
       icon="target"
       :buttons="rebindButtons"
+      :width="680"
       captureKeys
       @choose="onRebindChoose"
     >
       <div class="rb-columns">
-        <div class="rb-block">
+        <div class="rb-side">
           <span class="rb-label">Before</span>
-          <div v-for="b in rebindBefore" :key="`${b.device}:${b.text}`" class="rb-line">
-            <span class="mono dim">{{ b.device }}</span>
-            <span class="rb-text">{{ b.text }}</span>
-            <button type="button" class="icon-btn rb-clear" title="Clear" @click="clearKind(b.kind)">
-              <Icon name="close" :size="12" />
-            </button>
+          <div class="rb-block">
+            <div v-for="b in rebindBefore" :key="`${b.device}:${b.text}`" class="rb-line">
+              <span class="mono dim">{{ b.device }}</span>
+              <span class="rb-text">{{ b.text }}</span>
+              <button type="button" class="icon-btn rb-clear" title="Clear" @click="clearKind(b.kind)">
+                <Icon name="close" :size="12" />
+              </button>
+            </div>
+            <div v-if="!rebindBefore.length" class="rb-line dim">—</div>
           </div>
-          <div v-if="!rebindBefore.length" class="rb-line dim">—</div>
         </div>
-        <Icon name="arrow-right" :size="18" class="dim" />
-        <div class="rb-block">
+        <Icon name="arrow-right" :size="18" class="dim rb-arrow" />
+        <div class="rb-side">
           <span class="rb-label">After</span>
-          <div v-for="a in rebindAfter" :key="`${a.device}:${a.text}`" class="rb-line">
-            <span class="mono dim">{{ a.device }}</span>
-            <span class="rb-text" :class="{ 'rb-new': a.changed }">{{ a.text }}</span>
+          <div class="rb-block">
+            <div v-for="a in rebindAfter" :key="`${a.device}:${a.text}`" class="rb-line">
+              <span class="mono dim">{{ a.device }}</span>
+              <span class="rb-text" :class="{ 'rb-new': a.changed }">{{ a.text }}</span>
+            </div>
+            <div v-if="!rebindAfter.length" class="rb-line dim">—</div>
           </div>
-          <div v-if="!rebindAfter.length" class="rb-line dim">—</div>
         </div>
       </div>
       <div class="rb-record">
-        <button type="button" class="btn small" :class="recording ? 'primary' : 'outline'" @click="recording = true">
-          <Icon name="target" :size="13" />
-          {{ recording ? "Recording…" : "Record" }}
+        <button type="button" class="btn" :class="recording ? 'primary' : 'outline'" @click="recording = true">
+          <Icon name="target" :size="15" />
+          {{ recording ? "Recording…" : "Record Input" }}
         </button>
-        <span class="rb-hint" :class="{ on: recording }">
-          {{ recording ? "Press an input on any device · Esc stops" : "Record input from any device" }}
-        </span>
+        <!-- the line is always there, so the dialog does not jump -->
+        <span class="rb-hint" :class="{ on: recording }">Esc to cancel</span>
       </div>
     </ConfirmDialog>
   </div>
@@ -1843,19 +1847,34 @@ function compareWith(key: string) {
 
 /* --- rebind dialog --- */
 
-/* Before and After side by side, an arrow between them. */
+/* Before and After side by side, an arrow between them; the labels sit
+   above the tinted blocks. */
 .rb-columns {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   gap: 12px;
-  align-items: center;
+  align-items: stretch;
 }
 
+.rb-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rb-arrow {
+  align-self: center;
+  margin-top: 22px;
+}
+
+/* Room for four lines up front, so a recorded or cleared binding does not
+   make the dialog jump. */
 .rb-block {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  align-self: stretch;
+  min-height: 112px;
   padding: 10px 12px;
   border-radius: var(--radius-control);
   background: var(--bg-surface-2);
@@ -1900,16 +1919,22 @@ function compareWith(key: string) {
 
 .rb-record {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+}
+
+.rb-record .btn {
+  padding: 0 22px;
 }
 
 .rb-hint {
   color: var(--text-2);
   font-size: 13px;
+  visibility: hidden;
 }
 
 .rb-hint.on {
-  color: var(--accent);
+  visibility: visible;
 }
 </style>

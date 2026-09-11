@@ -43,6 +43,7 @@ const bigLabel = computed(() => {
         <span class="action-cat">{{ categoryLabel(a.actionmap) }}</span>
       </div>
     </div>
+    <div v-else-if="input" class="no-binding">No binding</div>
   </div>
 </template>
 
@@ -124,5 +125,10 @@ const bigLabel = computed(() => {
 .action-cat {
   font-size: 12px;
   color: var(--text-2);
+}
+
+.no-binding {
+  font-size: 12px;
+  color: var(--text-3);
 }
 </style>

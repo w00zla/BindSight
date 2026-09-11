@@ -223,8 +223,12 @@ function toggleStageHidden(d: DeviceInfo) {
 
 // Resizable layout: stage height and live-card width, remembered locally.
 const LAYOUT_KEY = "bindsight.layout";
-const STAGE_H = { def: 440, min: 200, max: 900 };
-const LIVE_W = { def: 400, min: 280, max: 800 };
+const STAGE_H = { def: 440, min: 120 };
+const LIVE_W = { def: 400, min: 280 };
+// The deck never gets narrower / lower than this; stage and live card take
+// the rest.
+const DECK_MIN = 320;
+const DECK_MIN_H = 160;
 const stageHeight = ref(STAGE_H.def);
 const liveWidth = ref(LIVE_W.def);
 try {
@@ -234,15 +238,26 @@ try {
 } catch {
   /* defaults */
 }
-let layoutStart: { stageHeight: number; liveWidth: number } | null = null;
+// Stage height / live width when a drag began, plus the deck's height then:
+// stage and deck share the column, so the stage may grow by what the deck
+// has above DECK_MIN_H.
+let layoutStart: { stageHeight: number; liveWidth: number; deckHeight: number } | null = null;
 const clamp = (v: number, r: { min: number; max: number }) => Math.min(Math.max(v, r.min), r.max);
-function dragStage(delta: number) {
-  layoutStart ??= { stageHeight: stageHeight.value, liveWidth: liveWidth.value };
-  stageHeight.value = clamp(layoutStart.stageHeight + delta, STAGE_H);
+const deckRow = ref<HTMLElement | null>(null);
+function startLayout() {
+  layoutStart ??= { stageHeight: stageHeight.value, liveWidth: liveWidth.value, deckHeight: deckRow.value?.clientHeight ?? Infinity };
+  return layoutStart;
 }
+function dragStage(delta: number) {
+  const start = startLayout();
+  const max = start.stageHeight + start.deckHeight - DECK_MIN_H;
+  stageHeight.value = clamp(start.stageHeight + delta, { min: STAGE_H.min, max: Math.max(max, STAGE_H.min) });
+}
+// The live card grows until the deck is down to DECK_MIN in the current row.
 function dragLive(delta: number) {
-  layoutStart ??= { stageHeight: stageHeight.value, liveWidth: liveWidth.value };
-  liveWidth.value = clamp(layoutStart.liveWidth + delta, LIVE_W);
+  const start = startLayout();
+  const max = (deckRow.value?.clientWidth ?? Infinity) - 16 - DECK_MIN;
+  liveWidth.value = clamp(start.liveWidth + delta, { min: LIVE_W.min, max: Math.max(max, LIVE_W.min) });
 }
 function saveLayout() {
   layoutStart = null;
@@ -1087,7 +1102,11 @@ onUnmounted(() => {
       />
       <Splitter direction="row" @drag="dragStage" @end="saveLayout" @reset="resetStage" />
 
-      <div class="deck-row" :style="{ gridTemplateColumns: `${liveWidth}px 16px minmax(0, 1fr)` }">
+      <div
+        ref="deckRow"
+        class="deck-row"
+        :style="{ gridTemplateColumns: `minmax(${LIVE_W.min}px, ${liveWidth}px) 16px minmax(${DECK_MIN}px, 1fr)` }"
+      >
         <LiveCard
           :input="currentInput"
           :state="liveState()"
@@ -1210,8 +1229,9 @@ onUnmounted(() => {
 .deck-row {
   flex: 1;
   display: grid;
-  grid-template-columns: 400px 16px minmax(0, 1fr);
+  /* Overridden inline: the live card's width, the deck keeps DECK_MIN. */
+  grid-template-columns: minmax(280px, 400px) 16px minmax(320px, 1fr);
   grid-template-rows: minmax(0, 1fr);
-  min-height: 0;
+  min-height: 160px;
 }
 </style>
