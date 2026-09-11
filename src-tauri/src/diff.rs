@@ -2,8 +2,9 @@
 //! exported binding profile, or a backup — by SC token (`js1_button5`,
 //! `js2_rotz`, `kb1_lalt+x`, `gp1_a`, …). For each token, the set of actions
 //! bound to it (identified by `(actionmap, action)`, a label difference alone
-//! never counts) is compared between the two sides; only tokens that differ
-//! are reported. Rows are grouped joystick first, then keyboard, then gamepad.
+//! never counts) is compared between the two sides; every token gets a row,
+//! unchanged ones tagged `Same`. Rows are grouped joystick first, then
+//! keyboard, then gamepad.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -38,9 +39,11 @@ pub enum DiffKind {
     Removed,
     /// Bound on both sides, with different action sets.
     Changed,
+    /// Bound on both sides to the same actions.
+    Same,
 }
 
-/// One SC token whose bound actions differ between A and B.
+/// One SC token bound on either side.
 #[derive(Debug, Clone, Serialize)]
 pub struct DiffRow {
     pub token: String,
@@ -66,6 +69,7 @@ pub struct DiffReport {
     pub added: usize,
     pub removed: usize,
     pub changed: usize,
+    pub same: usize,
 }
 
 /// One side of a comparison, as chosen in Bindings mode (Compare).
@@ -190,8 +194,8 @@ fn compare_tokens(a: &str, b: &str) -> Ordering {
         })
 }
 
-/// Compare two resolved binding sets by token. Only tokens whose action sets
-/// differ are reported (see the module doc for the exact semantics).
+/// Compare two resolved binding sets by token (see the module doc for the
+/// exact semantics).
 pub fn diff_bindings(a: &[ResolvedBinding], b: &[ResolvedBinding]) -> DiffReport {
     let map_a = group(a);
     let map_b = group(b);
@@ -204,16 +208,16 @@ pub fn diff_bindings(a: &[ResolvedBinding], b: &[ResolvedBinding]) -> DiffReport
     let mut added = 0usize;
     let mut removed = 0usize;
     let mut changed = 0usize;
+    let mut same = 0usize;
 
     for token in tokens {
         let a_actions = map_a.get(token).cloned().unwrap_or_default();
         let b_actions = map_b.get(token).cloned().unwrap_or_default();
 
-        if action_keys(&a_actions) == action_keys(&b_actions) {
-            continue;
-        }
-
-        let kind = if b_actions.is_empty() {
+        let kind = if action_keys(&a_actions) == action_keys(&b_actions) {
+            same += 1;
+            DiffKind::Same
+        } else if b_actions.is_empty() {
             added += 1;
             DiffKind::Added
         } else if a_actions.is_empty() {
@@ -236,7 +240,23 @@ pub fn diff_bindings(a: &[ResolvedBinding], b: &[ResolvedBinding]) -> DiffReport
 
     rows.sort_by(|x, y| compare_tokens(&x.token, &y.token));
 
-    DiffReport { rows, added, removed, changed }
+    DiffReport { rows, added, removed, changed, same }
+}
+
+/// The XML text of a non-current source (`Profile` from the binding profiles
+/// folder, `Backup` via `backups::path_of`).
+pub(crate) fn source_xml(source: &Source, base_path: &str, backups_root: &Path) -> Result<String, String> {
+    let path = match source {
+        Source::Current => return Err("the current bindings are not a source to read".into()),
+        Source::Profile { file } => {
+            if !binding_profiles::is_bare_xml_name(file) {
+                return Err(format!("{file:?} is not a valid binding profile file name"));
+            }
+            config::binding_profiles_dir(base_path).join(file)
+        }
+        Source::Backup { id } => backups::path_of(backups_root, id)?,
+    };
+    fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Load and resolve one comparison side. `current` is the already-resolved
@@ -322,19 +342,20 @@ mod tests {
     }
 
     #[test]
-    fn identical_sets_yield_an_empty_report() {
+    fn identical_sets_yield_same_rows_only() {
         let a = vec![rb("js1_button1", "m", "fire"), rb("js2_x", "m", "throttle")];
         let b = a.clone();
         let report = diff_bindings(&a, &b);
-        assert!(report.rows.is_empty());
-        assert_eq!((report.added, report.removed, report.changed), (0, 0, 0));
+        assert_eq!(report.rows.len(), 2);
+        assert!(report.rows.iter().all(|r| matches!(r.kind, DiffKind::Same)));
+        assert_eq!((report.added, report.removed, report.changed, report.same), (0, 0, 0, 2));
     }
 
     #[test]
     fn classifies_added_removed_and_changed() {
         let a = vec![
             rb("js1_button1", "m", "fire"),  // A only -> added
-            rb("js1_button3", "m", "boost"), // both, same -> no row
+            rb("js1_button3", "m", "boost"), // both, same -> a Same row
             rb("js2_x", "m", "throttle_a"),  // both, different action -> changed
         ];
         let b = vec![
@@ -360,7 +381,9 @@ mod tests {
         assert_eq!(changed.a[0].action, "throttle_a");
         assert_eq!(changed.b[0].action, "throttle_b");
 
-        assert!(!report.rows.iter().any(|r| r.token == "js1_button3"));
+        let same = report.rows.iter().find(|r| r.token == "js1_button3").unwrap();
+        assert!(matches!(same.kind, DiffKind::Same));
+        assert_eq!(report.same, 1);
     }
 
     #[test]
@@ -380,8 +403,8 @@ mod tests {
         let a = vec![rb_labeled("js1_button1", "m", "fire", "Fire")];
         let b = vec![rb_labeled("js1_button1", "m", "fire", "Shoot")];
         let report = diff_bindings(&a, &b);
-        assert!(report.rows.is_empty());
-        assert_eq!((report.added, report.removed, report.changed), (0, 0, 0));
+        assert!(matches!(report.rows[0].kind, DiffKind::Same));
+        assert_eq!((report.added, report.removed, report.changed, report.same), (0, 0, 0, 1));
     }
 
     #[test]

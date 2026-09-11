@@ -5,6 +5,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 
+pub mod apply;
 pub mod backups;
 pub mod bindings;
 pub mod config;
@@ -15,6 +16,7 @@ pub mod hid;
 pub mod imagemap;
 pub mod input;
 pub mod kblayout;
+pub mod names;
 pub mod binding_profiles;
 pub mod rebind;
 pub mod resort;
@@ -808,6 +810,10 @@ pub fn run() {
             binding_profiles::list_binding_profiles,
             binding_profiles::import_binding_profile,
             binding_profiles::export_binding_profile,
+            binding_profiles::save_binding_profile,
+            binding_profiles::delete_binding_profile,
+            binding_profiles::open_binding_profiles_dir,
+            apply::apply_bindings,
             backups::list_backups,
             backups::create_backup,
             backups::delete_backup,

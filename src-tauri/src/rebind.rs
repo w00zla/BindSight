@@ -16,7 +16,9 @@ use serde::Deserialize;
 use crate::scdata::{parse_rebind, parse_actionmaps, DeviceKind};
 
 /// One rebind to write: the action and the full SC input as SC stores it
-/// (`js2_button5`, `kb1_lalt+x`, `gp1_a`, or a blank `js1_ ` to unbind).
+/// (`js2_button5`, `kb1_lalt+x`, `gp1_a`, or a blank `js1_ ` to unbind). An
+/// empty `input` removes the action's rebinds of that kind instead, so the
+/// shipped default applies again.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RebindChange {
     pub actionmap: String,
@@ -148,10 +150,14 @@ fn insert_child_block(xml: &mut String, close_start: usize, tag: &str, name: &st
 fn apply_one(xml: &str, change: &RebindChange) -> Result<String, String> {
     let layout = layout_of(xml);
     let mut xml = xml.to_string();
+    let remove = change.input.is_empty();
     let rebind = format!("<rebind input=\"{}\"/>", change.input);
 
     let profiles_end = xml.find("</ActionProfiles>").ok_or("no <ActionProfiles> in actionmaps.xml")?;
     let Some(mut map) = find_element(&xml, 0, profiles_end, "actionmap", &change.actionmap)? else {
+        if remove {
+            return Ok(xml);
+        }
         let child = format!("<action name=\"{}\">", change.action);
         // Two levels at once: the action block goes in as the child line and
         // gets its rebind plus end tag appended right after.
@@ -169,6 +175,9 @@ fn apply_one(xml: &str, change: &RebindChange) -> Result<String, String> {
     }
 
     let Some(mut action) = find_element(&xml, map.open_end, map.close_start, "action", &change.action)? else {
+        if remove {
+            return Ok(xml);
+        }
         insert_child_block(&mut xml, map.close_start, "action", &change.action, &rebind, &layout);
         return Ok(xml);
     };
@@ -196,6 +205,15 @@ fn apply_one(xml: &str, change: &RebindChange) -> Result<String, String> {
             spans.push((start, end));
         }
         pos = end;
+    }
+
+    if remove {
+        for &(start, end) in spans.iter().rev() {
+            let line_start = start - indent_before(&xml, start).len();
+            let line_end = if xml[end..].starts_with(layout.eol) { end + layout.eol.len() } else { end };
+            xml.replace_range(line_start..line_end, "");
+        }
+        return Ok(xml);
     }
 
     match spans.first().copied() {
@@ -272,6 +290,22 @@ mod tests {
         let out = apply_rebinds(XML, &[change("spaceship_general", "v_boost", DeviceKind::Joystick, "js1_button9")]).unwrap();
         assert!(out.contains("   <action name=\"v_boost\">\n    <rebind input=\"js1_button9\"/>\n   </action>\n"));
         assert_eq!(out.lines().count(), XML.lines().count() - 1);
+    }
+
+    #[test]
+    fn an_empty_input_removes_the_kind() {
+        let out = apply_rebinds(XML, &[change("spaceship_general", "v_boost", DeviceKind::Joystick, "")]).unwrap();
+        assert!(out.contains("   <action name=\"v_boost\">\n   </action>\n"));
+        assert!(!out.contains("js1_button5") && !out.contains("js1_button6"));
+        assert_eq!(out.lines().count(), XML.lines().count() - 2);
+        // Only the kind goes: the keyboard rebind of v_eject stays.
+        let out = apply_rebinds(XML, &[change("spaceship_general", "v_eject", DeviceKind::Joystick, "")]).unwrap();
+        assert!(out.contains("   <action name=\"v_eject\">\n    <rebind input=\"kb1_ralt+y\"/>\n   </action>\n"));
+        // Nothing to remove: the file is untouched, no action or map is created.
+        let out = apply_rebinds(XML, &[change("spaceship_general", "v_nope", DeviceKind::Joystick, "")]).unwrap();
+        assert_eq!(out, XML);
+        let out = apply_rebinds(XML, &[change("no_such_map", "v_nope", DeviceKind::Joystick, "")]).unwrap();
+        assert_eq!(out, XML);
     }
 
     #[test]

@@ -7,9 +7,10 @@
 //! — [`scdata::parse_actionmaps`] reads both, since it scans by element
 //! name rather than depth.
 //!
-//! This module only lists what is on disk and copies files in/out of that
-//! folder (import/export). Applying a binding profile — writing it into the
-//! live `actionmaps.xml` — is not this module's job.
+//! This module lists what is on disk, copies files in/out of that folder
+//! (import/export), saves the live file as a new profile and deletes one.
+//! Applying a binding profile — writing it into the live `actionmaps.xml`
+//! — is `apply.rs`'s job.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,6 +22,7 @@ use quick_xml::reader::Reader;
 use serde::Serialize;
 use tauri::State;
 
+use crate::names::{is_safe_name, sanitize_name};
 use crate::{bindings, config, scdata, AppData};
 
 /// Listing entry for one exported binding profile file.
@@ -163,11 +165,112 @@ pub fn export(dir: &Path, file: &str, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The live `actionmaps.xml` rewritten in SC's export layout: the content of
+/// `<ActionProfiles …>` under an `<ActionMaps profileName="…">` root with a
+/// `<CustomisationUIHeader>` naming the devices the file's `<options>` name
+/// (keyboard, mouse and gamepad always). Textual, so the bindings stay byte
+/// for byte.
+pub fn to_profile_xml(live_xml: &str, name: &str) -> Result<String, String> {
+    let open = live_xml.find("<ActionProfiles").ok_or("no <ActionProfiles> in actionmaps.xml")?;
+    let open_end = live_xml[open..].find('>').ok_or("unterminated <ActionProfiles> tag")? + open + 1;
+    let close = live_xml.find("</ActionProfiles>").ok_or("<ActionProfiles> without </ActionProfiles>")?;
+    let head = &live_xml[open..open_end];
+    let attr = |key: &str| -> String {
+        let k = format!(" {key}=\"");
+        head.find(&k)
+            .and_then(|i| {
+                let v = &head[i + k.len()..];
+                v.find('"').map(|j| v[..j].to_string())
+            })
+            .unwrap_or_else(|| "1".to_string())
+    };
+    let eol = if live_xml.contains("\r\n") { "\r\n" } else { "\n" };
+    let file = scdata::parse_actionmaps(live_xml)?;
+    let mut instances: Vec<u32> = file.joysticks.iter().map(|j| j.instance).collect();
+    instances.sort_unstable();
+    instances.dedup();
+    let label = name.replace('&', "&amp;").replace('"', "&quot;");
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "<ActionMaps version=\"{}\" optionsVersion=\"{}\" rebindVersion=\"{}\" profileName=\"{label}\">{eol}",
+        attr("version"),
+        attr("optionsVersion"),
+        attr("rebindVersion")
+    ));
+    out.push_str(&format!(" <CustomisationUIHeader label=\"{label}\" description=\"\" image=\"\">{eol}"));
+    out.push_str(&format!("  <devices>{eol}"));
+    out.push_str(&format!("   <keyboard instance=\"1\"/>{eol}"));
+    out.push_str(&format!("   <mouse instance=\"1\"/>{eol}"));
+    out.push_str(&format!("   <gamepad instance=\"1\"/>{eol}"));
+    for i in instances {
+        out.push_str(&format!("   <joystick instance=\"{i}\"/>{eol}"));
+    }
+    out.push_str(&format!("  </devices>{eol}"));
+    out.push_str(&format!(" </CustomisationUIHeader>{eol}"));
+    out.push_str(live_xml[open_end..close].trim_matches(|c| c == '\r' || c == '\n'));
+    out.push_str(&format!("{eol}</ActionMaps>{eol}"));
+    scdata::parse_actionmaps(&out).map_err(|e| format!("rewrite produced unreadable XML: {e}"))?;
+    Ok(out)
+}
+
+/// Save the live file under `dir/<name>.xml` as a binding profile. Refuses
+/// an invalid name and an existing file.
+pub fn save_profile(dir: &Path, actionmaps: &Path, name: &str, actions: &[scdata::ActionMap]) -> Result<BindingProfileSummary, String> {
+    let name = sanitize_name(name, "");
+    if !is_safe_name(&name) {
+        return Err("invalid profile name (letters, digits, space, _ - and brackets only)".into());
+    }
+    let dest = dir.join(format!("{name}.xml"));
+    if dest.exists() {
+        return Err(format!("{name}.xml already exists"));
+    }
+    let xml = fs::read_to_string(actionmaps).map_err(|e| format!("{}: {e}", actionmaps.display()))?;
+    let profile = to_profile_xml(&xml, &name)?;
+    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    fs::write(&dest, profile).map_err(|e| format!("{}: {e}", dest.display()))?;
+    summarize(&dest, actions)
+}
+
+/// Delete `file` (a bare name) from `dir`.
+pub fn delete(dir: &Path, file: &str) -> Result<(), String> {
+    if !is_bare_xml_name(file) {
+        return Err(format!("{file:?} is not a valid binding profile file name"));
+    }
+    let path = dir.join(file);
+    if !path.is_file() {
+        return Err(format!("{file}: not found"));
+    }
+    fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands
 //
 // Crate-visible: `generate_handler!` in lib.rs is the only caller.
 // ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub(crate) fn save_binding_profile(name: String, data: State<Mutex<AppData>>) -> Result<BindingProfileSummary, String> {
+    let dir = binding_profiles_dir(&data);
+    let data = data.lock().unwrap();
+    let path = config::actionmaps_path(data.config.base_path());
+    save_profile(&dir, &path, &name, &data.sc.data.actions)
+}
+
+#[tauri::command]
+pub(crate) fn delete_binding_profile(file: String, data: State<Mutex<AppData>>) -> Result<(), String> {
+    delete(&binding_profiles_dir(&data), &file)
+}
+
+/// Open the binding profiles folder in the system file manager (created
+/// when missing).
+#[tauri::command]
+pub(crate) fn open_binding_profiles_dir(data: State<Mutex<AppData>>) -> Result<(), String> {
+    let dir = binding_profiles_dir(&data);
+    fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(|e| format!("open {}: {e}", dir.display()))
+}
 
 #[tauri::command]
 pub(crate) fn list_binding_profiles(data: State<Mutex<AppData>>) -> Vec<BindingProfileSummary> {
@@ -371,6 +474,46 @@ mod tests {
         let txt = t.path("layout_c.txt");
         fs::write(&txt, b"whatever").unwrap();
         assert!(import(&dir, &txt, &sample_actions()).unwrap_err().contains("not a valid"));
+    }
+
+    #[test]
+    fn save_profile_wraps_the_live_file_in_the_export_layout() {
+        let t = Tmp::new();
+        let live = t.path("actionmaps.xml");
+        fs::write(&live, concat!(
+            "<ActionMaps>\n",
+            " <ActionProfiles version=\"1\" optionsVersion=\"2\" rebindVersion=\"2\" profileName=\"default\">\n",
+            "  <options type=\"joystick\" instance=\"2\" Product=\"Stick {0200231D-0000-0000-0000-504944564944}\"/>\n",
+            "  <actionmap name=\"seat_general\">\n",
+            "   <action name=\"v_eject\">\n",
+            "    <rebind input=\"js2_button1\"/>\n",
+            "   </action>\n",
+            "  </actionmap>\n",
+            " </ActionProfiles>\n",
+            "</ActionMaps>\n",
+        )).unwrap();
+        let dir = t.path("mappings");
+        let s = save_profile(&dir, &live, " My Layout (v2) ", &sample_actions()).unwrap();
+        assert_eq!(s.file, "My Layout (v2).xml");
+        assert_eq!(s.name, "My Layout (v2)");
+        let xml = fs::read_to_string(dir.join(&s.file)).unwrap();
+        assert!(xml.starts_with("<ActionMaps version=\"1\" optionsVersion=\"2\" rebindVersion=\"2\" profileName=\"My Layout (v2)\">"));
+        assert!(xml.contains("<CustomisationUIHeader label=\"My Layout (v2)\""));
+        assert!(xml.contains("<joystick instance=\"2\"/>"));
+        assert!(xml.contains("<rebind input=\"js2_button1\"/>"));
+        assert!(!xml.contains("ActionProfiles"));
+        assert_eq!(profile_name(&xml).as_deref(), Some("My Layout (v2)"));
+        // The bindings survive the rewrite.
+        assert_eq!(s.bindings, 1);
+
+        // Same name again: refused. Bad name: refused.
+        assert!(save_profile(&dir, &live, "My Layout (v2)", &sample_actions()).unwrap_err().contains("exists"));
+        assert!(save_profile(&dir, &live, "///", &sample_actions()).is_err());
+
+        delete(&dir, &s.file).unwrap();
+        assert!(!dir.join(&s.file).exists());
+        assert!(delete(&dir, "../x.xml").is_err());
+        assert!(delete(&dir, "missing.xml").is_err());
     }
 
     #[test]
