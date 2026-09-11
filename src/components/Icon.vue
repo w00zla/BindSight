@@ -43,7 +43,8 @@ export const ICONS = {
   'chevron-up': '<path d="m6 15 6-6 6 6"/>',
   'chevron-right': '<path d="m9 6 6 6-6 6"/>',
   unfold: '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
-  group: '<path d="M4 6h16"/><path d="M8 12h12M8 18h12"/><path d="M4 12h.01M4 18h.01"/>',
+  // Two collapsed buckets: chevron plus head line, twice.
+  group: '<path d="m4 4 3 3-3 3"/><path d="M11 7h10"/><path d="m4 14 3 3-3 3"/><path d="M11 17h10"/>',
   fold: '<path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/>',
   target: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>',
   swap: '<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>',
@@ -64,6 +65,8 @@ export const ICONS = {
   'shape-rect': '<rect x="4" y="5" width="16" height="14" rx="1"/>',
   'shape-ellipse': '<ellipse cx="12" cy="12" rx="8" ry="6"/>',
   'shape-polygon': '<path d="M12 3l8 6-3 10H7L4 9z"/>',
+  // Any shape: a square behind a circle.
+  shape: '<rect x="3" y="3" width="11" height="11" rx="1"/><circle cx="16" cy="16" r="5"/>',
   'shape-arrow': '<path d="M4 12h14M13 6l6 6-6 6"/>',
   'shape-cw': '<path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/>',
   'shape-ccw': '<path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v5h5"/>',

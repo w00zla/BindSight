@@ -5,7 +5,6 @@ import { deviceKey, deviceName } from "../devices";
 import Icon from "./Icon.vue";
 import Splitter from "./Splitter.vue";
 import type { DeviceInfo, ImageMapView } from "../types";
-import type { HighlightClass } from "../imagemap";
 
 const props = defineProps<{
   views: ImageMapView[];
@@ -17,7 +16,7 @@ const props = defineProps<{
   // Stage height in px (the parent owns the vertical splitter).
   height: number;
   imgSrc: (id: string, file: string) => string;
-  activeFor: (sdlGuid: string) => Map<string, HighlightClass>;
+  activeFor: (sdlGuid: string) => Set<string>;
 }>();
 
 type Tile = { device: DeviceInfo; view: ImageMapView | null };

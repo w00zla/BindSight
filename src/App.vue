@@ -41,7 +41,6 @@ import {
   inputKeyForToken,
   inputKeysForToken,
   sameHardware,
-  type HighlightClass,
   type ImageMap,
   type ImageMapSummary,
 } from "./imagemap";
@@ -153,8 +152,8 @@ const loadedMaps = ref<Record<string, ImageMap>>({});
 const mapImages = ref<Record<string, string>>({});
 // Lowercase hardware id -> chosen map id (from config.json).
 const mapChoices = ref<Record<string, string>>({});
-// SDL GUID -> input key -> highlight class, for the currently active inputs.
-const activeInputs = ref<Record<string, Record<string, HighlightClass>>>({});
+// SDL GUID -> the input keys currently active (held, or pulsing for an axis).
+const activeInputs = ref<Record<string, Record<string, true>>>({});
 const axisTimers = new Map<string, number>();
 
 function mapsFor(hardwareId: string | null): ImageMapSummary[] {
@@ -371,29 +370,31 @@ async function setMapChoice(hardwareId: string | null, id: string) {
   }
 }
 
-function setActive(guid: string, key: string, cls: HighlightClass) {
+function setActive(guid: string, key: string) {
   const cur = activeInputs.value[guid] ?? {};
-  activeInputs.value = { ...activeInputs.value, [guid]: { ...cur, [key]: cls } };
+  activeInputs.value = { ...activeInputs.value, [guid]: { ...cur, [key]: true } };
 }
 
 function clearActive(guid: string, drop: (key: string) => boolean) {
   const cur = activeInputs.value[guid];
   if (!cur) return;
-  const next: Record<string, HighlightClass> = {};
-  for (const [k, v] of Object.entries(cur)) if (!drop(k)) next[k] = v;
+  const next: Record<string, true> = {};
+  for (const k of Object.keys(cur)) if (!drop(k)) next[k] = true;
   activeInputs.value = { ...activeInputs.value, [guid]: next };
 }
 
-// A binding clicked in the list, selected until clicked again or another
-// one is picked; it is kept lit on the image-map image when it can be.
+// A binding clicked in the list, selected until clicked again, another one
+// is picked or a new live input arrives; it is kept lit on the image-map
+// image when it can be.
 const pinned = ref<ResolvedBinding | null>(null);
 const pinnedTarget = computed(() => (pinned.value ? pinTarget(pinned.value) : null));
 
-function activeFor(guid: string): Map<string, HighlightClass> {
-  const m = new Map<string, HighlightClass>(Object.entries(activeInputs.value[guid] ?? {}));
+// The lit inputs of a device: everything active plus the pinned binding's.
+function activeFor(guid: string): Set<string> {
+  const s = new Set(Object.keys(activeInputs.value[guid] ?? {}));
   const t = pinnedTarget.value;
-  if (t?.guid === guid) for (const k of t.keys) m.set(k, "bound");
-  return m;
+  if (t?.guid === guid) for (const k of t.keys) s.add(k);
+  return s;
 }
 
 // Does the map shown for this device (by SDL GUID) have an area for the
@@ -473,17 +474,17 @@ function togglePin(b: ResolvedBinding) {
 function trackActive(p: JoyInput) {
   if (p.kind === "button" || p.kind === "padbutton" || p.kind === "key") {
     const key = p.kind === "button" ? `button:${p.index}` : `${p.kind === "key" ? "key" : "pad"}:${p.name}`;
-    if (p.pressed) setActive(p.guid, key, "none");
+    if (p.pressed) setActive(p.guid, key);
     else clearActive(p.guid, (k) => k === key);
     return;
   }
   if (p.kind === "hat") {
     clearActive(p.guid, (k) => k.startsWith(`hat:${p.index}:`));
-    if (p.direction !== "centered") setActive(p.guid, `hat:${p.index}:${p.direction}`, "none");
+    if (p.direction !== "centered") setActive(p.guid, `hat:${p.index}:${p.direction}`);
     return;
   }
   const key = p.kind === "axis" ? `axis:${p.index}` : `pad:${p.name}`;
-  setActive(p.guid, key, "none");
+  setActive(p.guid, key);
   const tk = `${p.guid}#${key}`;
   const prev = axisTimers.get(tk);
   if (prev) clearTimeout(prev);
@@ -712,6 +713,8 @@ interface InputResolution {
 async function showBinding(p: JoyInput) {
   const key = inputKey(p);
   if (!key) return;
+  // A new live input takes over from a binding pinned in the list.
+  pinned.value = null;
   try {
     if (p.kind === "button" || p.kind === "axis" || p.kind === "hat") {
       const res = await invoke<InputResolution>("resolve_input", {
@@ -756,11 +759,6 @@ function applyResolution(p: JoyInput, key: string, res: InputResolution) {
       notify(`No area for ${res.token ? tokenLabel(res.token) : currentInput.value.sdl}`, "error");
     }
   }
-  // Upgrade the image-map highlight to blue when SC has a binding — but only
-  // while the input is still held (the resolve is async).
-  if (activeInputs.value[p.guid]?.[key] !== undefined) {
-    setActive(p.guid, key, res.actions.length ? "bound" : "none");
-  }
 }
 
 // The full SC token a press stands for when it is meant as a new binding:
@@ -802,6 +800,21 @@ function eventToken(p: JoyInput): string | null {
       return n && cardinal ? `js${n}_hat${p.index + 1}_${p.direction}` : null;
     }
   }
+}
+
+// SC token for an image-map input key of a device (`button:4` on js2 ->
+// `js2_button5`), null when SC has no token for it (unlisted joystick,
+// pad without a slot, diagonal hat).
+function keyToken(d: DeviceInfo, key: string): string | null {
+  const [kind, a, b] = key.split(":");
+  if (kind === "key") return `kb1_${a}`;
+  if (kind === "pad") return d.gamepad_slot ? `gp1_${a}` : null;
+  const n = slotFor(d.sc_product_guid ?? null)?.stored_instance ?? null;
+  if (!n) return null;
+  if (kind === "button") return `js${n}_button${Number(a) + 1}`;
+  if (kind === "axis") return d.axes[Number(a)] ? `js${n}_${d.axes[Number(a)]}` : null;
+  if (kind === "hat") return ["up", "right", "down", "left"].includes(b) ? `js${n}_hat${Number(a) + 1}_${b}` : null;
+  return null;
 }
 
 // One path for every live input, whatever made it: the raw log collects in
@@ -1174,6 +1187,7 @@ onUnmounted(() => {
       :keyInput="keyInput"
       :chosenMapId="chosenMapId"
       :tokenLabel="tokenLabel"
+      :keyToken="keyToken"
       @choose="setMapChoice"
       @notify="notify"
       @saved="onMapsSaved"

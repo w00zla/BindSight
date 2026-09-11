@@ -13,6 +13,9 @@
   --accent: #54adf7;
   --accent-text: #000;
   --live: #4ee0ff;
+  /* A lit shape on an image-map image (the default a shape can override). */
+  --shape-stroke: #396cd8;
+  --shape-fill: rgba(57, 108, 216, 0.55);
 
   --text: #ffffff;
   --text-2: #add3eb;

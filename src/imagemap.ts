@@ -47,7 +47,6 @@ export interface ImageMapSummary {
   area_count: number;
 }
 
-export type HighlightClass = "bound" | "none";
 
 // Input key for a live event: buttons and keys only while pressed, hats only
 // when not centered, axes always. `null` when the event does not name an input.

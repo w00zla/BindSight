@@ -13,9 +13,13 @@ import type { Transformer } from "konva/lib/shapes/Transformer";
 import type { VueKonvaRef } from "vue-konva";
 import Icon, { type IconName } from "./Icon.vue";
 import ConfirmDialog, { type ConfirmButton, type ConfirmIcon } from "./ConfirmDialog.vue";
+import Splitter from "./Splitter.vue";
+import ColumnHead from "./ColumnHead.vue";
+import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
 import type { DeviceInfo, JoyInput, LoggedInput } from "../types";
 import { deviceIcon, deviceName } from "../devices";
 import { KEY_COUNT, MOUSE_INPUTS, recording } from "../keyboard";
+import { persistedRef } from "../persist";
 import {
   SYMBOL_PATHS,
   symbolPx,
@@ -38,6 +42,8 @@ const props = defineProps<{
   chosenMapId: (d: DeviceInfo) => string | null;
   // SC's label for an input token; echoes the token when there is none.
   tokenLabel: (token: string | null) => string;
+  // SC token for an image-map input key of a device, null when SC has none.
+  keyToken: (d: DeviceInfo, key: string) => string | null;
 }>();
 const emit = defineEmits<{
   notify: [message: string, type: "ok" | "error"];
@@ -151,7 +157,6 @@ const areas = computed<Area[]>(() => map.value?.areas ?? []);
 const imgEl = ref<HTMLImageElement | null>(null);
 const natW = ref(0);
 const natH = ref(0);
-const aspect = computed(() => (natW.value && natH.value ? natW.value / natH.value : 1));
 
 const stageBox = ref<HTMLElement | null>(null);
 const boxW = ref(0);
@@ -173,20 +178,139 @@ const selectedId = ref<string | null>(null);
 const selectedArea = computed(() => areas.value.find((a) => a.id === selectedId.value) ?? null);
 const hover = ref<{ x: number; y: number; text: string } | null>(null);
 
+// The recorded input new shapes go to. Only Record changes it; it is dropped
+// whenever the map, the device, the view or the edit mode changes.
 const currentKey = ref<string | null>(null);
 const currentCount = computed(() =>
   currentKey.value ? areas.value.filter((a) => a.input === currentKey.value).length : 0,
 );
-const currentCountText = computed(() => `${currentCount.value} area${currentCount.value === 1 ? "" : "s"}`);
+const currentToken = computed(() =>
+  currentKey.value && device.value ? props.keyToken(device.value, currentKey.value) : null,
+);
+// SC's label for the current input; empty when SC has no token or no label.
+const currentLabel = computed(() => {
+  const t = currentToken.value;
+  if (!t) return "";
+  const l = props.tokenLabel(t);
+  return l === t ? "" : l;
+});
+// Headline of the input card: label, else token, else the raw key.
+const currentText = computed(() => currentLabel.value || currentToken.value || currentKey.value || "");
+const currentSub = computed(() => {
+  const parts: string[] = [];
+  if (currentKey.value) {
+    if (currentToken.value && currentLabel.value) parts.push(currentToken.value);
+    if (currentToken.value) parts.push(currentKey.value);
+    else parts.push("not known to the game");
+  }
+  parts.push(selectedName.value);
+  return parts.join(" · ");
+});
+// The line under the Record button: can shapes be drawn right now?
+const inputStatus = computed<{ kind: "live" | "warn" | "ok"; icon: IconName; text: string }>(() => {
+  if (recording.value) return { kind: "live", icon: "target", text: "Waiting for input…" };
+  if (!currentKey.value) return { kind: "warn", icon: "warning", text: "Record an input before drawing" };
+  const n = currentCount.value;
+  return { kind: "ok", icon: "check", text: `Ready to draw · ${n} shape${n === 1 ? "" : "s"}` };
+});
+
+function dropInput() {
+  currentKey.value = null;
+  recording.value = false;
+}
+
+// Width of the input / shapes column, dragged at the splitter next to it.
+const RIGHT_W = { min: 300, max: 700, def: 380 };
+const rightWidth = persistedRef<number>("bindsight.devices.rightWidth", RIGHT_W.def);
+let rightStart: number | null = null;
+function dragRight(delta: number) {
+  rightStart ??= rightWidth.value;
+  rightWidth.value = Math.min(RIGHT_W.max, Math.max(RIGHT_W.min, Math.round(rightStart + delta)));
+}
+function endDragRight() {
+  rightStart = null;
+}
+
+// --- shapes table ------------------------------------------------------------
+
+// One bucket per input (always grouped), the same table as the bindings.
+const COLUMNS: ColumnSpec[] = [
+  { key: "input", label: "INPUT", width: 190, icon: "bolt" },
+  { key: "shape", label: "SHAPE", width: null, icon: "shape" },
+];
+const cols = useTableColumns("bindsight.columns.shapes", COLUMNS, { key: "input", dir: "asc" });
 
 const filter = ref("");
-// Natural order, so button:2 comes before button:10.
-const listedAreas = computed(() => {
+
+interface Bucket {
+  key: string;
+  text: string;
+  // True when the text is the token or the raw key, not SC's label.
+  mono: boolean;
+  rows: Area[];
+}
+
+// What an input key is called in the table: SC's label, else the token,
+// else the raw key.
+function inputText(key: string): { text: string; mono: boolean } {
+  const d = device.value;
+  const t = d ? props.keyToken(d, key) : null;
+  if (!t) return { text: key, mono: true };
+  const l = props.tokenLabel(t);
+  return l === t ? { text: t, mono: true } : { text: l, mono: false };
+}
+
+// Sorting by INPUT orders the buckets, by SHAPE the rows inside each bucket
+// (buckets then stay in natural input order).
+const buckets = computed<Bucket[]>(() => {
   const f = filter.value.trim().toLowerCase();
-  return areas.value
-    .filter((a) => !f || a.input.toLowerCase().includes(f))
-    .slice()
-    .sort((x, y) => x.input.localeCompare(y.input, undefined, { numeric: true }));
+  const by = new Map<string, Bucket>();
+  for (const a of areas.value) {
+    let b = by.get(a.input);
+    if (!b) {
+      const { text, mono } = inputText(a.input);
+      b = { key: a.input, text, mono, rows: [] };
+      by.set(a.input, b);
+    }
+    b.rows.push(a);
+  }
+  const sort = cols.sort.value;
+  const list = [...by.values()].filter((b) => !f || b.key.toLowerCase().includes(f) || b.text.toLowerCase().includes(f));
+  const dir = sort.key === "input" && sort.dir === "desc" ? -1 : 1;
+  list.sort((x, y) => (collator.compare(x.text, y.text) || collator.compare(x.key, y.key)) * dir);
+  if (sort.key === "shape") {
+    for (const b of list) b.rows = sortRows(b.rows, sort, (a) => areaKind(a));
+  }
+  return list;
+});
+
+// Expanded buckets; everything starts collapsed. A filter forces them open,
+// and so does recording an input or selecting one of a bucket's shapes.
+const expanded = ref(new Set<string>());
+function isOpen(b: Bucket): boolean {
+  return !!filter.value.trim() || expanded.value.has(b.key);
+}
+function toggleBucket(key: string) {
+  const s = new Set(expanded.value);
+  if (!s.delete(key)) s.add(key);
+  expanded.value = s;
+}
+function openBucket(key: string) {
+  if (!expanded.value.has(key)) expanded.value = new Set(expanded.value).add(key);
+}
+const allExpanded = computed(() => buckets.value.length > 0 && buckets.value.every((b) => expanded.value.has(b.key)));
+function expandAll() {
+  expanded.value = new Set(buckets.value.map((b) => b.key));
+}
+function collapseAll() {
+  expanded.value = new Set();
+}
+watch(currentKey, (k) => {
+  if (k) openBucket(k);
+});
+watch(selectedId, (id) => {
+  const a = areas.value.find((x) => x.id === id);
+  if (a) openBucket(a.input);
 });
 
 // Drag-drawn rect/ellipse in progress, in stage pixels.
@@ -265,6 +389,7 @@ async function loadMap(id: string) {
   selectedId.value = null;
   tool.value = null;
   zoom.value = 1;
+  dropInput();
   // A map always opens read-only; the callers that want the editor say so.
   state.value = "view";
 }
@@ -275,6 +400,7 @@ function closeMap() {
   savedJson.value = "";
   selectedId.value = null;
   tool.value = null;
+  dropInput();
   state.value = "view";
 }
 
@@ -363,8 +489,6 @@ async function selectDevice(d: DeviceInfo) {
   if (!d.hardware_id || d.sdl_guid === selectedGuid.value) return;
   if (!(await requestLeave())) return;
   selectedGuid.value = d.sdl_guid;
-  currentKey.value = null;
-  recording.value = false;
   closeMap();
   await openFirst();
 }
@@ -468,6 +592,7 @@ function leaveEdit() {
   selectedId.value = null;
   tool.value = null;
   zoom.value = 1;
+  dropInput();
   cancelDraw();
 }
 
@@ -638,39 +763,6 @@ function addArea(shape: Shape) {
   tool.value = null;
 }
 
-// "Add area": a default shape of the active tool's kind at the image centre.
-function addDefaultArea() {
-  if (!map.value || !currentKey.value || locked.value || !editing.value) return;
-  const kind = tool.value ?? "rect";
-  if (kind === "rect") {
-    addArea({ kind: "rect", x: 0.45, y: 0.47, w: 0.1, h: 0.06, rotation: 0 });
-  } else if (kind === "ellipse") {
-    addArea({ kind: "ellipse", cx: 0.5, cy: 0.5, rx: 0.05, ry: 0.03, rotation: 0 });
-  } else if (kind === "polygon") {
-    const hx = 0.04;
-    const hy = hx * aspect.value;
-    addArea({
-      kind: "polygon",
-      points: [
-        [0.5, 0.5 - hy],
-        [0.5 + hx, 0.5],
-        [0.5, 0.5 + hy],
-        [0.5 - hx, 0.5],
-      ],
-    });
-  } else {
-    addArea({
-      kind: "symbol",
-      symbol: kind,
-      x: 0.5,
-      y: 0.5,
-      w: DEFAULT_SYMBOL_W,
-      h: DEFAULT_SYMBOL_W * aspect.value,
-      rotation: 0,
-    });
-  }
-}
-
 function setTool(t: Tool) {
   if (locked.value || !editing.value) return;
   cancelDraw();
@@ -684,23 +776,22 @@ function cancelDraw() {
   draftPoly.value = [];
 }
 
-function deleteSelected() {
+function deleteShape(id: string) {
   const m = map.value;
-  if (!m || !selectedId.value || locked.value || !editing.value) return;
-  m.areas = m.areas.filter((a) => a.id !== selectedId.value);
-  selectedId.value = null;
+  if (!m || locked.value || !editing.value) return;
+  m.areas = m.areas.filter((a) => a.id !== id);
+  if (selectedId.value === id) selectedId.value = null;
 }
 
-// A row in the list, or a shape on the canvas: both select the area and make
-// its input the current one. In view mode there is no selection — the row
-// only highlights its input.
+// A row in the list, or a shape on the canvas: both select the shape. The
+// recorded input stays what it is — only Record changes it.
 function pickArea(a: Area) {
-  currentKey.value = a.input;
-  if (editing.value) selectedId.value = a.id;
+  selectedId.value = a.id;
 }
 
+// One generic icon for shapes; only the polygon has its own.
 function areaIcon(a: Area): IconName {
-  return (a.shape.kind === "symbol" ? `shape-${a.shape.symbol}` : `shape-${a.shape.kind}`) as IconName;
+  return a.shape.kind === "polygon" ? "shape-polygon" : "shape";
 }
 
 function areaKind(a: Area): string {
@@ -723,7 +814,7 @@ function stagePointer(): { x: number; y: number } | null {
 }
 
 function onStageMouseDown(e: KonvaEventObject<MouseEvent>) {
-  if (!W.value || !editing.value) return;
+  if (!W.value) return;
   const pos = stagePointer();
   if (!pos) return;
   if (selectMode.value) {
@@ -888,7 +979,7 @@ function symbolCfg(a: Area) {
 // --- shape edits -----------------------------------------------------------
 
 function onAreaClick(a: Area) {
-  if (!selectMode.value || !editing.value) return;
+  if (!selectMode.value) return;
   pickArea(a);
 }
 
@@ -1025,6 +1116,7 @@ async function toggleDeviceInfo() {
     if (!(await requestLeave())) return;
     if (dirty.value) await cancelEdit();
   }
+  dropInput();
   showDeviceInfo.value = !showDeviceInfo.value;
 }
 
@@ -1205,7 +1297,7 @@ function noMaps(d: DeviceInfo): boolean {
 </script>
 
 <template>
-  <section class="devices" :class="{ 'device-info': showDeviceInfo }">
+  <section class="devices" :class="{ 'device-info': showDeviceInfo }" :style="{ '--right-w': `${rightWidth}px` }">
     <!-- left: devices and their image-maps, and the system panel -->
     <aside class="col-left">
       <section class="panel grow">
@@ -1555,58 +1647,96 @@ function noMaps(d: DeviceInfo): boolean {
       <div v-else class="none">{{ props.devices.length ? "No image-map" : "No device" }}</div>
     </section>
 
-    <!-- right: live input and areas -->
+    <Splitter
+      v-if="!showDeviceInfo"
+      direction="col"
+      class="col-split"
+      @drag="dragRight"
+      @end="endDragRight"
+      @reset="rightWidth = RIGHT_W.def"
+    />
+
+    <!-- right: live input and shapes -->
     <aside v-if="!showDeviceInfo" class="col-right">
       <div v-if="editing" class="input-card">
         <div class="ic-key">
           <Icon name="bolt" :size="22" />
-          <span v-if="currentKey" class="mono key">{{ currentKey }}</span>
+          <span v-if="currentKey" class="key" :class="{ mono: !currentLabel }" :title="currentKey">{{ currentText }}</span>
           <span v-else class="key idle">{{ recording ? "Press an input…" : "No input" }}</span>
         </div>
-        <div class="ic-sub">{{ selectedName }} · {{ currentCountText }}</div>
+        <div class="ic-sub mono">{{ currentSub }}</div>
         <div class="ic-btns">
           <button
             type="button"
             class="btn small"
             :class="recording ? 'primary' : 'outline'"
-            title="Take the next input of this device · Esc stops"
+            title="Take the next input of this device"
             @click="recording = true"
           >
             <Icon name="target" :size="13" />
-            {{ recording ? "Recording…" : "Record" }}
+            {{ recording ? "Recording…" : "Record Input" }}
           </button>
-          <button type="button" class="btn primary small" :disabled="!currentKey" @click="addDefaultArea">
-            <Icon name="plus" :size="13" />
-            Add area
-          </button>
-          <button type="button" class="btn danger small" :disabled="!selectedId" @click="deleteSelected">
-            <Icon name="trash" :size="13" />
-            Delete
-          </button>
+          <span class="ic-hint"><span class="kbd mono">Esc</span> stops</span>
+        </div>
+        <div class="ic-status" :class="inputStatus.kind">
+          <Icon :name="inputStatus.icon" :size="13" />
+          <span>{{ inputStatus.text }}</span>
         </div>
       </div>
 
-      <div class="areas">
+      <div class="shapes" :style="{ '--cols': cols.template.value, '--cols-min': `${cols.minWidth.value}px` }">
         <div class="tabs">
-          <div class="tab">Areas <span>{{ areas.length }}</span></div>
+          <div class="tab">Shapes</div>
+          <button type="button" class="btn outline small square" title="Expand all" :disabled="allExpanded" @click="expandAll">
+            <Icon name="unfold" :size="14" />
+          </button>
+          <button type="button" class="btn outline small square" title="Collapse all" :disabled="!expanded.size" @click="collapseAll">
+            <Icon name="fold" :size="14" />
+          </button>
           <div class="grow" />
           <div class="filter">
             <Icon name="search" :size="13" />
             <input v-model="filter" class="filter-in mono" placeholder="Filter…" spellcheck="false" />
           </div>
         </div>
-        <div class="rows">
-          <div
-            v-for="a in listedAreas"
-            :key="a.id"
-            class="arow"
-            :class="{ cur: a.input === currentKey, sel: a.id === selectedId }"
-            @click="pickArea(a)"
-          >
-            <Icon :name="areaIcon(a)" :size="14" />
-            <span class="mono akey">{{ a.input }}</span>
-            <span class="akind">{{ areaKind(a) }}</span>
-          </div>
+        <div class="table">
+          <ColumnHead
+            :columns="COLUMNS"
+            :sort="cols.sort.value"
+            @sort="cols.toggleSort"
+            @resize="cols.startResize"
+            @reset="cols.resetWidth"
+          />
+          <template v-for="g in buckets" :key="g.key">
+            <div class="row group-row" :class="{ cur: g.key === currentKey }" @click="toggleBucket(g.key)">
+              <span class="input-cell">
+                <Icon :name="isOpen(g) ? 'chevron-down' : 'chevron-right'" :size="14" class="chevron" />
+                <span class="cell-input" :class="{ mono: g.mono }" :title="g.key"
+                  ><Icon name="bolt" :size="12" class="live-mark" />{{ g.text }}</span
+                >
+              </span>
+              <span />
+            </div>
+            <template v-if="isOpen(g)">
+              <div
+                v-for="a in g.rows"
+                :key="a.id"
+                class="row shape-row"
+                :class="{ cur: g.key === currentKey, sel: a.id === selectedId }"
+                @click="pickArea(a)"
+              >
+                <span />
+                <span class="shape-cell">
+                  <Icon :name="areaIcon(a)" :size="14" class="shape-icon" />
+                  <span class="cell-kind">{{ areaKind(a) }}</span>
+                  <button v-if="editing" type="button" class="row-del" title="Delete" @click.stop="deleteShape(a.id)">
+                    <Icon name="trash" :size="13" />
+                  </button>
+                </span>
+              </div>
+            </template>
+          </template>
+          <div v-if="!buckets.length" class="row empty">{{ areas.length ? "No match" : "No shapes" }}</div>
         </div>
       </div>
     </aside>
@@ -1622,22 +1752,27 @@ function noMaps(d: DeviceInfo): boolean {
 .devices {
   flex: 1;
   display: grid;
-  grid-template-columns: 300px 380px minmax(0, 1fr);
+  /* The splitter is its own 16px column between the right column and the
+     canvas; the gap after the device list is a column too. */
+  grid-template-columns: 300px 16px var(--right-w, 380px) 16px minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
-    "left tile tile"
-    "left right centre";
-  column-gap: 16px;
+    "left gap tile tile tile"
+    "left gap right split centre";
   padding: 12px 16px 16px;
   min-height: 0;
 }
 
 /* Device Info takes the canvas column and the right one. */
 .devices.device-info {
-  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-columns: 300px 16px minmax(0, 1fr);
   grid-template-areas:
-    "left tile"
-    "left centre";
+    "left gap tile"
+    "left gap centre";
+}
+
+.col-split {
+  grid-area: split;
 }
 
 .action-tile {
@@ -2182,11 +2317,47 @@ function noMaps(d: DeviceInfo): boolean {
 
 .ic-btns {
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: 10px;
   margin-top: 4px;
 }
 
-.areas {
+.ic-hint {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.kbd {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-2);
+}
+
+/* Colour-coded state under the Record button. */
+.ic-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.ic-status.live {
+  color: var(--live);
+}
+
+.ic-status.warn {
+  color: var(--warn);
+}
+
+.ic-status.ok {
+  color: var(--ok);
+}
+
+.shapes {
   flex: 1;
   min-height: 0;
   background: var(--bg-surface);
@@ -2199,9 +2370,13 @@ function noMaps(d: DeviceInfo): boolean {
 .tabs {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   padding: 10px 12px 0;
   border-bottom: 1px solid var(--border-dim);
+}
+
+.tabs .btn.square {
+  margin-bottom: 6px;
 }
 
 .tab {
@@ -2243,40 +2418,158 @@ function noMaps(d: DeviceInfo): boolean {
   outline: none;
 }
 
-.rows {
-  flex: 1;
+/* --- the table (mirrors the bindings deck) --- */
+
+.table {
+  overflow: auto;
   min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
+  flex: 1;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: var(--cols);
+  gap: 12px;
+  padding: 8px 14px;
+  align-items: center;
+  /* Content-box: padding comes on top. Rows widen, the table scrolls. */
+  min-width: var(--cols-min);
+}
+
+.cols-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-surface);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--text-2);
+  border-bottom: 1px solid var(--border-dim);
+}
+
+.row.empty {
+  color: var(--text-3);
   font-size: 13px;
 }
 
-.arow {
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) 70px;
-  gap: 10px;
-  align-items: center;
-  padding: 8px 14px;
-  color: var(--text-2);
+/* A bucket is set off from the one before by a line above its head; its
+   shapes hang below it, tied to the head by a thin tree line under the
+   chevron. */
+.group-row {
+  font-size: 13px;
   cursor: pointer;
+  user-select: none;
+  border-left: 3px solid transparent;
+  border-top: 1px solid var(--border-dim);
+  color: var(--text-2);
 }
 
-.arow.cur {
-  color: var(--live);
+.shape-row {
+  position: relative;
+  font-size: 13px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  color: var(--text-2);
 }
 
-.arow.sel {
+.shape-row::before {
+  content: "";
+  position: absolute;
+  left: 22px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-dim);
+}
+
+.group-row:hover,
+.shape-row:hover {
+  background: var(--bg-surface-2);
+}
+
+.input-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.input-cell .chevron {
+  flex-shrink: 0;
+}
+
+.input-cell .cell-input {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.live-mark {
+  vertical-align: -2px;
+  margin-right: 6px;
+  opacity: 0;
+}
+
+/* The recorded input: live-coloured edge, text and bolt on its bucket. */
+.group-row.cur {
+  border-left-color: var(--live);
   background: color-mix(in srgb, var(--live) 8%, transparent);
 }
 
-.akey {
+.group-row.cur .cell-input {
+  color: var(--live);
+}
+
+.group-row.cur .live-mark {
+  opacity: 1;
+}
+
+.shape-row.cur .cell-kind {
+  color: var(--live);
+}
+
+.shape-row.sel {
+  background: var(--bg-surface-2);
+}
+
+.shape-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.shape-icon {
+  flex-shrink: 0;
+}
+
+.cell-kind {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.akind {
-  color: var(--text-2);
+.row-del {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
 }
+
+.row-del:hover {
+  background: var(--bg-surface-2);
+  color: var(--err);
+}
+
 </style>
