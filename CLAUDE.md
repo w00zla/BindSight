@@ -211,6 +211,10 @@ All of it lives in the Devices mode's Device Info view instead.
   as a fraction of it, `angle` of sweep from `rotation`), `wedge` (`r`,
   `angle`, `rotation`) and `image` (its own file in the map folder, no
   colours, box like a symbol). Several shapes per input are fine.
+- **Names** (image-map now, device names later): letters, digits, space,
+  `_`, `-` only, trimmed, at most 64 characters — nothing that needs
+  escaping anywhere. `imagemap::sanitize_name` / `src/names.ts` hold the
+  rule; the backend validates, the editor strips as you type.
 - **A shape is drawn only while its input is active** (Monitor); the image
   itself is the resting look — anything permanent belongs in the image.
 - Coordinates are normalized 0..1 to the image's natural size (radii to the
@@ -224,8 +228,8 @@ All of it lives in the Devices mode's Device Info view instead.
   image-map does not know which `jsN` its device is.
 - **Bundled image-maps** (`src-tauri/resources/imagemaps/`): Keyboard US,
   Keyboard DE, Xbox controller, PlayStation controller — generated, never
-  hand-edited: `scripts/gen-imagemaps.py` holds the geometry and writes
-  `image.png` + `imagemap.json` (fixed ids `4b7a2c1e-…-000000000001` to
+  hand-edited (a generator outside the repo holds the geometry and writes
+  `image.png` + `imagemap.json`; fixed ids `4b7a2c1e-…-000000000001` to
   `…0004`).
 - **Default map per device** (`App.vue`, `chosenMapId`): the user's choice,
   else the first fitting hard-coded `BUNDLED_RULES` entry (not part of the
@@ -301,7 +305,9 @@ The game data cache lives per version under `~/.cache/com.w00zla.bindsight/
   and `preventDefault`s every mapped key (deliberate: a rebind flow must own
   the keyboard); only text fields and open dialogs (`[role="dialog"]`) are
   skipped — except a dialog carrying `data-capture-keys` (`ConfirmDialog`
-  `captureKeys`, the rebind dialog). PrintScreen / Meta never arrive.
+  `captureKeys`, the rebind dialog). PrintScreen / Meta never arrive, and
+  Escape is deliberately not an input: it cancels a recording (and the
+  rebind dialog), like Meta it is dimmed on the keyboard maps.
 - **Axes**: SC names axes by HID usage (X->`x` … Rz->`rotz`, Slider/Dial->
   `slider1`/`slider2`); SDL numbers them in canonical usage order (Linux:
   evdev ABS code order, Windows: DirectInput offset order), NOT report

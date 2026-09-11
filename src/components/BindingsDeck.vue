@@ -19,9 +19,10 @@ const props = defineProps<{
   deviceLabel: (b: ResolvedBinding) => string;
   isClash: (token: string) => boolean;
   isMissing: (b: ResolvedBinding) => boolean;
-  isPinned: (b: ResolvedBinding) => boolean;
+  // The binding just clicked, lit like a short press for a moment.
+  isFlashed: (b: ResolvedBinding) => boolean;
 }>();
-const emit = defineEmits<{ pin: [b: ResolvedBinding] }>();
+const emit = defineEmits<{ flash: [b: ResolvedBinding] }>();
 
 // Toggled device chips; none toggled = every device. Remembered, like the
 // grouping switch.
@@ -199,6 +200,9 @@ function deviceTitle(b: ResolvedBinding): string | undefined {
       <div class="search">
         <Icon name="search" :size="14" />
         <input v-model="search" placeholder="Find…" />
+        <button v-if="search" type="button" class="clear" title="Clear" @click="search = ''">
+          <Icon name="close" :size="12" />
+        </button>
       </div>
     </div>
 
@@ -230,9 +234,9 @@ function deviceTitle(b: ResolvedBinding): string | undefined {
                 v-for="(b, i) in g.rows"
                 :key="i"
                 class="row binding-row"
-                :class="{ live: liveOn && b.token === currentToken, pinned: isPinned(b), missing: isMissing(b) }"
+                :class="{ live: (liveOn && b.token === currentToken) || isFlashed(b), missing: isMissing(b) }"
                 :title="rowTitle(b)"
-                @click="emit('pin', b)"
+                @click="emit('flash', b)"
               >
                 <span />
                 <span class="cell-action">{{ b.label ?? b.action }}</span>
@@ -246,9 +250,9 @@ function deviceTitle(b: ResolvedBinding): string | undefined {
             v-for="(b, i) in filteredBindings"
             :key="i"
             class="row binding-row"
-            :class="{ live: liveOn && b.token === currentToken, pinned: isPinned(b), missing: isMissing(b) }"
+            :class="{ live: (liveOn && b.token === currentToken) || isFlashed(b), missing: isMissing(b) }"
             :title="rowTitle(b)"
-            @click="emit('pin', b)"
+            @click="emit('flash', b)"
           >
             <span class="input-cell">
               <span class="mono cell-device" :class="{ clash: isClash(b.token) }" :title="deviceTitle(b)">
@@ -389,6 +393,26 @@ function deviceTitle(b: ResolvedBinding): string | undefined {
   color: var(--text-2);
 }
 
+/* Clears the box; only there while it has text. */
+.search .clear {
+  width: 20px;
+  height: 20px;
+  margin-right: -4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.search .clear:hover {
+  color: var(--text);
+}
+
 .search input {
   flex: 1;
   border: none;
@@ -477,11 +501,6 @@ function deviceTitle(b: ResolvedBinding): string | undefined {
 .binding-row.live .live-mark {
   opacity: 1;
   transition: none;
-}
-
-/* Pinned (selected): a plain background, so the edge stays the flash's. */
-.binding-row.pinned {
-  background: var(--bg-surface-2);
 }
 
 .binding-row.missing {

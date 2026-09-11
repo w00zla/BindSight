@@ -229,6 +229,50 @@ fn is_bare_name(name: &str) -> bool {
         && !name.contains('\0')
 }
 
+/// Characters a user-given name may contain: letters, digits, space, `_`
+/// and `-` — nothing that needs escaping in a file name, a shell or a URL.
+/// The same rule is meant for device names later on.
+pub fn is_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == ' ' || c == '_' || c == '-'
+}
+
+pub const NAME_MAX: usize = 64;
+
+/// A valid name: only name characters, no leading / trailing space, not
+/// empty, at most `NAME_MAX` characters.
+pub fn is_safe_name(s: &str) -> bool {
+    !s.is_empty() && s.len() <= NAME_MAX && s.trim() == s && s.chars().all(is_name_char)
+}
+
+/// Make any string a valid name: other characters become spaces, runs of
+/// spaces collapse, the ends are trimmed, the length capped; an empty
+/// result falls back to `fallback`.
+pub fn sanitize_name(s: &str, fallback: &str) -> String {
+    let mut out = String::new();
+    let mut space = true;
+    for c in s.chars() {
+        let c = if is_name_char(c) { c } else { ' ' };
+        if c == ' ' {
+            if !space {
+                out.push(' ');
+            }
+            space = true;
+        } else {
+            out.push(c);
+            space = false;
+        }
+        if out.len() >= NAME_MAX {
+            break;
+        }
+    }
+    let out = out.trim_end().to_string();
+    if out.is_empty() {
+        fallback.to_string()
+    } else {
+        out
+    }
+}
+
 /// Structural validation (no filesystem access).
 pub fn validate(p: &ImageMap) -> Result<(), String> {
     if p.format != FORMAT {
@@ -242,6 +286,9 @@ pub fn validate(p: &ImageMap) -> Result<(), String> {
     }
     if p.name.trim().is_empty() {
         return Err("image-map name is empty".into());
+    }
+    if !is_safe_name(&p.name) {
+        return Err(format!("invalid image-map name {:?} (letters, digits, space, _ and - only)", p.name));
     }
     if p.hardware_id.trim().is_empty() {
         return Err("hardware id is empty".into());
@@ -411,7 +458,7 @@ pub fn create(
     let map = ImageMap {
         format: FORMAT,
         id,
-        name: name.to_string(),
+        name: sanitize_name(name, "image-map"),
         hardware_id: hardware_id.to_string(),
         hardware_name: hardware_name.to_string(),
         image,
@@ -433,7 +480,7 @@ pub fn clone_map(bundled_root: &Path, user_root: &Path, id: &str, name: &str) ->
     let map = ImageMap {
         format: FORMAT,
         id: new_id.clone(),
-        name: name.trim().to_string(),
+        name: sanitize_name(name, "copy"),
         hardware_id: source.hardware_id,
         hardware_name: source.hardware_name,
         image: source.image,
@@ -594,6 +641,8 @@ pub fn import(user_root: &Path, source: &Path) -> Result<ImageMapSummary, String
         .read_to_string(&mut text)
         .map_err(|e| e.to_string())?;
     let mut map: ImageMap = serde_json::from_str(&text).map_err(|e| format!("imagemap.json: {e}"))?;
+    // A name from elsewhere is made valid rather than refused.
+    map.name = sanitize_name(&map.name, "image-map");
     validate(&map)?;
     for f in map.files() {
         if !entries.iter().any(|(_, n)| n == f) {
@@ -844,6 +893,14 @@ mod tests {
         let mut p = sample("p1", "ok");
         p.name = "  ".into();
         assert!(validate(&p).unwrap_err().contains("name"));
+        for bad in ["My/Map", "a\\b", " lead", "trail ", "quote\"", "ümlaut", &"x".repeat(NAME_MAX + 1)] {
+            let mut p = sample("p1", "ok");
+            p.name = bad.to_string();
+            assert!(validate(&p).is_err(), "{bad:?} should be rejected");
+        }
+        let mut p = sample("p1", "ok");
+        p.name = "VKB Gladiator_NXT-EVO 2".into();
+        assert!(validate(&p).is_ok());
 
         let mut p = sample("p1", "ok");
         p.hardware_id.clear();
@@ -1112,6 +1169,16 @@ mod tests {
         assert!(!user.join("img").join("orphan.png").exists());
         assert!(user.join("img").join("notes.txt").is_file());
         assert!(user.join("img").join("top.png").is_file());
+    }
+
+    #[test]
+    fn sanitize_name_makes_names_safe() {
+        assert_eq!(sanitize_name("  VKB-Sim  Gladiator/NXT (EVO) ", "x"), "VKB-Sim Gladiator NXT EVO");
+        assert_eq!(sanitize_name("Keyboard/Mouse", "x"), "Keyboard Mouse");
+        assert_eq!(sanitize_name("///", "fallback"), "fallback");
+        assert_eq!(sanitize_name("", "fallback"), "fallback");
+        assert!(sanitize_name(&"ab ".repeat(40), "x").len() <= NAME_MAX);
+        assert!(is_safe_name(&sanitize_name("ümlaut & co", "x")));
     }
 
     #[test]

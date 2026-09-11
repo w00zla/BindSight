@@ -385,16 +385,16 @@ function clearActive(guid: string, drop: (key: string) => boolean) {
   activeInputs.value = { ...activeInputs.value, [guid]: next };
 }
 
-// A binding clicked in the list, selected until clicked again, another one
-// is picked or a new live input arrives; it is kept lit on the image-map
-// image when it can be.
-const pinned = ref<ResolvedBinding | null>(null);
-const pinnedTarget = computed(() => (pinned.value ? pinTarget(pinned.value) : null));
+// A binding clicked in the list flashes for a moment — its row and its
+// input on the image-map image, like a short press — then it is over.
+const FLASH_MS = 1200;
+const flash = ref<{ b: ResolvedBinding; target: PinTarget | null } | null>(null);
+let flashTimer: number | null = null;
 
-// The lit inputs of a device: everything active plus the pinned binding's.
+// The lit inputs of a device: everything active plus a flashing binding's.
 function activeFor(guid: string): Set<string> {
   const s = new Set(Object.keys(activeInputs.value[guid] ?? {}));
-  const t = pinnedTarget.value;
+  const t = flash.value?.target;
   if (t?.guid === guid) for (const k of t.keys) s.add(k);
   return s;
 }
@@ -420,7 +420,7 @@ function deviceForBinding(b: ResolvedBinding): DeviceInfo | undefined {
   return devices.value.find((d) => !!b.device_guid && sameHardware(d.hardware_id, b.device_guid));
 }
 
-// Where a pinned binding lights up: the device and its input's key, plus
+// Where a flashed binding lights up: the device and its input's key, plus
 // every key of the map that gets lit (a combo's modifiers too, when the
 // map has shapes for them).
 interface PinTarget {
@@ -455,21 +455,22 @@ function missingInMap(b: ResolvedBinding): boolean {
   return !!t && inMap(t.guid, t.key) === false;
 }
 
-function isPinned(b: ResolvedBinding): boolean {
-  const p = pinned.value;
-  return !!p && p.token === b.token && p.actionmap === b.actionmap && p.action === b.action;
+function isFlashed(b: ResolvedBinding): boolean {
+  const f = flash.value?.b;
+  return !!f && f.token === b.token && f.actionmap === b.actionmap && f.action === b.action;
 }
 
-// Select the row either way; say why nothing lights up when it cannot (a
-// missing area is already tagged on the row itself).
-function togglePin(b: ResolvedBinding) {
-  if (isPinned(b)) {
-    pinned.value = null;
-    return;
-  }
-  pinned.value = b;
+// Flash the row either way; say why nothing lights up on the image when it
+// cannot (a missing area is already tagged on the row itself).
+function flashBinding(b: ResolvedBinding) {
   const r = resolvePin(b);
   if ("reason" in r && !missingInMap(b)) notify(r.reason, "error");
+  flash.value = { b, target: "reason" in r ? null : r };
+  if (flashTimer) clearTimeout(flashTimer);
+  flashTimer = window.setTimeout(() => {
+    flash.value = null;
+    flashTimer = null;
+  }, FLASH_MS);
 }
 
 // Buttons and keys stay lit while held, hats until centered, axes pulse.
@@ -715,8 +716,8 @@ interface InputResolution {
 async function showBinding(p: JoyInput) {
   const key = inputKey(p);
   if (!key) return;
-  // A new live input takes over from a binding pinned in the list.
-  pinned.value = null;
+  // A new live input takes over from a flashing binding.
+  flash.value = null;
   try {
     if (p.kind === "button" || p.kind === "axis" || p.kind === "hat") {
       const res = await invoke<InputResolution>("resolve_input", {
@@ -1146,8 +1147,8 @@ onUnmounted(() => {
           :deviceLabel="deviceLabel"
           :isClash="bindingClash"
           :isMissing="missingInMap"
-          :isPinned="isPinned"
-          @pin="togglePin"
+          :isFlashed="isFlashed"
+          @flash="flashBinding"
         />
       </div>
     </div>

@@ -7,7 +7,8 @@
 // Keys are captured all the time; the mouse only while `recording` is on —
 // the mouse drives the app the rest of the time. Recording is armed by a
 // Record button (rebind dialog, image-map editor) and disarmed by whoever
-// armed it once an input arrived, or by Escape.
+// armed it once an input arrived, or by Escape — which is never an input
+// here (like Meta), it belongs to the app.
 
 import { ref } from "vue";
 import type { JoyInput } from "./types";
@@ -54,7 +55,6 @@ function buildCodes(): Record<string, string> {
     ArrowDown: "down",
     ArrowLeft: "left",
     ArrowRight: "right",
-    Escape: "escape",
     Minus: "minus",
     Equal: "equals",
     Semicolon: "semicolon",

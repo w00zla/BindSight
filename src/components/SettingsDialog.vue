@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
@@ -14,6 +14,13 @@ const props = defineProps<{
   autoBackup: boolean;
   debugLogging: boolean;
 }>();
+// Escape closes without saving, like the Cancel button.
+function onKey(e: KeyboardEvent) {
+  if (e.key === "Escape") emit("close");
+}
+onMounted(() => window.addEventListener("keydown", onKey));
+onUnmounted(() => window.removeEventListener("keydown", onKey));
+
 const emit = defineEmits<{
   close: [];
   save: [

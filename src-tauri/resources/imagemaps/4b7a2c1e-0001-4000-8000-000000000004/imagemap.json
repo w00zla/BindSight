@@ -12,6 +12,8 @@
     {
       "id": "a1",
       "input": "pad:triggerl",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
       "geometry": {
         "kind": "rect",
         "x": 0.175,
@@ -19,25 +21,29 @@
         "w": 0.145833,
         "h": 0.096471,
         "rotation": 0.0,
-        "radius": 0.0
+        "radius": 0.3846153846153846
       }
     },
     {
       "id": "a2",
       "input": "pad:triggerl_btn",
+      "stroke": "#f2b34c",
+      "fill": "#f2b34c3a",
       "geometry": {
         "kind": "rect",
-        "x": 0.186667,
-        "y": 0.035294,
-        "w": 0.1225,
-        "h": 0.063529,
+        "x": 0.2,
+        "y": 0.084706,
+        "w": 0.095833,
+        "h": 0.016471,
         "rotation": 0.0,
-        "radius": 0.0
+        "radius": 0.5
       }
     },
     {
       "id": "a3",
       "input": "pad:triggerr",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
       "geometry": {
         "kind": "rect",
         "x": 0.679167,
@@ -45,25 +51,29 @@
         "w": 0.145833,
         "h": 0.096471,
         "rotation": 0.0,
-        "radius": 0.0
+        "radius": 0.3846153846153846
       }
     },
     {
       "id": "a4",
       "input": "pad:triggerr_btn",
+      "stroke": "#f2b34c",
+      "fill": "#f2b34c3a",
       "geometry": {
         "kind": "rect",
-        "x": 0.690833,
-        "y": 0.035294,
-        "w": 0.1225,
-        "h": 0.063529,
+        "x": 0.704167,
+        "y": 0.084706,
+        "w": 0.095833,
+        "h": 0.016471,
         "rotation": 0.0,
-        "radius": 0.0
+        "radius": 0.5
       }
     },
     {
       "id": "a5",
       "input": "pad:shoulderl",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
       "geometry": {
         "kind": "rect",
         "x": 0.1625,
@@ -71,12 +81,14 @@
         "w": 0.170833,
         "h": 0.077647,
         "rotation": 0.0,
-        "radius": 0.0
+        "radius": 0.4166666666666667
       }
     },
     {
       "id": "a6",
       "input": "pad:shoulderr",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
       "geometry": {
         "kind": "rect",
         "x": 0.666667,
@@ -84,12 +96,14 @@
         "w": 0.170833,
         "h": 0.077647,
         "rotation": 0.0,
-        "radius": 0.0
+        "radius": 0.4166666666666667
       }
     },
     {
       "id": "a7",
       "input": "pad:dpad_up",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
       "geometry": {
         "kind": "rect",
         "x": 0.216667,
@@ -97,12 +111,14 @@
         "w": 0.066667,
         "h": 0.08,
         "rotation": 0.0,
-        "radius": 0.0
+        "radius": 0.18
       }
     },
     {
       "id": "a8",
       "input": "pad:dpad_down",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
       "geometry": {
         "kind": "rect",
         "x": 0.216667,
@@ -110,12 +126,14 @@
         "w": 0.066667,
         "h": 0.08,
         "rotation": 0.0,
-        "radius": 0.0
+        "radius": 0.18
       }
     },
     {
       "id": "a9",
       "input": "pad:dpad_left",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
       "geometry": {
         "kind": "rect",
         "x": 0.16,
@@ -123,12 +141,14 @@
         "w": 0.056667,
         "h": 0.094118,
         "rotation": 0.0,
-        "radius": 0.0
+        "radius": 0.18
       }
     },
     {
       "id": "a10",
       "input": "pad:dpad_right",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
       "geometry": {
         "kind": "rect",
         "x": 0.283333,
@@ -136,12 +156,14 @@
         "w": 0.056667,
         "h": 0.094118,
         "rotation": 0.0,
-        "radius": 0.0
+        "radius": 0.18
       }
     },
     {
       "id": "a11",
       "input": "pad:thumbl_up",
+      "stroke": "#f2b34c",
+      "fill": "#f2b34c3a",
       "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
@@ -155,6 +177,8 @@
     {
       "id": "a12",
       "input": "pad:thumbl_down",
+      "stroke": "#f2b34c",
+      "fill": "#f2b34c3a",
       "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
@@ -168,6 +192,8 @@
     {
       "id": "a13",
       "input": "pad:thumbl_left",
+      "stroke": "#f2b34c",
+      "fill": "#f2b34c3a",
       "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
@@ -181,6 +207,8 @@
     {
       "id": "a14",
       "input": "pad:thumbl_right",
+      "stroke": "#f2b34c",
+      "fill": "#f2b34c3a",
       "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
@@ -194,6 +222,8 @@
     {
       "id": "a15",
       "input": "pad:thumbl",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
       "geometry": {
         "kind": "ellipse",
         "cx": 0.379167,
@@ -206,32 +236,68 @@
     {
       "id": "a16",
       "input": "pad:thumblx",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
       "geometry": {
-        "kind": "symbol",
-        "symbol": "arrow",
-        "x": 0.379167,
-        "y": 0.623529,
-        "w": 0.14,
-        "h": 0.061176,
-        "rotation": 0.0
+        "kind": "arc",
+        "cx": 0.379167,
+        "cy": 0.623529,
+        "r": 0.073333,
+        "inner": 0.75,
+        "angle": 90.0,
+        "rotation": 315.0
       }
     },
     {
       "id": "a17",
-      "input": "pad:thumbly",
+      "input": "pad:thumblx",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
       "geometry": {
-        "kind": "symbol",
-        "symbol": "arrow",
-        "x": 0.379167,
-        "y": 0.623529,
-        "w": 0.14,
-        "h": 0.061176,
-        "rotation": 90.0
+        "kind": "arc",
+        "cx": 0.379167,
+        "cy": 0.623529,
+        "r": 0.073333,
+        "inner": 0.75,
+        "angle": 90.0,
+        "rotation": 135.0
       }
     },
     {
       "id": "a18",
+      "input": "pad:thumbly",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
+      "geometry": {
+        "kind": "arc",
+        "cx": 0.379167,
+        "cy": 0.623529,
+        "r": 0.073333,
+        "inner": 0.75,
+        "angle": 90.0,
+        "rotation": 225.0
+      }
+    },
+    {
+      "id": "a19",
+      "input": "pad:thumbly",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
+      "geometry": {
+        "kind": "arc",
+        "cx": 0.379167,
+        "cy": 0.623529,
+        "r": 0.073333,
+        "inner": 0.75,
+        "angle": 90.0,
+        "rotation": 45.0
+      }
+    },
+    {
+      "id": "a20",
       "input": "pad:thumbr_up",
+      "stroke": "#f2b34c",
+      "fill": "#f2b34c3a",
       "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
@@ -243,8 +309,10 @@
       }
     },
     {
-      "id": "a19",
+      "id": "a21",
       "input": "pad:thumbr_down",
+      "stroke": "#f2b34c",
+      "fill": "#f2b34c3a",
       "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
@@ -256,8 +324,10 @@
       }
     },
     {
-      "id": "a20",
+      "id": "a22",
       "input": "pad:thumbr_left",
+      "stroke": "#f2b34c",
+      "fill": "#f2b34c3a",
       "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
@@ -269,8 +339,10 @@
       }
     },
     {
-      "id": "a21",
+      "id": "a23",
       "input": "pad:thumbr_right",
+      "stroke": "#f2b34c",
+      "fill": "#f2b34c3a",
       "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
@@ -282,8 +354,10 @@
       }
     },
     {
-      "id": "a22",
+      "id": "a24",
       "input": "pad:thumbr",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
       "geometry": {
         "kind": "ellipse",
         "cx": 0.620833,
@@ -294,34 +368,70 @@
       }
     },
     {
-      "id": "a23",
-      "input": "pad:thumbrx",
-      "geometry": {
-        "kind": "symbol",
-        "symbol": "arrow",
-        "x": 0.620833,
-        "y": 0.623529,
-        "w": 0.14,
-        "h": 0.061176,
-        "rotation": 0.0
-      }
-    },
-    {
-      "id": "a24",
-      "input": "pad:thumbry",
-      "geometry": {
-        "kind": "symbol",
-        "symbol": "arrow",
-        "x": 0.620833,
-        "y": 0.623529,
-        "w": 0.14,
-        "h": 0.061176,
-        "rotation": 90.0
-      }
-    },
-    {
       "id": "a25",
+      "input": "pad:thumbrx",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
+      "geometry": {
+        "kind": "arc",
+        "cx": 0.620833,
+        "cy": 0.623529,
+        "r": 0.073333,
+        "inner": 0.75,
+        "angle": 90.0,
+        "rotation": 315.0
+      }
+    },
+    {
+      "id": "a26",
+      "input": "pad:thumbrx",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
+      "geometry": {
+        "kind": "arc",
+        "cx": 0.620833,
+        "cy": 0.623529,
+        "r": 0.073333,
+        "inner": 0.75,
+        "angle": 90.0,
+        "rotation": 135.0
+      }
+    },
+    {
+      "id": "a27",
+      "input": "pad:thumbry",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
+      "geometry": {
+        "kind": "arc",
+        "cx": 0.620833,
+        "cy": 0.623529,
+        "r": 0.073333,
+        "inner": 0.75,
+        "angle": 90.0,
+        "rotation": 225.0
+      }
+    },
+    {
+      "id": "a28",
+      "input": "pad:thumbry",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
+      "geometry": {
+        "kind": "arc",
+        "cx": 0.620833,
+        "cy": 0.623529,
+        "r": 0.073333,
+        "inner": 0.75,
+        "angle": 90.0,
+        "rotation": 45.0
+      }
+    },
+    {
+      "id": "a29",
       "input": "pad:a",
+      "stroke": "#54adf7",
+      "fill": "#54adf74d",
       "geometry": {
         "kind": "ellipse",
         "cx": 0.75,
@@ -332,8 +442,10 @@
       }
     },
     {
-      "id": "a26",
+      "id": "a30",
       "input": "pad:b",
+      "stroke": "#ff5c6c",
+      "fill": "#ff5c6c4d",
       "geometry": {
         "kind": "ellipse",
         "cx": 0.811667,
@@ -344,8 +456,10 @@
       }
     },
     {
-      "id": "a27",
+      "id": "a31",
       "input": "pad:x",
+      "stroke": "#ff5fb4",
+      "fill": "#ff5fb44d",
       "geometry": {
         "kind": "ellipse",
         "cx": 0.688333,
@@ -356,8 +470,10 @@
       }
     },
     {
-      "id": "a28",
+      "id": "a32",
       "input": "pad:y",
+      "stroke": "#4fd28a",
+      "fill": "#4fd28a4d",
       "geometry": {
         "kind": "ellipse",
         "cx": 0.75,
@@ -368,8 +484,10 @@
       }
     },
     {
-      "id": "a29",
+      "id": "a33",
       "input": "pad:back",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
       "geometry": {
         "kind": "ellipse",
         "cx": 0.36,
@@ -380,8 +498,10 @@
       }
     },
     {
-      "id": "a30",
+      "id": "a34",
       "input": "pad:start",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
       "geometry": {
         "kind": "ellipse",
         "cx": 0.64,

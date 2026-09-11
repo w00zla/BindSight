@@ -777,14 +777,8 @@ async function tokenOf(p: JoyInput): Promise<string | null> {
 
 // A press lights its rows in the list and, while the dialog is recording,
 // becomes its change (and ends the recording); a release puts the light
-// out. Escape stops a recording, else cancels the dialog (so it cannot be
-// bound here).
+// out.
 async function takeInput(p: JoyInput) {
-  if (p.kind === "key" && p.pressed && p.name === "escape" && rebind.value) {
-    if (recording.value) recording.value = false;
-    else rebind.value = null;
-    return;
-  }
   const { edge, momentary } = edgeOf(p);
   if (!edge) return;
   const token = await tokenOf(p);
@@ -893,7 +887,16 @@ watch(
 
 let unlisten: UnlistenFn[] = [];
 
+// Escape is never an input (keyboard.ts): while the rebind dialog is open it
+// stops a recording, else cancels the dialog.
+function onEscape(e: KeyboardEvent) {
+  if (e.key !== "Escape" || !rebind.value) return;
+  if (recording.value) recording.value = false;
+  else rebind.value = null;
+}
+
 onUnmounted(() => {
+  window.removeEventListener("keydown", onEscape);
   unlisten.forEach((fn) => fn());
   unlisten = [];
   recording.value = false;
@@ -908,6 +911,7 @@ watch(
 );
 
 onMounted(async () => {
+  window.addEventListener("keydown", onEscape);
   unlisten.push(await listen<JoyInput>("joy-input", (e) => takeInput(e.payload)));
   await Promise.all([loadProfiles(), loadBackups(), loadInfo()]);
   // B starts on the newest layout, so Compare says something when opened.
@@ -1085,6 +1089,9 @@ async function compareWith(key: string) {
         <div class="search">
           <Icon name="search" :size="14" />
           <input v-model="listSearch" placeholder="Find…" />
+          <button v-if="listSearch" type="button" class="clear" title="Clear" @click="listSearch = ''">
+            <Icon name="close" :size="12" />
+          </button>
         </div>
       </div>
 
@@ -1182,6 +1189,9 @@ async function compareWith(key: string) {
         <div class="search">
           <Icon name="search" :size="14" />
           <input v-model="search" placeholder="Find…" />
+          <button v-if="search" type="button" class="clear" title="Clear" @click="search = ''">
+            <Icon name="close" :size="12" />
+          </button>
         </div>
       </div>
 
@@ -1617,6 +1627,26 @@ async function compareWith(key: string) {
   border-radius: var(--radius-control);
   background: var(--bg-surface-2);
   color: var(--text-2);
+}
+
+/* Clears the box; only there while it has text. */
+.search .clear {
+  width: 20px;
+  height: 20px;
+  margin-right: -4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.search .clear:hover {
+  color: var(--text);
 }
 
 .search input {

@@ -22,6 +22,7 @@ import type { DeviceInfo, JoyInput, LoggedInput } from "../types";
 import { deviceIcon, deviceName } from "../devices";
 import { KEY_COUNT, MOUSE_INPUTS, recording } from "../keyboard";
 import { persistedRef } from "../persist";
+import { NAME_MAX, sanitizeName, stripNameChars } from "../names";
 import {
   SYMBOL_PATHS,
   rectRadiusPx,
@@ -661,7 +662,7 @@ async function createMap() {
     const imagePath = await pickImage();
     if (!imagePath) return;
     const m = await invoke<ImageMap>("create_imagemap", {
-      name: selectedName.value,
+      name: sanitizeName(selectedName.value, "image-map"),
       hardwareId: hw,
       hardwareName: device.value?.sc_name ?? selectedUnused.value?.name ?? "",
       imagePath,
@@ -756,6 +757,7 @@ async function deleteMap(s: ImageMapSummary) {
 async function saveMap(): Promise<boolean> {
   const m = map.value;
   if (!m || locked.value) return true;
+  m.name = sanitizeName(m.name, "image-map");
   try {
     const saved = await invoke<ImageMap>("save_imagemap", { map: m });
     map.value = saved;
@@ -840,12 +842,9 @@ async function replaceImage() {
 let unlisten: UnlistenFn[] = [];
 
 // Record takes the next input of the selected device as the current one
-// (mouse included, see keyboard.ts); Escape stops a recording instead.
+// (mouse included, see keyboard.ts); Escape (a plain key event, never an
+// input) stops a recording, see `onEditorKey`.
 function takeInput(ev: JoyInput) {
-  if (ev.kind === "key" && ev.pressed && ev.name === "escape") {
-    recording.value = false;
-    return;
-  }
   if (!recording.value || ev.guid !== selectedGuid.value) return;
   const key = inputKey(ev);
   if (!key) return;
@@ -989,13 +988,17 @@ function duplicateShape(a: Shape) {
 }
 
 // Keyboard editing of the selected shape: arrows nudge (Shift: 10 px),
-// Delete / Backspace delete, Ctrl+D duplicates, Escape deselects or drops the
-// tool. Text fields and open dialogs keep their keys; while recording, keys
-// are the input being recorded.
+// Delete / Backspace delete, Ctrl+D duplicates, Escape stops a recording,
+// else deselects or drops the tool. Text fields and open dialogs keep their
+// keys; while recording, the other keys are the input being recorded.
 const NUDGE_PX = 1;
 const NUDGE_SHIFT_PX = 10;
 
 function onEditorKey(e: KeyboardEvent) {
+  if (e.key === "Escape" && recording.value) {
+    recording.value = false;
+    return;
+  }
   if (!editing.value || recording.value || confirm.value || document.querySelector('[role="dialog"]')) return;
   const t = e.target as HTMLElement | null;
   if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
@@ -1863,10 +1866,12 @@ function noMaps(d: DeviceInfo): boolean {
         <input
           v-if="editing && map"
           ref="nameInput"
-          v-model="map.name"
+          :value="map.name"
           class="name"
           spellcheck="false"
           placeholder="Name"
+          :maxlength="NAME_MAX"
+          @input="map.name = stripNameChars(($event.target as HTMLInputElement).value)"
         />
         <span v-else class="name-text">{{ map ? map.name : selectedName }}</span>
       </div>
@@ -2327,6 +2332,9 @@ function noMaps(d: DeviceInfo): boolean {
           <div class="search">
             <Icon name="search" :size="14" />
             <input v-model="filter" class="mono" placeholder="Find…" spellcheck="false" />
+            <button v-if="filter" type="button" class="clear" title="Clear" @click="filter = ''">
+              <Icon name="close" :size="12" />
+            </button>
           </div>
         </div>
         <div class="table">
@@ -3086,6 +3094,26 @@ function noMaps(d: DeviceInfo): boolean {
   border-radius: var(--radius-control);
   background: var(--bg-surface-2);
   color: var(--text-2);
+}
+
+/* Clears the box; only there while it has text. */
+.search .clear {
+  width: 20px;
+  height: 20px;
+  margin-right: -4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.search .clear:hover {
+  color: var(--text);
 }
 
 .search input {

@@ -17,7 +17,7 @@ export interface ConfirmButton {
 </script>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, onUnmounted } from "vue";
 import Icon from "./Icon.vue";
 
 // `captureKeys`: the keyboard capture stays on while this dialog is open
@@ -35,13 +35,22 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ choose: [value: string] }>();
 
-// A click on the backdrop answers with the first outline button (the way out),
-// or does nothing when there is none.
+// A click on the backdrop or Escape answers with the first outline button
+// (the way out), or does nothing when there is none. A `captureKeys` dialog
+// owns its keys, Escape included.
 const dismiss = computed(() => props.buttons.find((b) => b.kind === "outline")?.value ?? null);
 
 function onBackdrop() {
   if (dismiss.value !== null) emit("choose", dismiss.value);
 }
+
+function onKey(e: KeyboardEvent) {
+  if (e.key !== "Escape" || props.captureKeys) return;
+  onBackdrop();
+}
+
+onMounted(() => window.addEventListener("keydown", onKey));
+onUnmounted(() => window.removeEventListener("keydown", onKey));
 </script>
 
 <template>
