@@ -1577,8 +1577,8 @@
     {
       "id": "a104",
       "input": "key:mwheel_up",
-      "stroke": "#4ee0ff",
-      "fill": "#4ee0ff3a",
+      "stroke": "#f2b34c",
+      "fill": "#f2b34c3a",
       "geometry": {
         "kind": "symbol",
         "symbol": "arrow",
@@ -1592,8 +1592,8 @@
     {
       "id": "a105",
       "input": "key:mwheel_down",
-      "stroke": "#4ee0ff",
-      "fill": "#4ee0ff3a",
+      "stroke": "#f2b34c",
+      "fill": "#f2b34c3a",
       "geometry": {
         "kind": "symbol",
         "symbol": "arrow",

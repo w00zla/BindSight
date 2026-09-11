@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import DeviceImage from "./DeviceImage.vue";
 import { deviceKey, deviceName } from "../devices";
 import Icon from "./Icon.vue";
 import Splitter from "./Splitter.vue";
+import { persistedRef } from "../persist";
+import { colourAlpha, colourHex, composeColour, cssVar, parseHex, readPalette } from "../colour";
 import type { DeviceInfo, ImageMapView } from "../types";
 
 const props = defineProps<{
@@ -55,6 +57,60 @@ function swap(i: number) {
     /* ignore */
   }
 }
+
+// --- tile background colour ---------------------------------------------
+
+// Per device key, `#rrggbb[aa]`; unset = the panel colour. Picked in a
+// small popover on the tile (the fill button in its caption).
+const colours = persistedRef<Record<string, string>>("bindsight.stage.colours", {});
+const colourOpen = ref<string | null>(null);
+// The default tile colour first (clicking it drops the tile's own), then
+// the palette.
+const swatches = ref<string[]>([]);
+let defaultColour = "";
+
+function tileColour(key: string): string {
+  return colours.value[key] ?? defaultColour;
+}
+
+function tileStyle(key: string, share: number): Record<string, string | number> {
+  const own = colours.value[key];
+  return own ? { flexGrow: share, background: own } : { flexGrow: share };
+}
+
+function toggleColour(key: string) {
+  colourOpen.value = colourOpen.value === key ? null : key;
+}
+
+function pickSwatch(key: string, i: number, c: string) {
+  if (i === 0) {
+    const next = { ...colours.value };
+    delete next[key];
+    colours.value = next;
+  } else {
+    colours.value = { ...colours.value, [key]: composeColour(c, colourAlpha(tileColour(key))) };
+  }
+}
+
+function setHex(key: string, e: Event) {
+  const hex = parseHex((e.target as HTMLInputElement).value);
+  if (hex) colours.value = { ...colours.value, [key]: composeColour(hex, colourAlpha(tileColour(key))) };
+}
+
+function setAlpha(key: string, e: Event) {
+  colours.value = { ...colours.value, [key]: composeColour(colourHex(tileColour(key)), Number((e.target as HTMLInputElement).value)) };
+}
+
+function onKey(e: KeyboardEvent) {
+  if (e.key === "Escape") colourOpen.value = null;
+}
+
+onMounted(() => {
+  defaultColour = cssVar("--bg-surface").toLowerCase();
+  swatches.value = [defaultColour, ...readPalette().filter((c) => c !== defaultColour)];
+  window.addEventListener("keydown", onKey);
+});
+onUnmounted(() => window.removeEventListener("keydown", onKey));
 
 // Width share per tile; draggable gutters between neighbours. Remembered per
 // tile count so a HOTAS/HOSAS split survives a restart.
@@ -136,7 +192,7 @@ function onReset(i: number) {
   <div v-if="tiles.length" ref="stageEl" class="stage" :style="{ height: `${height}px`, '--image-max-h': `${height - 56}px` }">
     <template v-for="(t, i) in tiles" :key="t.device.index">
       <Splitter v-if="i > 0" direction="col" @drag="onDrag(i - 1, $event)" @end="onEnd" @reset="onReset(i - 1)" />
-      <div class="tile" :class="{ placeholder: !t.view }" :style="{ flexGrow: shares[i] ?? 1 }">
+      <div class="tile" :class="{ placeholder: !t.view }" :style="tileStyle(deviceKey(t.device), shares[i] ?? 1)">
         <div class="caption">
           <span class="name">{{ deviceName(t.device) }}</span>
           <button v-if="i > 0" type="button" class="move" title="Move left" @click="swap(i - 1)">
@@ -145,6 +201,53 @@ function onReset(i: number) {
           <button v-if="i < tiles.length - 1" type="button" class="move" title="Move right" @click="swap(i)">
             <Icon name="arrow-right" :size="14" />
           </button>
+          <button
+            type="button"
+            class="move"
+            :class="{ on: colourOpen === deviceKey(t.device) }"
+            title="Background colour"
+            @click="toggleColour(deviceKey(t.device))"
+          >
+            <Icon name="drop" :size="14" />
+          </button>
+        </div>
+        <!-- background colour picker, floating under the caption -->
+        <div v-if="colourOpen === deviceKey(t.device)" class="colour-pop">
+          <div class="swatches">
+            <button
+              v-for="(c, j) in swatches"
+              :key="c"
+              type="button"
+              class="swatch"
+              :class="{ on: colourHex(tileColour(deviceKey(t.device))) === c }"
+              :style="{ background: c }"
+              :title="j === 0 ? `Default · ${c}` : c"
+              @click="pickSwatch(deviceKey(t.device), j, c)"
+            />
+          </div>
+          <div class="line">
+            <span class="swatch big" :style="{ background: tileColour(deviceKey(t.device)) }" />
+            <input
+              class="hex mono"
+              :value="colourHex(tileColour(deviceKey(t.device)))"
+              maxlength="7"
+              spellcheck="false"
+              @change="setHex(deviceKey(t.device), $event)"
+            />
+            <input
+              type="range"
+              class="range"
+              min="0"
+              max="100"
+              :value="colourAlpha(tileColour(deviceKey(t.device)))"
+              title="Opacity"
+              @input="setAlpha(deviceKey(t.device), $event)"
+            />
+            <span class="mono val">{{ colourAlpha(tileColour(deviceKey(t.device))) }}%</span>
+            <button type="button" class="move" title="Close" @click="colourOpen = null">
+              <Icon name="close" :size="14" />
+            </button>
+          </div>
         </div>
         <DeviceImage
           v-if="t.view && imgSrc(t.view.map.id, t.view.map.image.file)"
@@ -199,8 +302,97 @@ function onReset(i: number) {
   cursor: pointer;
 }
 
-.move:hover {
+.move:hover,
+.move.on {
   color: var(--accent);
+}
+
+/* --- background colour popover (same controls as the editor's shape panel) --- */
+
+.colour-pop {
+  position: absolute;
+  top: 32px;
+  left: 12px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius-panel);
+  background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+}
+
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  padding: 0;
+  cursor: pointer;
+}
+
+.swatch.on {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+
+.swatch.big {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  cursor: default;
+}
+
+.line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hex {
+  width: 74px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-surface-2);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.val {
+  width: 40px;
+  text-align: right;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.range {
+  flex: 0 0 90px;
+  height: 4px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--bg-surface-3);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
 }
 
 .caption {

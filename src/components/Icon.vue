@@ -65,6 +65,8 @@ export const ICONS = {
   'shape-rect': '<rect x="4" y="5" width="16" height="14" rx="1"/>',
   'shape-ellipse': '<ellipse cx="12" cy="12" rx="8" ry="6"/>',
   'shape-polygon': '<path d="M12 3l8 6-3 10H7L4 9z"/>',
+  // A drop: pick a colour.
+  drop: '<path d="M12 3s6 7 6 11a6 6 0 0 1-12 0c0-4 6-11 6-11z"/>',
   // Any shape: a square behind a circle.
   shape: '<rect x="3" y="3" width="11" height="11" rx="1"/><circle cx="16" cy="16" r="5"/>',
   'shape-arrow': '<path d="M4 12h14M13 6l6 6-6 6"/>',

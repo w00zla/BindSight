@@ -23,6 +23,7 @@ import { deviceIcon, deviceName } from "../devices";
 import { KEY_COUNT, MOUSE_INPUTS, recording } from "../keyboard";
 import { persistedRef } from "../persist";
 import { NAME_MAX, sanitizeName, stripNameChars } from "../names";
+import { colourAlpha, colourHex, composeColour, cssVar, parseHex, readPalette, rgbaToHex } from "../colour";
 import {
   SYMBOL_PATHS,
   rectRadiusPx,
@@ -86,10 +87,6 @@ const ZOOMS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
 // --- colours ---------------------------------------------------------------
 
 // Konva needs literal colours; the tokens are the only place they are defined.
-function cssVar(name: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-}
-
 function withAlpha(colour: string, alpha: number): string {
   const m = /^#([0-9a-f]{6})$/i.exec(colour);
   if (!m) return colour;
@@ -97,21 +94,6 @@ function withAlpha(colour: string, alpha: number): string {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
-// --- shape colours (`#rrggbb` or `#rrggbbaa`) ------------------------------
-
-function colourHex(c: string): string {
-  return c.slice(0, 7).toLowerCase();
-}
-
-// Alpha of a colour in percent (100 when it has none).
-function colourAlpha(c: string): number {
-  return c.length === 9 ? Math.round((parseInt(c.slice(7, 9), 16) / 255) * 100) : 100;
-}
-
-function composeColour(hex: string, alpha: number): string {
-  const a = Math.round((Math.min(100, Math.max(0, alpha)) / 100) * 255);
-  return a >= 255 ? hex : `${hex}${a.toString(16).padStart(2, "0")}`;
-}
 
 // Filled once at mount — the stage only exists after an image has loaded.
 const paint = ref({
@@ -138,11 +120,7 @@ function readPaint() {
     tipText: cssVar("--text"),
   };
   const stroke = paint.value.shapeStroke.toLowerCase();
-  const palette = cssVar("--shape-palette")
-    .split(",")
-    .map((c) => c.trim().toLowerCase())
-    .filter((c) => /^#[0-9a-f]{6}$/.test(c) && c !== stroke);
-  swatches.value = [stroke, ...palette];
+  swatches.value = [stroke, ...readPalette().filter((c) => c !== stroke)];
 }
 
 // --- device / image-map selection -----------------------------------------
@@ -179,7 +157,7 @@ interface UnusedGroup {
   icon: "keyboard" | "gamepad" | "devices";
   maps: ImageMapSummary[];
 }
-const showUnused = persistedRef<boolean>("bindsight.devices.showUnused", false);
+const showUnused = ref(false);
 const unusedGroups = computed<UnusedGroup[]>(() => {
   const by = new Map<string, UnusedGroup>();
   for (const s of summaries.value) {
@@ -1063,16 +1041,12 @@ function roleColour(a: Shape, role: ColourRole): string {
   if (own) return own;
   if (role === "stroke") return paint.value.shapeStroke;
   // The fill token is an rgba(); its hex form with alpha for the picker.
-  const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/.exec(paint.value.shapeFill);
-  if (!m) return paint.value.shapeFill;
-  const hex = `#${[m[1], m[2], m[3]].map((n) => Number(n).toString(16).padStart(2, "0")).join("")}`;
-  return composeColour(hex, Math.round(Number(m[4] ?? 1) * 100));
+  return rgbaToHex(paint.value.shapeFill);
 }
 
 function setRoleHex(a: Shape, role: ColourRole, hex: string) {
-  const h = hex.trim().toLowerCase();
-  const full = h.startsWith("#") ? h : `#${h}`;
-  if (!/^#[0-9a-f]{6}$/.test(full)) return;
+  const full = parseHex(hex);
+  if (!full) return;
   a[role] = composeColour(full, colourAlpha(roleColour(a, role)));
 }
 

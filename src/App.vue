@@ -346,6 +346,9 @@ async function allSettled(): Promise<boolean> {
 }
 
 async function setMode(m: Mode) {
+  // The mode buttons do nothing while the startup tile is up (no disabled
+  // look on purpose).
+  if (starting.value) return;
   if (mode.value === "devices" && m !== "devices") {
     if ((await editor.value?.requestLeave()) === false) return;
   }

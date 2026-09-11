@@ -27,16 +27,16 @@
     {
       "id": "a2",
       "input": "pad:triggerl_btn",
-      "stroke": "#f2b34c",
-      "fill": "#f2b34c3a",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
       "geometry": {
         "kind": "rect",
-        "x": 0.2,
-        "y": 0.084706,
-        "w": 0.095833,
-        "h": 0.016471,
+        "x": 0.175,
+        "y": 0.018824,
+        "w": 0.145833,
+        "h": 0.096471,
         "rotation": 0.0,
-        "radius": 0.5
+        "radius": 0.3846153846153846
       }
     },
     {
@@ -57,16 +57,16 @@
     {
       "id": "a4",
       "input": "pad:triggerr_btn",
-      "stroke": "#f2b34c",
-      "fill": "#f2b34c3a",
+      "stroke": "#4ee0ff",
+      "fill": "#4ee0ff3a",
       "geometry": {
         "kind": "rect",
-        "x": 0.704167,
-        "y": 0.084706,
-        "w": 0.095833,
-        "h": 0.016471,
+        "x": 0.679167,
+        "y": 0.018824,
+        "w": 0.145833,
+        "h": 0.096471,
         "rotation": 0.0,
-        "radius": 0.5
+        "radius": 0.3846153846153846
       }
     },
     {
