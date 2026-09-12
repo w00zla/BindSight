@@ -59,21 +59,31 @@ function onNoBackupChoose(value: string) {
   if (value === "disable") autoBackup.value = false;
 }
 const debugLogging = ref(props.debugLogging);
-const withGuid = computed(() => props.devices.filter((d): d is DeviceInfo & { sc_product_guid: string } => !!d.sc_product_guid));
-const isExcluded = (guid: string) => excluded.value.some((g) => g.toLowerCase() === guid.toLowerCase());
-const addable = computed(() => withGuid.value.filter((d) => !isExcluded(d.sc_product_guid)));
+// Exclusion is by hardware id (a joystick's SC Product GUID, `keyboard`,
+// `gamepad`): any device can go, the keyboard too — whoever does not care
+// about it wants the screen space. Several pads are one entry.
+const withId = computed(() => {
+  const seen = new Set<string>();
+  return props.devices.filter((d): d is DeviceInfo & { hardware_id: string } => {
+    if (!d.hardware_id || seen.has(d.hardware_id.toLowerCase())) return false;
+    seen.add(d.hardware_id.toLowerCase());
+    return true;
+  });
+});
+const isExcluded = (id: string) => excluded.value.some((g) => g.toLowerCase() === id.toLowerCase());
+const addable = computed(() => withId.value.filter((d) => !isExcluded(d.hardware_id)));
 
-function nameFor(guid: string): string {
-  const d = withGuid.value.find((x) => x.sc_product_guid.toLowerCase() === guid.toLowerCase());
-  return d ? deviceName(d) : guid;
+function nameFor(id: string): string {
+  const d = withId.value.find((x) => x.hardware_id.toLowerCase() === id.toLowerCase());
+  return d ? deviceName(d) : id;
 }
 
-function remove(guid: string) {
-  excluded.value = excluded.value.filter((g) => g.toLowerCase() !== guid.toLowerCase());
+function remove(id: string) {
+  excluded.value = excluded.value.filter((g) => g.toLowerCase() !== id.toLowerCase());
 }
 
-function add(guid: string) {
-  if (guid && !isExcluded(guid)) excluded.value = [...excluded.value, guid];
+function add(id: string) {
+  if (id && !isExcluded(id)) excluded.value = [...excluded.value, id];
 }
 
 // Immediate, not part of Save: opens the folder in the file manager.
@@ -162,7 +172,7 @@ async function browseIni(slug: string) {
               variant="dashed"
               modelValue=""
               placeholder="Add device"
-              :options="addable.map((d) => ({ value: d.sc_product_guid, label: deviceName(d) }))"
+              :options="addable.map((d) => ({ value: d.hardware_id, label: deviceName(d) }))"
               @update:modelValue="add"
             />
           </div>

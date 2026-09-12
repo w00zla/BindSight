@@ -27,7 +27,9 @@ input from your joysticks, gamepad, keyboard and mouse.
   and a live input-event log, each savable as text.
 - **Game-file safety**: every write to a live game file takes a byte-exact
   verified backup first (unless you switch that off), every rewrite is
-  re-parsed before it touches the disk, and writes are atomic.
+  re-parsed before it touches the disk, and writes are atomic. Imported
+  image-maps are validated before anything lands on disk, and only the
+  files a map references are unpacked.
 
 Game data (action list, labels, input token names) is pulled out of your own
 install's `Data.p4k` at runtime with the bundled [StarBreaker](https://github.com/diogotr7/StarBreaker)

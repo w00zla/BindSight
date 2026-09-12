@@ -250,12 +250,16 @@ pub fn validate(p: &ImageMap) -> Result<(), String> {
     if p.hardware_id.trim().is_empty() {
         return Err("hardware id is empty".into());
     }
-    if !is_bare_name(&p.image.file) {
+    if !is_bare_name(&p.image.file) || !is_image_name(&p.image.file) {
         return Err(format!("invalid image file name {:?}", p.image.file));
     }
+    let mut ids = std::collections::HashSet::new();
     for sh in &p.shapes {
         if sh.id.trim().is_empty() || sh.input.trim().is_empty() {
             return Err("shape without id or input".into());
+        }
+        if !ids.insert(sh.id.as_str()) {
+            return Err(format!("duplicate shape id {:?}", sh.id));
         }
         for c in [&sh.stroke, &sh.fill].into_iter().flatten() {
             if !is_colour(c) {
@@ -263,12 +267,20 @@ pub fn validate(p: &ImageMap) -> Result<(), String> {
             }
         }
         if let Some(f) = sh.geometry.file() {
-            if !is_bare_name(f) {
+            if !is_bare_name(f) || !is_image_name(f) {
                 return Err(format!("invalid image file name {f:?} on shape {:?}", sh.id));
             }
         }
     }
     Ok(())
+}
+
+/// Image files carry one of the extensions the webview can show.
+const IMAGE_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "webp", "svg", "gif"];
+
+fn is_image_name(name: &str) -> bool {
+    name.rsplit_once('.')
+        .is_some_and(|(stem, ext)| !stem.is_empty() && IMAGE_EXTENSIONS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
 }
 
 /// `#rrggbb` or `#rrggbbaa`.
@@ -608,10 +620,12 @@ pub fn import(user_root: &Path, source: &Path) -> Result<ImageMapSummary, String
     }
     map.id = uuid::Uuid::new_v4().to_string();
 
-    // Pass 2: extract everything but the json (rewritten with the new id).
+    // Pass 2: extract only the files the map references (the json is
+    // rewritten with the new id); anything else in the zip stays there.
     let dir = user_root.join(&map.id);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    for (i, name) in entries.into_iter().filter(|(_, n)| n != MAP_FILE) {
+    let wanted: Vec<String> = map.files().iter().map(|f| f.to_string()).collect();
+    for (i, name) in entries.into_iter().filter(|(_, n)| wanted.contains(n)) {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
         let mut out = File::create(dir.join(&name)).map_err(|e| format!("{name}: {e}"))?;
         io::copy(&mut entry, &mut out).map_err(|e| format!("{name}: {e}"))?;
@@ -837,6 +851,26 @@ mod tests {
         assert!(validate(&p).is_err());
         let mut p = sample("p1", "ok");
         p.shapes[0].input = " ".into();
+        assert!(validate(&p).is_err());
+
+        // Shape ids are unique.
+        let mut p = sample("p1", "ok");
+        p.shapes.push(rect_shape("a1", "button:6"));
+        assert!(validate(&p).unwrap_err().contains("duplicate shape id"));
+
+        // Image files carry an image extension, whatever the case.
+        for ok in ["top.png", "TOP.PNG", "a.jpeg", "b.webp", "c.svg", "d.gif"] {
+            let mut p = sample("p1", "ok");
+            p.image.file = ok.into();
+            assert!(validate(&p).is_ok(), "{ok:?} should pass");
+        }
+        for bad in ["top", "top.", ".png", "top.exe", "top.html", "top.png.txt"] {
+            let mut p = sample("p1", "ok");
+            p.image.file = bad.into();
+            assert!(validate(&p).is_err(), "{bad:?} should be rejected");
+        }
+        let mut p = sample("p1", "ok");
+        p.shapes.push(image_shape("i", "glyph.js"));
         assert!(validate(&p).is_err());
     }
 
@@ -1093,6 +1127,14 @@ mod tests {
         let z = write_zip("badid.zip", &[("imagemap.json", &bad), ("top.png", PNG)]);
         assert!(import(&user, &z).is_err());
         assert!(!user.exists() || fs::read_dir(&user).unwrap().next().is_none());
+
+        // Only the files the map references land on disk.
+        let z = write_zip("extra.zip", &[("imagemap.json", &json), ("top.png", PNG), ("stray.png", PNG), ("notes.txt", b"x")]);
+        let imported = import(&user, &z).unwrap();
+        let dir = user.join(&imported.id);
+        assert!(dir.join("top.png").is_file());
+        assert!(!dir.join("stray.png").exists());
+        assert!(!dir.join("notes.txt").exists());
     }
 
     #[test]

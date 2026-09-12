@@ -183,7 +183,7 @@ function imgSrc(id: string, file: string): string {
 // bindings and no tile, and the user can hide any device by hand.
 function onStage(d: DeviceInfo): boolean {
   if (d.kind === "gamepad" && d.gamepad_slot === null) return false;
-  if (isExcluded(d.sc_product_guid)) return false;
+  if (isExcludedDevice(d)) return false;
   return !isStageHidden(d);
 }
 
@@ -421,6 +421,11 @@ function deviceOf(sdlGuid: string): DeviceInfo | undefined {
 // A joystick binding sits on the device SC ranks at its jsN (the game's own
 // order, never the saved <options> slot); without that order, on none.
 function deviceForBinding(b: ResolvedBinding): DeviceInfo | undefined {
+  const d = deviceForKind(b);
+  return d && !isExcludedDevice(d) ? d : undefined;
+}
+
+function deviceForKind(b: ResolvedBinding): DeviceInfo | undefined {
   if (b.device_kind === "keyboard") return devices.value.find((d) => d.kind === "keyboard");
   if (b.device_kind === "gamepad") return devices.value.find((d) => d.kind === "gamepad" && d.gamepad_slot !== null);
   const guid = slotByInstance.value.get(b.instance)?.sc_product_guid;
@@ -627,8 +632,19 @@ function isUnseen(guid: string | null): boolean {
   return !!guid && unseenGuids.value.has(guid);
 }
 
-function isExcluded(guid: string | null): boolean {
-  return !!guid && excludedDevices.value.some((g) => g.toLowerCase() === guid.toLowerCase());
+// The exclusion list holds hardware ids: the SC Product GUID of a joystick,
+// `keyboard`, `gamepad` (every pad is that one device to SC).
+function isExcluded(hardwareId: string | null): boolean {
+  return !!hardwareId && excludedDevices.value.some((g) => g.toLowerCase() === hardwareId.toLowerCase());
+}
+
+function isExcludedDevice(d: DeviceInfo): boolean {
+  return isExcluded(d.hardware_id);
+}
+
+// The hardware id behind a Last Input card entry.
+function hardwareIdOf(c: CurrentInput): string | null {
+  return c.kind === "keyboard" ? "keyboard" : c.kind === "gamepad" ? "gamepad" : c.sc_guid;
 }
 
 // Display order everywhere a device list is shown: the keyboard, the slotted
@@ -637,7 +653,7 @@ function isExcluded(guid: string | null): boolean {
 function deviceRank(d: DeviceInfo): number {
   if (d.kind === "keyboard") return 0;
   if (d.kind === "gamepad" && d.gamepad_slot === null) return 3;
-  if (deviceUnseen(d) || isExcluded(d.sc_product_guid)) return 3;
+  if (deviceUnseen(d) || isExcludedDevice(d)) return 3;
   return d.kind === "gamepad" ? 1 : 2;
 }
 const orderedDevices = computed<DeviceInfo[]>(() =>
@@ -646,7 +662,7 @@ const orderedDevices = computed<DeviceInfo[]>(() =>
 // The Monitor's device rail: excluded devices stay out of it (Settings and
 // the Devices mode still list them).
 const monitorDevices = computed<DeviceInfo[]>(() =>
-  orderedDevices.value.filter((d) => !isExcluded(d.sc_product_guid)),
+  orderedDevices.value.filter((d) => !isExcludedDevice(d)),
 );
 // Settings dialog Save: apply the exclusions and the environments; the
 // backend reloads when the active environment changed.
@@ -1024,9 +1040,10 @@ function sdlInputName(p: JoyInput): string {
 function liveState(): LiveState {
   const c = currentInput.value;
   if (!c) return "none";
-  if (c.kind === "joystick" && (isExcluded(c.sc_guid) || isUnseen(c.sc_guid))) return "unseen";
+  if (isExcluded(hardwareIdOf(c))) return "unseen";
+  if (c.kind === "joystick" && isUnseen(c.sc_guid)) return "unseen";
   if (c.kind === "joystick" && noOrder.value) return "noorder";
-  if (c.kind === "gamepad" && (isExcluded(c.sc_guid) || clash.value?.gamepad_seen === false)) return "unseen";
+  if (c.kind === "gamepad" && clash.value?.gamepad_seen === false) return "unseen";
   return c.actions.length ? "bound" : "none";
 }
 
@@ -1054,29 +1071,48 @@ onMounted(async () => {
   // Closing (top-bar button or the window manager) settles unsaved changes
   // first; `destroy` skips this handler, `close` would run it again.
   const win = getCurrentWindow();
-  unlisten.push(
-    await win.onCloseRequested(async (e) => {
-      e.preventDefault();
-      if (await allSettled()) await win.destroy();
-    }),
-  );
-  unlisten.push(await listen<JoyInput>("joy-input", (e) => onInput(e.payload)));
-  unlisten.push(
-    await listen("devices-changed", async () => {
-      await refreshDevices();
-      await reloadMaps();
-    }),
-  );
+  // Every startup step on its own: one that fails is reported and the
+  // rest still run, so a broken listener does not take the devices, the
+  // game data or the image-maps down with it.
+  const step = async (what: string, run: () => Promise<void>) => {
+    try {
+      await run();
+    } catch (e) {
+      console.error(`startup: ${what} failed`, e);
+      notify(`${what} failed: ${e}`, "error");
+    }
+  };
+  await step("Window close handling", async () => {
+    unlisten.push(
+      await win.onCloseRequested(async (e) => {
+        e.preventDefault();
+        if (await allSettled()) await win.destroy();
+      }),
+    );
+  });
+  await step("Input events", async () => {
+    unlisten.push(await listen<JoyInput>("joy-input", (e) => onInput(e.payload)));
+  });
+  await step("Device events", async () => {
+    unlisten.push(
+      await listen("devices-changed", async () => {
+        await refreshDevices();
+        await reloadMaps();
+      }),
+    );
+  });
   // Registered before the initial fetch below, so a load finishing in
   // between is not missed.
-  unlisten.push(await listen<LoadStatus>("scdata-changed", (e) => onScDataChanged(e.payload)));
-  unlisten.push(
-    await listen<ScStatus>("scdata-progress", (e) => {
-      scStatus.value = e.payload;
-    }),
-  );
+  await step("Game data events", async () => {
+    unlisten.push(await listen<LoadStatus>("scdata-changed", (e) => onScDataChanged(e.payload)));
+    unlisten.push(
+      await listen<ScStatus>("scdata-progress", (e) => {
+        scStatus.value = e.payload;
+      }),
+    );
+  });
   // The backend reloads actionmaps.xml itself once the game data is in.
-  await refreshDevices();
+  await step("Device list", refreshDevices);
 
   try {
     scStatus.value = await invoke<ScStatus>("get_sc_status");
@@ -1100,7 +1136,7 @@ onMounted(async () => {
     // Never leave the startup tile up: the other features work regardless.
     endStartup();
   }
-  await reloadMaps();
+  await step("Image-maps", reloadMaps);
 });
 
 onUnmounted(() => {
@@ -1191,7 +1227,7 @@ onUnmounted(() => {
         <LastInputCard
           :input="currentInput"
           :state="liveState()"
-          :excluded="isExcluded(currentInput?.sc_guid ?? null)"
+          :excluded="!!currentInput && isExcluded(hardwareIdOf(currentInput))"
           :tokenLabel="tokenLabel"
           :categoryLabel="actionmapLabel"
         />
@@ -1236,7 +1272,7 @@ onUnmounted(() => {
       :keyInput="keyInput"
       :chosenMapId="chosenMapId"
       :tokenLabel="tokenLabel"
-      :isExcluded="(d: DeviceInfo) => isExcluded(d.sc_product_guid)"
+      :isExcluded="isExcludedDevice"
       @choose="setMapChoice"
       @notify="notify"
       @saved="onMapsSaved"

@@ -357,13 +357,14 @@ fn guid_eq(a: Option<&str>, b: Option<&str>) -> bool {
     matches!((a, b), (Some(a), Some(b)) if a.eq_ignore_ascii_case(b))
 }
 
-/// Drop devices the user declared invisible to SC ("SC doesn't see this
-/// device", e.g. a keyboard Wine hides from the game). They then count as
-/// unplugged for the analysis. Matched by SC Product GUID, case-insensitively.
+/// Drop devices the user excluded (a device SC does not see, or one they
+/// do not care about). They then count as unplugged for the analysis.
+/// Matched by hardware id — a joystick's SC Product GUID, `keyboard`,
+/// `gamepad` — case-insensitively.
 pub fn without_excluded(devices: &[DeviceInfo], excluded: &[String]) -> Vec<DeviceInfo> {
     devices
         .iter()
-        .filter(|d| !excluded.iter().any(|g| guid_eq(Some(g), d.sc_product_guid.as_deref())))
+        .filter(|d| !excluded.iter().any(|g| guid_eq(Some(g), d.hardware_id.as_deref())))
         .cloned()
         .collect()
 }
@@ -551,6 +552,8 @@ mod tests {
             sc_name: Some(name.to_string()),
             sdl_name: name.to_string(),
             sc_product_guid: Some(guid.to_string()),
+            // A joystick's hardware id is its SC Product GUID.
+            hardware_id: Some(guid.to_string()),
             ..DeviceInfo::default()
         }
     }
@@ -746,14 +749,19 @@ mod tests {
     }
 
     #[test]
-    fn excluded_devices_are_dropped_by_guid_case_insensitively() {
-        let devs = [dev(KEYCHRON_K2HE, "K2 HE"), dev(VKB_R, "R")];
+    fn excluded_devices_are_dropped_by_hardware_id_case_insensitively() {
+        let keyboard = DeviceInfo { hardware_id: Some("keyboard".into()), ..DeviceInfo::default() };
+        let devs = [dev(KEYCHRON_K2HE, "K2 HE"), dev(VKB_R, "R"), keyboard];
         let excluded = vec![KEYCHRON_K2HE.to_ascii_lowercase()];
         let kept = without_excluded(&devs, &excluded);
-        assert_eq!(kept.len(), 1);
+        assert_eq!(kept.len(), 2);
         assert_eq!(kept[0].sc_product_guid.as_deref(), Some(VKB_R));
+        // The keyboard goes by its fixed id.
+        let kept = without_excluded(&devs, &["KEYBOARD".to_string()]);
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().all(|d| d.hardware_id.as_deref() != Some("keyboard")));
         // Nothing excluded -> untouched.
-        assert_eq!(without_excluded(&devs, &[]).len(), 2);
+        assert_eq!(without_excluded(&devs, &[]).len(), 3);
     }
 
     #[test]
