@@ -8,7 +8,6 @@ import { KEY_COUNT, MOUSE_INPUTS } from "../keyboard";
 const props = defineProps<{
   device: DeviceInfo;
   slot: SlotStatus | null;
-  excluded: boolean;
   unseen: boolean;
   bindingCount: number;
   // Taken off the image stage by the user.
@@ -18,7 +17,7 @@ const emit = defineEmits<{ toggleMap: [] }>();
 
 // A further pad holds no SC slot: it cannot carry bindings.
 const noSlot = computed(() => props.device.kind === "gamepad" && props.device.gamepad_slot === null);
-const dimmed = computed(() => props.excluded || props.unseen || noSlot.value);
+const dimmed = computed(() => props.unseen || noSlot.value);
 
 // Device kind icon at the start of the tile.
 const kindIcon = computed(() => deviceIcon(props.device));
@@ -42,7 +41,6 @@ const name = computed(() => deviceName(props.device));
 
 const state = computed(() => {
   const d = props.device;
-  if (props.excluded) return "excluded";
   if (noSlot.value) return "no slot";
   if (props.unseen) return "not seen by game";
   const counts =

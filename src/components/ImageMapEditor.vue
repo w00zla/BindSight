@@ -1790,7 +1790,7 @@ function noMaps(d: DeviceInfo): boolean {
                 @click="openMap(s.id)"
               >
                 <span class="map-name">{{ s.name }}</span>
-                <span class="map-mark" :title="s.id === props.chosenMapId(d) ? 'Shown on stage' : undefined">
+                <span class="map-mark" :title="s.id === props.chosenMapId(d) ? 'Shown in Monitor' : undefined">
                   <Icon v-if="s.id === props.chosenMapId(d)" name="check" :size="15" />
                 </span>
                 <span v-if="s.source === 'bundled'" class="ro" title="Read-only">

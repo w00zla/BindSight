@@ -444,10 +444,10 @@ function resolvePin(b: ResolvedBinding): PinTarget | { reason: string } {
   const d = deviceForBinding(b);
   if (!d) return { reason: `${b.device ?? "Device"} not connected` };
   const key = inputKeyForToken(b.token, d);
-  if (!key) return { reason: `${tokenLabel(b.token)}: no SDL axis for it (${d.axes_error ?? "not in HID descriptor"})` };
+  if (!key) return { reason: `${tokenLabel(b.token)}: no such axis on ${deviceName(d)}${d.axes_error ? ` (${d.axes_error})` : ""}` };
   const has = inMap(d.sdl_guid, key);
   if (has === null) return { reason: `${deviceName(d)} has no image-map` };
-  if (!has) return { reason: `No area for ${tokenLabel(b.token)}` };
+  if (!has) return { reason: `No shape for ${tokenLabel(b.token)}` };
   const keys = inputKeysForToken(b.token, d).filter((k) => inMap(d.sdl_guid, k));
   return { guid: d.sdl_guid, key, keys };
 }
@@ -767,7 +767,7 @@ function applyResolution(p: JoyInput, key: string, res: InputResolution) {
     const now = Date.now();
     if (lastMissingToast.key !== tk || now - lastMissingToast.at > TOAST_MS) {
       lastMissingToast = { key: tk, at: now };
-      notify(`No area for ${res.token ? tokenLabel(res.token) : currentInput.value.sdl}`, "error");
+      notify(`No shape for ${res.token ? tokenLabel(res.token) : currentInput.value.sdl}`, "error");
     }
   }
 }
@@ -1115,7 +1115,6 @@ onUnmounted(() => {
           :key="d.index"
           :device="d"
           :slot="slotFor(d.sc_product_guid)"
-          :excluded="isExcluded(d.sc_product_guid)"
           :unseen="deviceUnseen(d)"
           :bindingCount="bindingCountFor(d)"
           :hidden="isStageHidden(d)"

@@ -150,7 +150,7 @@ function inputText(token: string): string {
 }
 
 function rowTitle(b: ResolvedBinding): string | undefined {
-  return props.isMissing(b) ? `No area for ${props.tokenLabel(b.token)} on the ${b.device ?? "device"} image` : undefined;
+  return props.isMissing(b) ? `No shape for ${props.tokenLabel(b.token)} on the ${b.device ?? "device"} image` : undefined;
 }
 
 function deviceTitle(b: ResolvedBinding): string | undefined {
