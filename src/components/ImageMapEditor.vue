@@ -2348,9 +2348,7 @@ function noMaps(d: DeviceInfo): boolean {
             <div class="row group-row" :class="{ cur: g.key === currentKey }" @click="toggleBucket(g.key)">
               <span class="input-cell">
                 <Icon :name="isOpen(g) ? 'chevron-down' : 'chevron-right'" :size="14" class="chevron" />
-                <span class="cell-input mono" :title="g.key"
-                  ><Icon name="bolt" :size="12" class="live-mark" />{{ g.text }}</span
-                >
+                <span class="cell-input mono" :title="g.key">{{ g.text }}</span>
               </span>
               <span />
             </div>
@@ -2626,7 +2624,7 @@ function noMaps(d: DeviceInfo): boolean {
 }
 
 .dev {
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 9px 10px;
   display: flex;
@@ -3350,12 +3348,13 @@ function noMaps(d: DeviceInfo): boolean {
 .input-cell {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 
 .input-cell .chevron {
   flex-shrink: 0;
+  color: var(--text-3);
 }
 
 .input-cell .cell-input {
@@ -3366,12 +3365,6 @@ function noMaps(d: DeviceInfo): boolean {
   font-weight: 600;
 }
 
-.live-mark {
-  vertical-align: -2px;
-  margin-right: 6px;
-  opacity: 0;
-}
-
 /* The recorded input: live-coloured edge, text and bolt on its bucket. */
 .group-row.cur {
   border-left-color: var(--live);
@@ -3380,10 +3373,6 @@ function noMaps(d: DeviceInfo): boolean {
 
 .group-row.cur .cell-input {
   color: var(--live);
-}
-
-.group-row.cur .live-mark {
-  opacity: 1;
 }
 
 .shape-row.cur .cell-kind {
