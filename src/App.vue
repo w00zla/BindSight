@@ -600,6 +600,11 @@ function deviceRank(d: DeviceInfo): number {
 const orderedDevices = computed<DeviceInfo[]>(() =>
   [...devices.value].sort((a, b) => deviceRank(a) - deviceRank(b) || a.index - b.index),
 );
+// The Monitor's device rail: excluded devices stay out of it (Settings and
+// the Devices mode still list them).
+const monitorDevices = computed<DeviceInfo[]>(() =>
+  orderedDevices.value.filter((d) => !isExcluded(d.sc_product_guid)),
+);
 // Settings dialog Save: apply the exclusions and the environments; the
 // backend reloads when the active environment changed.
 async function applySettings(s: {
@@ -1106,7 +1111,7 @@ onUnmounted(() => {
         <div class="panel-title">Connected Devices</div>
         <div class="rail">
         <DeviceTile
-          v-for="d in orderedDevices"
+          v-for="d in monitorDevices"
           :key="d.index"
           :device="d"
           :slot="slotFor(d.sc_product_guid)"
@@ -1116,7 +1121,7 @@ onUnmounted(() => {
           :hidden="isStageHidden(d)"
           @toggleMap="toggleStageHidden(d)"
         />
-        <div v-if="!devices.length" class="tile-none">None</div>
+        <div v-if="!monitorDevices.length" class="tile-none">None</div>
         </div>
       </div>
       <StatusPanel
@@ -1189,6 +1194,7 @@ onUnmounted(() => {
       :keyInput="keyInput"
       :chosenMapId="chosenMapId"
       :tokenLabel="tokenLabel"
+      :isExcluded="(d: DeviceInfo) => isExcluded(d.sc_product_guid)"
       @choose="setMapChoice"
       @notify="notify"
       @saved="onMapsSaved"

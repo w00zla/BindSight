@@ -51,6 +51,9 @@ const props = defineProps<{
   chosenMapId: (d: DeviceInfo) => string | null;
   // SC's label for an input token; echoes the token when there is none.
   tokenLabel: (token: string | null) => string;
+  // The user excluded the device in Settings: it is left out of the
+  // image-map list (its maps show under "unused"), Device Info still has it.
+  isExcluded: (d: DeviceInfo) => boolean;
 }>();
 const emit = defineEmits<{
   notify: [message: string, type: "ok" | "error"];
@@ -129,7 +132,9 @@ function readPaint() {
 // image-maps" on, a hardware id no connected device has. Exactly one is set.
 const selectedGuid = ref("");
 const selectedUnusedHw = ref("");
-const device = computed(() => props.devices.find((d) => d.sdl_guid === selectedGuid.value) ?? null);
+// The devices the image-map list offers: the connected ones minus the excluded.
+const listed = computed(() => props.devices.filter((d) => !props.isExcluded(d)));
+const device = computed(() => listed.value.find((d) => d.sdl_guid === selectedGuid.value) ?? null);
 // Hardware id the listed image-maps belong to.
 const selectedHw = computed(() => device.value?.hardware_id ?? (selectedUnusedHw.value || null));
 
@@ -161,7 +166,7 @@ const showUnused = ref(false);
 const unusedGroups = computed<UnusedGroup[]>(() => {
   const by = new Map<string, UnusedGroup>();
   for (const s of summaries.value) {
-    if (props.devices.some((d) => sameHardware(d.hardware_id, s.hardware_id))) continue;
+    if (listed.value.some((d) => sameHardware(d.hardware_id, s.hardware_id))) continue;
     const key = s.hardware_id.toLowerCase();
     let g = by.get(key);
     if (!g) {
@@ -560,7 +565,7 @@ watch([() => map.value?.id, () => map.value?.image.file], () => {
 // has unsaved changes: the map does not depend on its device being plugged
 // in, and a hot-plug must not throw the edits away.
 watch(
-  () => props.devices,
+  listed,
   (list) => {
     if (list.some((d) => d.sdl_guid === selectedGuid.value)) return;
     // An unused hardware id whose device just connected: same maps, now
@@ -614,7 +619,7 @@ async function toggleShowUnused() {
   if (showUnused.value && selectedUnusedHw.value) {
     if (!(await requestLeave())) return;
     selectedUnusedHw.value = "";
-    selectedGuid.value = props.devices.find((d) => d.hardware_id)?.sdl_guid ?? "";
+    selectedGuid.value = listed.value.find((d) => d.hardware_id)?.sdl_guid ?? "";
     closeMap();
     await openFirst();
   }
@@ -796,7 +801,7 @@ async function importMap() {
     const s = await invoke<ImageMapSummary>("import_imagemap", { sourcePath: src });
     imgCache.clear();
     await loadSummaries();
-    const d = props.devices.find((dev) => sameHardware(dev.hardware_id, s.hardware_id));
+    const d = listed.value.find((dev) => sameHardware(dev.hardware_id, s.hardware_id));
     if (d) {
       selectedGuid.value = d.sdl_guid;
       selectedUnusedHw.value = "";
@@ -1760,7 +1765,7 @@ function noMaps(d: DeviceInfo): boolean {
           <span class="head-title">Image-Maps</span>
         </div>
         <div class="dev-list">
-          <template v-for="d in props.devices" :key="d.index">
+          <template v-for="d in listed" :key="d.index">
             <div
               class="dev"
               :class="{ on: d.sdl_guid === selectedGuid, dim: !d.hardware_id }"
