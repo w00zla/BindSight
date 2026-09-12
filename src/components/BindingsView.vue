@@ -394,8 +394,11 @@ function toggleApplyDevice(key: string) {
   applyDialog.value = { ...d, on };
 }
 
+// A backup is "restored", a profile "applied" — same mechanics.
+const applyWord = computed(() => (bBackup.value ? "Restore" : "Apply"));
+
 const applyButtons = computed<ConfirmButton[]>(() => [
-  { label: "Apply", kind: "primary", value: "apply", disabled: !applyDialog.value?.on.size || slotClashes.value.size > 0 },
+  { label: applyWord.value, kind: "primary", value: "apply", disabled: !applyDialog.value?.on.size || slotClashes.value.size > 0 },
   { label: "Cancel", kind: "outline", value: "cancel" },
 ]);
 
@@ -1349,8 +1352,8 @@ async function compareWith(key: string) {
         <span class="mono tile-facts tile-diff">{{ diffSummary }}</span>
         <div class="spacer" />
         <button type="button" class="btn primary small" :disabled="busy || !hasCurrent" @click="openApply">
-          <Icon name="check" :size="14" />
-          Apply
+          <Icon :name="bBackup ? 'rotate' : 'check'" :size="14" />
+          {{ applyWord }}
         </button>
         <button
           type="button"
@@ -1594,10 +1597,10 @@ async function compareWith(key: string) {
     <!-- apply a profile / backup: which devices' bindings to take over -->
     <ConfirmDialog
       v-if="applyDialog"
-      :title="`Apply ${nameFor(bKey)}`"
+      :title="`${applyWord} ${nameFor(bKey)}`"
       icon="check"
       :buttons="applyButtons"
-      :width="640"
+      :width="720"
       @choose="onApplyChoose"
     >
       <!-- one row per device: take it over or not, and for a joystick the
