@@ -86,11 +86,14 @@ const view = ref<"list" | "compare">("list");
 
 // --- confirm dialog --------------------------------------------------------
 
-const confirm = ref<{ title: string; icon: ConfirmIcon; buttons: ConfirmButton[] } | null>(null);
+const confirm = ref<{ title: string; icon: ConfirmIcon; buttons: ConfirmButton[]; subtitle?: string } | null>(null);
 let confirmResolve: ((value: string) => void) | null = null;
 
-function ask(title: string, icon: ConfirmIcon, buttons: ConfirmButton[]): Promise<string> {
-  confirm.value = { title, icon, buttons };
+// Every write into the game's bindings file needs a game restart to show.
+const RESTART_NOTE = "Takes effect after a game restart";
+
+function ask(title: string, icon: ConfirmIcon, buttons: ConfirmButton[], subtitle?: string): Promise<string> {
+  confirm.value = { title, icon, buttons, subtitle };
   return new Promise((resolve) => {
     confirmResolve = resolve;
   });
@@ -1139,10 +1142,15 @@ async function writeChanges(): Promise<boolean> {
 }
 
 async function saveChanges() {
-  const choice = await ask(`Save ${changesText()}?`, "save", [
-    { label: "Save", kind: "primary", value: "save" },
-    { label: "Cancel", kind: "outline", value: "cancel" },
-  ]);
+  const choice = await ask(
+    `Save ${changesText()}?`,
+    "save",
+    [
+      { label: "Save", kind: "primary", value: "save" },
+      { label: "Cancel", kind: "outline", value: "cancel" },
+    ],
+    RESTART_NOTE,
+  );
   if (choice === "save") await writeChanges();
 }
 
@@ -1158,11 +1166,16 @@ async function discardChanges() {
 // Discard, or the save went through.
 async function requestLeave(): Promise<boolean> {
   if (!dirty.value) return true;
-  const choice = await ask("Unsaved changes", "save", [
-    { label: "Discard", kind: "danger", value: "discard" },
-    { label: "Save", kind: "primary", value: "save" },
-    { label: "Keep Editing", kind: "outline", value: "keep" },
-  ]);
+  const choice = await ask(
+    "Unsaved changes",
+    "save",
+    [
+      { label: "Discard", kind: "danger", value: "discard" },
+      { label: "Save", kind: "primary", value: "save" },
+      { label: "Keep Editing", kind: "outline", value: "keep" },
+    ],
+    RESTART_NOTE,
+  );
   if (choice === "keep") return false;
   if (choice === "save") return await writeChanges();
   pending.value.clear();
@@ -1573,7 +1586,14 @@ async function compareWith(key: string) {
     </section>
     </div>
 
-    <ConfirmDialog v-if="confirm" :title="confirm.title" :icon="confirm.icon" :buttons="confirm.buttons" @choose="onConfirm" />
+    <ConfirmDialog
+      v-if="confirm"
+      :title="confirm.title"
+      :subtitle="confirm.subtitle"
+      :icon="confirm.icon"
+      :buttons="confirm.buttons"
+      @choose="onConfirm"
+    />
 
     <!-- save the live file as a binding profile -->
     <ConfirmDialog
@@ -1647,6 +1667,7 @@ async function compareWith(key: string) {
           </span>
         </div>
       </div>
+      <p class="dialog-note">{{ RESTART_NOTE }}</p>
     </ConfirmDialog>
 
     <!-- rebind: every device at once; Record or Clear changes a kind, Apply queues the changes -->
@@ -1746,6 +1767,13 @@ async function compareWith(key: string) {
 
 /* Own checkbox look (mirrors SettingsDialog): WebKitGTK would paint GTK's. */
 /* Device · Apply · To slot, one line per device. */
+/* Under the device table: the restart reminder, like the Fix via Config dialog. */
+.dialog-note {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
 .apply-table {
   display: flex;
   flex-direction: column;

@@ -122,7 +122,7 @@ const hasIssue = computed(
       ]"
       @choose="onConfirmApply"
     >
-      <p class="dialog-note">Restart the game afterwards for the changes to take effect.</p>
+      <p class="dialog-note">Takes effect after a game restart</p>
     </ConfirmDialog>
 
     <ConfirmDialog
@@ -325,8 +325,8 @@ const hasIssue = computed(
 /* Fix via config dialog body (slot content of ConfirmDialog). */
 .dialog-note {
   margin: 0;
-  font-size: 14px;
-  color: var(--text-2);
+  font-size: 12px;
+  color: var(--text-3);
 }
 
 /* Fix via console dialog body (slot content of ConfirmDialog). */
