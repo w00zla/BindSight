@@ -507,14 +507,43 @@ function trackActive(p: JoyInput) {
   );
 }
 
+// The buttons the backend derives from each pad stick axis (`thumbl_left`
+// past half travel of `thumblx`); a trigger arrives only as its derived
+// button (`triggerl_btn`), never as an axis. None of them is a modifier —
+// SC's pad combos (`shoulderl+thumbl_left`) start with a real button — and
+// while a stick direction is held its axis stays off the Last Input card,
+// or the axis and the button would take turns there.
+const PAD_DERIVED: Record<string, string[]> = {
+  thumblx: ["thumbl_left", "thumbl_right"],
+  thumbly: ["thumbl_up", "thumbl_down"],
+  thumbrx: ["thumbr_left", "thumbr_right"],
+  thumbry: ["thumbr_up", "thumbr_down"],
+};
+const DERIVED_NAMES = new Set([...Object.values(PAD_DERIVED).flat(), "triggerl_btn", "triggerr_btn", "triggerl_r_btn"]);
+
 // Currently held key/pad-button names per device GUID, most recent first: the
-// modifier candidates for the next press (`kb1_lalt+x`).
+// modifier candidates for the next press (`kb1_lalt+x`). Derived pad buttons
+// are kept apart, see `PAD_DERIVED`.
 const heldNames = new Map<string, string[]>();
+const heldDerived = new Map<string, Set<string>>();
 
 function trackHeld(p: JoyInput) {
   if (p.kind !== "key" && p.kind !== "padbutton") return;
+  if (p.kind === "padbutton" && DERIVED_NAMES.has(p.name)) {
+    const set = heldDerived.get(p.guid) ?? new Set<string>();
+    if (p.pressed) set.add(p.name);
+    else set.delete(p.name);
+    heldDerived.set(p.guid, set);
+    return;
+  }
   const rest = (heldNames.get(p.guid) ?? []).filter((n) => n !== p.name);
   heldNames.set(p.guid, p.pressed ? [p.name, ...rest] : rest);
+}
+
+// Is a button derived from this pad axis held right now?
+function derivedHeld(guid: string, axis: string): boolean {
+  const set = heldDerived.get(guid);
+  return !!set && (PAD_DERIVED[axis] ?? []).some((n) => set.has(n));
 }
 
 // SC's own display label for a full token, e.g. "js2_button1" -> "Button 1
@@ -822,7 +851,7 @@ function eventToken(p: JoyInput): string | null {
 // One path for every live input, whatever made it: the raw log collects in
 // every mode, the editor owns the input while an image-map is being edited.
 function onInput(p: JoyInput) {
-  events.value.unshift({ ...p, at: Date.now(), token: eventToken(p) });
+  events.value.unshift({ ...p, id: ++eventSeq, at: Date.now(), token: eventToken(p) });
   if (events.value.length > MAX_EVENTS) events.value.pop();
   trackHeld(p);
   if (p.kind === "key") keyInput.value = p;
@@ -843,7 +872,7 @@ function onInput(p: JoyInput) {
       if (axisDue(p.guid, `axis:${p.index}`)) showBinding(p);
       break;
     case "padaxis":
-      if (axisDue(p.guid, `pad:${p.name}`)) showBinding(p);
+      if (!derivedHeld(p.guid, p.name) && axisDue(p.guid, `pad:${p.name}`)) showBinding(p);
       break;
   }
 }
@@ -860,6 +889,7 @@ const toasts = ref<Toast[]>([]);
 // The last "not in image-map" toast for a live input, to avoid stacking.
 let lastMissingToast = { key: "", at: 0 };
 let toastSeq = 0;
+let eventSeq = 0;
 
 // Show a transient toast that dismisses itself after a few seconds.
 function notify(message: string, type: "ok" | "error" = "ok") {
@@ -1007,6 +1037,7 @@ let stopMouse: (() => void) | null = null;
 // A pad button held while the window loses focus would stay a modifier.
 function clearHeld() {
   heldNames.clear();
+  heldDerived.clear();
 }
 
 onMounted(async () => {

@@ -9,7 +9,7 @@ import Dropdown from "./Dropdown.vue";
 import Splitter from "./Splitter.vue";
 import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
 import ConfirmDialog, { type ConfirmButton, type ConfirmIcon } from "./ConfirmDialog.vue";
-import { KIND_RANK, kindIcon } from "../devices";
+import { AXIS_PRESS, KIND_RANK, kindIcon } from "../devices";
 import { persistedRef } from "../persist";
 import { recording } from "../keyboard";
 import { NAME_MAX, sanitizeName, stripNameChars } from "../names";
@@ -970,9 +970,6 @@ function isLiveCell(row: ListRow, col: DeviceCol): boolean {
 }
 
 // --- rebind dialog ---------------------------------------------------------
-
-// Past half travel an axis counts as pressed.
-const AXIS_PRESS = 16384;
 
 interface RebindState {
   row: ListRow;

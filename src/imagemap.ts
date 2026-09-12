@@ -101,9 +101,18 @@ export function inputKey(ev: JoyInput): string | null {
   }
 }
 
+// The parts of a keyboard / gamepad token name: a combo's modifiers and its
+// last part ("lalt+x" -> ["lalt", "x"]); SC's both-triggers button is the
+// two trigger buttons.
+function tokenParts(name: string): string[] {
+  if (name === "triggerl_r_btn") return ["triggerl_btn", "triggerr_btn"];
+  return name.split("+").filter(Boolean);
+}
+
 // Everything after the last `+` of a combo token, e.g. "lalt+x" -> "x".
 function comboTail(name: string): string {
-  return name.slice(name.lastIndexOf("+") + 1);
+  const parts = tokenParts(name);
+  return parts[parts.length - 1] ?? "";
 }
 
 // Image-map input key for an SC token on a device. Joystick tokens undo the +1
@@ -139,7 +148,7 @@ export function inputKeysForToken(token: string, d: DeviceInfo): string[] {
   if (!main) return [];
   const prefix = token.startsWith("kb1_") ? "key" : token.startsWith("gp1_") ? "pad" : null;
   if (!prefix) return [main];
-  const modifiers = token.slice(4).split("+").slice(0, -1).filter(Boolean);
+  const modifiers = tokenParts(token.slice(4)).slice(0, -1);
   return [...modifiers.map((m) => `${prefix}:${m}`), main];
 }
 

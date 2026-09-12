@@ -19,7 +19,7 @@ import Splitter from "./Splitter.vue";
 import ColumnHead from "./ColumnHead.vue";
 import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
 import type { DeviceInfo, JoyInput, LoggedInput } from "../types";
-import { deviceIcon, deviceName } from "../devices";
+import { AXIS_PRESS, deviceIcon, deviceName } from "../devices";
 import { KEY_COUNT, MOUSE_INPUTS, recording } from "../keyboard";
 import { persistedRef } from "../persist";
 import { NAME_MAX, sanitizeName, stripNameChars } from "../names";
@@ -848,10 +848,12 @@ async function replaceImage() {
 let unlisten: UnlistenFn[] = [];
 
 // Record takes the next input of the selected device as the current one
-// (mouse included, see keyboard.ts); Escape (a plain key event, never an
-// input) stops a recording, see `onEditorKey`.
+// (mouse included, see keyboard.ts); an axis counts once it is pressed
+// past AXIS_PRESS, like in the rebind dialog. Escape (a plain key event,
+// never an input) stops a recording, see `onEditorKey`.
 function takeInput(ev: JoyInput) {
   if (!recording.value || ev.guid !== selectedGuid.value) return;
+  if ((ev.kind === "axis" || ev.kind === "padaxis") && Math.abs(ev.value) < AXIS_PRESS) return;
   const key = inputKey(ev);
   if (!key) return;
   currentKey.value = key;
@@ -1991,7 +1993,7 @@ function noMaps(d: DeviceInfo): boolean {
             </button>
           </div>
           <div class="log mono">
-            <div v-for="(ev, i) in props.events" :key="i" class="log-line">
+            <div v-for="ev in props.events" :key="ev.id" class="log-line">
               <span class="log-time">{{ clock(ev.at) }}</span>
               <span class="log-key">#{{ deviceOfGuid(ev.guid)?.index ?? "?" }} {{ shortGuid(ev.guid) }}</span>
               <span class="log-device">{{ nameOfGuid(ev.guid) }}</span>

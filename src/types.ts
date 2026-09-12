@@ -78,7 +78,8 @@ export type JoyInput =
 
 // A JoyInput as kept in the Device Info view, with the wall-clock time it
 // arrived and the SC token it stood for then (null when SC cannot bind it).
-export type LoggedInput = JoyInput & { at: number; token: string | null };
+// `id` is a running number, the stable key of a log line.
+export type LoggedInput = JoyInput & { id: number; at: number; token: string | null };
 
 // Top-level GUI mode.
 export type Mode = "monitor" | "bindings" | "devices";

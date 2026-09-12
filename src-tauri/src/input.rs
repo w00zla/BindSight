@@ -38,10 +38,29 @@ use crate::scdata::DeviceKind;
 /// forwarded value, so continuous jitter does not flood the frontend.
 const AXIS_EMIT_THRESHOLD: i32 = 3000;
 
-/// Half of SDL's axis range: the point at which a gamepad trigger or thumb
-/// stick direction counts as a pressed button (SC's `triggerl_btn`,
-/// `thumbl_left`, …, which have no axis of their own).
-const DERIVED_BUTTON_THRESHOLD: i16 = 16384;
+/// And at most this often per axis (SDL event time, ms): two sticks worked
+/// at once produce hundreds of motion events a second, more than the
+/// webview can pulse, resolve and log without lagging. A return to the
+/// centre always goes through, so a rested axis never looks held.
+const AXIS_MIN_INTERVAL_MS: u32 = 20;
+
+/// App-side resting zones around an axis centre (the game's own per-device
+/// deadzones from `<deviceoptions>` are not read yet): a value inside the
+/// zone counts as the centre, so a stick at rest produces no event at all —
+/// nothing pulses, resolves or gets recorded. Joysticks: ~12 % of travel.
+/// Gamepads: Microsoft's XInput constants, rounded —
+/// `XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE` 7849 and
+/// `XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE` 8689 (~25 %), and
+/// `XINPUT_GAMEPAD_TRIGGER_THRESHOLD` 30 of 255 (~12 %).
+const JOYSTICK_DEADZONE: i16 = 4000;
+const PAD_THUMB_DEADZONE: i16 = 8000;
+const PAD_TRIGGER_DEADZONE: i16 = 4000;
+
+/// About three quarters of SDL's axis range: the point at which a gamepad
+/// trigger or thumb stick direction counts as a pressed button (SC's
+/// `triggerl_btn`, `thumbl_left`, …, which have no axis of their own). SC's
+/// own threshold is unknown; half travel felt too early (user, 2026-09-12).
+const DERIVED_BUTTON_THRESHOLD: i16 = 24000;
 
 /// SDL index of the synthetic keyboard entry — far beyond any real device, so
 /// it never collides and always sorts last.
@@ -188,6 +207,65 @@ fn pad_axis_name(axis: Axis) -> &'static str {
     }
 }
 
+/// The resting zone of a pad axis, see [`JOYSTICK_DEADZONE`].
+fn pad_axis_deadzone(axis: Axis) -> i16 {
+    match axis {
+        Axis::LeftX | Axis::LeftY | Axis::RightX | Axis::RightY => PAD_THUMB_DEADZONE,
+        Axis::TriggerLeft | Axis::TriggerRight => PAD_TRIGGER_DEADZONE,
+    }
+}
+
+/// Whether an axis motion is worth forwarding: moved by more than the jitter
+/// threshold since the last forwarded value, and either back at the centre
+/// or at least [`AXIS_MIN_INTERVAL_MS`] after the last forwarded event.
+fn axis_due(value: i16, prev: i16, timestamp: u32, last_at: Option<u32>) -> bool {
+    if (value as i32 - prev as i32).abs() <= AXIS_EMIT_THRESHOLD {
+        return false;
+    }
+    value == 0 || last_at.is_none_or(|t| timestamp.wrapping_sub(t) >= AXIS_MIN_INTERVAL_MS)
+}
+
+/// The other axis of a pad stick, for the dominance rule.
+fn pad_stick_partner(axis: Axis) -> Option<Axis> {
+    match axis {
+        Axis::LeftX => Some(Axis::LeftY),
+        Axis::LeftY => Some(Axis::LeftX),
+        Axis::RightX => Some(Axis::RightY),
+        Axis::RightY => Some(Axis::RightX),
+        Axis::TriggerLeft | Axis::TriggerRight => None,
+    }
+}
+
+/// The other axis of a joystick's stick (SC's `x` / `y`), by the device's
+/// SC axis names; anything else (twist, sliders, a mini stick) stands alone.
+fn joystick_stick_partner(axes: &[String], idx: u8) -> Option<u8> {
+    let other = match axes.get(idx as usize)?.as_str() {
+        "x" => "y",
+        "y" => "x",
+        _ => return None,
+    };
+    axes.iter().position(|a| a == other).map(|i| i as u8)
+}
+
+/// Whether an axis leads its stick: a stick pushed diagonally moves both
+/// axes, and only the one deflected further is forwarded, so what the card
+/// shows and what the image lights is one input, not two taking turns. The
+/// centre (0) always passes, and an axis without a partner always leads.
+fn leads_stick(value: i16, partner: Option<i16>) -> bool {
+    value == 0 || partner.is_none_or(|p| (value as i32).abs() >= (p as i32).abs())
+}
+
+/// An axis value with its resting zone applied: the centre inside the zone,
+/// the raw value outside it (no rescaling — what the device reports is what
+/// the event carries).
+fn apply_deadzone(value: i16, deadzone: i16) -> i16 {
+    if (value as i32).abs() < deadzone as i32 {
+        0
+    } else {
+        value
+    }
+}
+
 /// The buttons SC derives from a pad axis, as `(name, pressed)` for the
 /// current axis value: triggers press past half travel, thumb sticks press in
 /// each direction. SDL's Y axis is negative upwards.
@@ -204,6 +282,13 @@ fn derived_pad_buttons(axis: Axis, value: i16) -> Vec<(&'static str, bool)> {
         (low, value <= -DERIVED_BUTTON_THRESHOLD),
         (high, value >= DERIVED_BUTTON_THRESHOLD),
     ]
+}
+
+/// SC's `triggerl_r_btn` ("Left and Right Trigger", the Melee Block default):
+/// pressed while both derived trigger buttons are.
+fn both_triggers(derived: &HashMap<(u32, &'static str), bool>, which: u32) -> bool {
+    derived.get(&(which, "triggerl_btn")).copied().unwrap_or(false)
+        && derived.get(&(which, "triggerr_btn")).copied().unwrap_or(false)
 }
 
 /// The synthetic keyboard entry, appended last to every device list. SC knows
@@ -482,8 +567,11 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
     };
     // instance_id -> SDL GUID, to tag outgoing events
     let mut guids: HashMap<u32, String> = HashMap::new();
-    // (instance_id, axis) -> last forwarded value, for jitter throttling
-    let mut last_axis: HashMap<(u32, u8), i16> = HashMap::new();
+    // (instance_id, axis) -> last forwarded value and its time, for throttling
+    let mut last_axis: HashMap<(u32, u8), (i16, u32)> = HashMap::new();
+    // (instance_id, axis) -> latest value after the deadzone, forwarded or
+    // not, so a stick's other axis is known for the dominance rule
+    let mut raw_axis: HashMap<(u32, u8), i16> = HashMap::new();
     // (instance_id, derived button) -> last emitted state, so a stick held
     // past the threshold reports one press, not one per axis event
     let mut derived: HashMap<(u32, &'static str), bool> = HashMap::new();
@@ -497,6 +585,7 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
         match event {
             Event::JoyDeviceAdded { .. } | Event::JoyDeviceRemoved { .. } => {
                 last_axis.clear();
+                raw_axis.clear();
                 derived.clear();
                 reopen_all(&joystick, &controllers, &mut opened, &mut guids, &app, &devices)?;
             }
@@ -532,9 +621,20 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
                 }
             }
             Event::JoyAxisMotion { timestamp, which, axis_idx, value, .. } if !opened.pad_instances.contains(&which) => {
-                let prev = last_axis.get(&(which, axis_idx)).copied().unwrap_or(0);
-                if (value as i32 - prev as i32).abs() > AXIS_EMIT_THRESHOLD {
-                    last_axis.insert((which, axis_idx), value);
+                let value = apply_deadzone(value, JOYSTICK_DEADZONE);
+                raw_axis.insert((which, axis_idx), value);
+                let partner = opened
+                    .infos
+                    .iter()
+                    .find(|d| d.sdl_instance_id == which)
+                    .and_then(|d| joystick_stick_partner(&d.axes, axis_idx))
+                    .and_then(|p| raw_axis.get(&(which, p)).copied());
+                if !leads_stick(value, partner) {
+                    continue;
+                }
+                let last = last_axis.get(&(which, axis_idx)).copied();
+                if axis_due(value, last.map_or(0, |l| l.0), timestamp, last.map(|l| l.1)) {
+                    last_axis.insert((which, axis_idx), (value, timestamp));
                     if let Some(guid) = guids.get(&which) {
                         let _ = app.emit(
                             "joy-input",
@@ -573,6 +673,7 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
             }
             Event::ControllerAxisMotion { timestamp, which, axis, value } => {
                 let Some(guid) = guids.get(&which).cloned() else { continue };
+                let value = apply_deadzone(value, pad_axis_deadzone(axis));
                 // SC's trigger/thumb-direction "buttons" have no axis, so they
                 // are derived here and reported only when they change.
                 for (name, pressed) in derived_pad_buttons(axis, value) {
@@ -589,13 +690,38 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
                         );
                     }
                 }
+                // A trigger is only ever its derived button: SC labels the
+                // axis token (`gp1_triggerl`) like the button and ships no
+                // default on it, so the app does not know the axis at all.
+                // Both buttons together are a third one, `triggerl_r_btn`.
+                if matches!(axis, Axis::TriggerLeft | Axis::TriggerRight) {
+                    let both = both_triggers(&derived, which);
+                    if derived.insert((which, "triggerl_r_btn"), both) != Some(both) {
+                        let _ = app.emit(
+                            "joy-input",
+                            InputEvent::PadButton {
+                                guid: guid.clone(),
+                                name: "triggerl_r_btn".to_string(),
+                                pressed: both,
+                                timestamp,
+                                instance_id: which,
+                            },
+                        );
+                    }
+                    continue;
+                }
                 // The axis itself is throttled like a joystick axis. SDL
                 // controller axes are numbered 0..5, so they share the map
                 // without colliding with the raw axes (which are dropped).
                 let idx = axis as u8;
-                let prev = last_axis.get(&(which, idx)).copied().unwrap_or(0);
-                if (value as i32 - prev as i32).abs() > AXIS_EMIT_THRESHOLD {
-                    last_axis.insert((which, idx), value);
+                raw_axis.insert((which, idx), value);
+                let partner = pad_stick_partner(axis).and_then(|p| raw_axis.get(&(which, p as u8)).copied());
+                if !leads_stick(value, partner) {
+                    continue;
+                }
+                let last = last_axis.get(&(which, idx)).copied();
+                if axis_due(value, last.map_or(0, |l| l.0), timestamp, last.map(|l| l.1)) {
+                    last_axis.insert((which, idx), (value, timestamp));
                     let _ = app.emit(
                         "joy-input",
                         InputEvent::PadAxis {
@@ -670,11 +796,73 @@ mod tests {
     use super::*;
 
     #[test]
+    fn deadzone_flattens_rest_and_keeps_travel() {
+        assert_eq!(apply_deadzone(0, JOYSTICK_DEADZONE), 0);
+        assert_eq!(apply_deadzone(3999, JOYSTICK_DEADZONE), 0);
+        assert_eq!(apply_deadzone(-3999, JOYSTICK_DEADZONE), 0);
+        assert_eq!(apply_deadzone(4000, JOYSTICK_DEADZONE), 4000);
+        assert_eq!(apply_deadzone(-32768, JOYSTICK_DEADZONE), -32768);
+        assert_eq!(apply_deadzone(32767, JOYSTICK_DEADZONE), 32767);
+
+        // Pads: XInput's zones, rounded.
+        assert_eq!(pad_axis_deadzone(Axis::LeftY), 8000);
+        assert_eq!(pad_axis_deadzone(Axis::RightX), 8000);
+        assert_eq!(pad_axis_deadzone(Axis::TriggerRight), 4000);
+        assert_eq!(apply_deadzone(7999, pad_axis_deadzone(Axis::LeftX)), 0);
+        assert_eq!(apply_deadzone(8000, pad_axis_deadzone(Axis::LeftX)), 8000);
+        assert_eq!(apply_deadzone(3000, pad_axis_deadzone(Axis::TriggerLeft)), 0);
+    }
+
+    #[test]
+    fn axis_events_are_rate_limited_but_the_centre_always_passes() {
+        // Jitter below the threshold never passes, whatever the timing.
+        assert!(!axis_due(2000, 0, 1000, None));
+        // The first real move passes, the next one only after the interval.
+        assert!(axis_due(10000, 0, 1000, None));
+        assert!(!axis_due(20000, 10000, 1010, Some(1000)));
+        assert!(axis_due(20000, 10000, 1020, Some(1000)));
+        // Back to the centre passes at once.
+        assert!(axis_due(0, 20000, 1021, Some(1020)));
+    }
+
+    #[test]
+    fn the_further_deflected_axis_leads_its_stick() {
+        assert!(leads_stick(10000, None)); // no partner: always
+        assert!(leads_stick(10000, Some(0)));
+        assert!(leads_stick(10000, Some(10000))); // a tie goes to the mover
+        assert!(!leads_stick(10000, Some(-20000)));
+        assert!(leads_stick(0, Some(-20000))); // the centre always passes
+
+        assert_eq!(pad_stick_partner(Axis::LeftX), Some(Axis::LeftY));
+        assert_eq!(pad_stick_partner(Axis::RightY), Some(Axis::RightX));
+        assert_eq!(pad_stick_partner(Axis::TriggerLeft), None);
+
+        let axes: Vec<String> = ["x", "y", "z", "rotx", "roty", "rotz"].map(String::from).into();
+        assert_eq!(joystick_stick_partner(&axes, 0), Some(1));
+        assert_eq!(joystick_stick_partner(&axes, 1), Some(0));
+        assert_eq!(joystick_stick_partner(&axes, 5), None); // twist stands alone
+        assert_eq!(joystick_stick_partner(&axes, 9), None); // no such axis
+    }
+
+    #[test]
+    fn both_triggers_make_the_combo_button() {
+        let mut derived = HashMap::new();
+        assert!(!both_triggers(&derived, 7));
+        derived.insert((7, "triggerl_btn"), true);
+        assert!(!both_triggers(&derived, 7));
+        derived.insert((7, "triggerr_btn"), true);
+        assert!(both_triggers(&derived, 7));
+        assert!(!both_triggers(&derived, 8)); // another pad
+        derived.insert((7, "triggerl_btn"), false);
+        assert!(!both_triggers(&derived, 7));
+    }
+
+    #[test]
     fn derives_trigger_and_thumb_buttons_from_axes() {
         // Triggers rest at 0 and press past half travel.
         assert_eq!(derived_pad_buttons(Axis::TriggerLeft, 0), vec![("triggerl_btn", false)]);
-        assert_eq!(derived_pad_buttons(Axis::TriggerLeft, 16383), vec![("triggerl_btn", false)]);
-        assert_eq!(derived_pad_buttons(Axis::TriggerLeft, 16384), vec![("triggerl_btn", true)]);
+        assert_eq!(derived_pad_buttons(Axis::TriggerLeft, 23999), vec![("triggerl_btn", false)]);
+        assert_eq!(derived_pad_buttons(Axis::TriggerLeft, 24000), vec![("triggerl_btn", true)]);
         assert_eq!(derived_pad_buttons(Axis::TriggerRight, 32767), vec![("triggerr_btn", true)]);
 
         // A thumb stick reports both directions of its axis, never both at once.
@@ -683,16 +871,16 @@ mod tests {
             vec![("thumbl_left", false), ("thumbl_right", false)]
         );
         assert_eq!(
-            derived_pad_buttons(Axis::LeftX, -20000),
+            derived_pad_buttons(Axis::LeftX, -30000),
             vec![("thumbl_left", true), ("thumbl_right", false)]
         );
         // SDL's Y axis is negative upwards.
         assert_eq!(
-            derived_pad_buttons(Axis::LeftY, -20000),
+            derived_pad_buttons(Axis::LeftY, -30000),
             vec![("thumbl_up", true), ("thumbl_down", false)]
         );
         assert_eq!(
-            derived_pad_buttons(Axis::RightY, 20000),
+            derived_pad_buttons(Axis::RightY, 30000),
             vec![("thumbr_up", false), ("thumbr_down", true)]
         );
     }
