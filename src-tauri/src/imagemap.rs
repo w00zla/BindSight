@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use base64::Engine;
-use log::{error, warn};
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager, State};
@@ -680,22 +680,30 @@ pub(crate) fn create_imagemap(
     image_path: String,
     app: AppHandle,
 ) -> Result<ImageMap, String> {
-    create(&user_root(&app)?, &name, &hardware_id, hardware_name.as_deref().unwrap_or(""), Path::new(&image_path))
+    let map = create(&user_root(&app)?, &name, &hardware_id, hardware_name.as_deref().unwrap_or(""), Path::new(&image_path))?;
+    info!("image-map created: {} ({}) for {}", map.id, map.name, map.hardware_id);
+    Ok(map)
 }
 
 #[tauri::command]
 pub(crate) fn save_imagemap(map: ImageMap, app: AppHandle) -> Result<ImageMap, String> {
-    save(&bundled_root(&app), &user_root(&app)?, map)
+    let map = save(&bundled_root(&app), &user_root(&app)?, map)?;
+    info!("image-map saved: {} ({}), {} shapes", map.id, map.name, map.shapes.len());
+    Ok(map)
 }
 
 #[tauri::command]
 pub(crate) fn delete_imagemap(id: String, app: AppHandle) -> Result<(), String> {
-    delete(&bundled_root(&app), &user_root(&app)?, &id)
+    delete(&bundled_root(&app), &user_root(&app)?, &id)?;
+    info!("image-map deleted: {id}");
+    Ok(())
 }
 
 #[tauri::command]
 pub(crate) fn clone_imagemap(id: String, name: String, app: AppHandle) -> Result<ImageMap, String> {
-    clone_map(&bundled_root(&app), &user_root(&app)?, &id, &name)
+    let map = clone_map(&bundled_root(&app), &user_root(&app)?, &id, &name)?;
+    info!("image-map {id} cloned to {} ({})", map.id, map.name);
+    Ok(map)
 }
 
 #[tauri::command]
@@ -715,12 +723,16 @@ pub(crate) fn read_imagemap_image(id: String, file: String, app: AppHandle) -> R
 
 #[tauri::command]
 pub(crate) fn export_imagemap(id: String, dest_path: String, app: AppHandle) -> Result<(), String> {
-    export(&bundled_root(&app), &user_root(&app)?, &id, Path::new(&dest_path))
+    export(&bundled_root(&app), &user_root(&app)?, &id, Path::new(&dest_path))?;
+    info!("image-map exported: {id} -> {dest_path}");
+    Ok(())
 }
 
 #[tauri::command]
 pub(crate) fn import_imagemap(source_path: String, app: AppHandle) -> Result<ImageMapSummary, String> {
-    import(&user_root(&app)?, Path::new(&source_path))
+    let summary = import(&user_root(&app)?, Path::new(&source_path))?;
+    info!("image-map imported from {source_path}: {} ({})", summary.id, summary.name);
+    Ok(summary)
 }
 
 /// Persist which image-map to show for a device (keyed by lowercase hardware
@@ -734,6 +746,7 @@ pub(crate) fn set_imagemap_choice(
 ) -> config::Config {
     let mut data = data.lock().unwrap();
     let key = hardware_id.to_lowercase();
+    info!("image-map choice set: {key} -> {imagemap_id:?}");
     match imagemap_id {
         Some(p) => {
             data.config.imagemap_choices.insert(key, p);

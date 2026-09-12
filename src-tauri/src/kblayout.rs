@@ -1,13 +1,13 @@
 //! The OS keyboard layout as an xkb-style code (`de`, `us`, `gb`, …), used
 //! to pick the default keyboard image-map. `None` when it cannot be told.
 
-use log::debug;
+use log::info;
 
 /// The active keyboard layout, lowercase xkb name, or `None`.
 #[tauri::command]
 pub fn keyboard_layout() -> Option<String> {
     let layout = detect();
-    debug!("keyboard layout: {layout:?}");
+    info!("keyboard layout: {layout:?}");
     layout
 }
 

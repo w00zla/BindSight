@@ -78,6 +78,9 @@ pub(crate) struct AppData {
     /// Why the last `reload_bindings` left `bindings_file` empty, for
     /// `get_load_status`.
     bindings_error: Option<String>,
+    /// The last clash summary written to the log, so the same outcome is not
+    /// logged again on every Refresh / hot-plug (see [`clash_report`]).
+    last_clash_log: String,
 }
 
 /// Result of (re)loading the user's actionmaps.xml.
@@ -141,13 +144,28 @@ pub(crate) fn current_bindings(data: &AppData) -> Vec<bindings::ResolvedBinding>
 /// The clash report for the loaded actionmaps.xml against the last loaded
 /// `Game.log` enumeration (see [`reload_bindings`]). Devices the user
 /// declared invisible to SC count as unplugged.
-fn clash_report(data: &AppData, devices: &input::DeviceList) -> bindings::ClashReport {
+fn clash_report(data: &mut AppData, devices: &input::DeviceList) -> bindings::ClashReport {
     let Some(profile) = &data.bindings_file else {
         return bindings::ClashReport::default();
     };
     let devices = devices.lock().map(|d| d.clone()).unwrap_or_default();
     let devices = bindings::without_excluded(&devices, &data.config.excluded_devices);
-    bindings::analyze_clash(profile, &devices, data.game_log.as_ref().map_err(Clone::clone))
+    let report = bindings::analyze_clash(profile, &devices, data.game_log.as_ref().map_err(Clone::clone));
+    // The report is recomputed on every Refresh, hot-plug and write; only a
+    // changed outcome is worth a line.
+    let summary = format!(
+        "clash: has_clash={} connected={} missing={} unseen={} resort=[{}]",
+        report.has_clash,
+        report.connected.len(),
+        report.missing.len(),
+        report.unseen.len(),
+        report.resort_commands.join(" | ")
+    );
+    if summary != data.last_clash_log {
+        info!("{summary}");
+        data.last_clash_log = summary;
+    }
+    report
 }
 
 /// Compare SC's saved device order against SC's actual device order to detect
@@ -158,7 +176,7 @@ fn get_clash_report(
     devices: State<input::DeviceList>,
     data: State<Mutex<AppData>>,
 ) -> bindings::ClashReport {
-    clash_report(&data.lock().unwrap(), devices.inner())
+    clash_report(&mut data.lock().unwrap(), devices.inner())
 }
 
 /// Apply the clash report's resort to the live `actionmaps.xml` — the
@@ -175,7 +193,7 @@ fn apply_resort(
     data: State<Mutex<AppData>>,
 ) -> Result<LoadStatus, String> {
     let mut data = data.lock().unwrap();
-    let report = clash_report(&data, devices.inner());
+    let report = clash_report(&mut data, devices.inner());
     // GUI messages: the Status panel's tooltip already names the Game.log problem.
     if report.log_error.is_some() {
         return Err("No joystick order found".into());
@@ -186,7 +204,10 @@ fn apply_resort(
 
     let path = config::actionmaps_path(data.config.base_path());
     let xml = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let rewritten = resort::rewrite_actionmaps(&xml, &report.resort)?;
+    let rewritten = resort::rewrite_actionmaps(&xml, &report.resort).map_err(|e| {
+        error!("resort rewrite refused ({} move(s)): {e}", report.resort.len());
+        e
+    })?;
 
     let version = data.sc.version.as_ref().map(|v| v.label.as_str());
     let root = backups::backups_root(&app)?;
@@ -214,7 +235,10 @@ fn save_rebinds(
     }
     let path = config::actionmaps_path(data.config.base_path());
     let xml = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let rewritten = rebind::apply_rebinds(&xml, &changes)?;
+    let rewritten = rebind::apply_rebinds(&xml, &changes).map_err(|e| {
+        error!("rebind rewrite refused ({} change(s)): {e}", changes.len());
+        e
+    })?;
 
     let version = data.sc.version.as_ref().map(|v| v.label.as_str());
     let root = backups::backups_root(&app)?;
@@ -678,6 +702,32 @@ fn start_input(app: &AppHandle) {
 
 /// Log everything about the environment that remote troubleshooting might
 /// need: versions, platform, the app's directories and the loaded config.
+/// The environment facts of the startup log, for the Device Info dumps: a
+/// user sends those files, not bindsight.log.
+#[derive(Serialize)]
+struct SystemInfo {
+    app_version: String,
+    os: String,
+    arch: String,
+    tauri: String,
+    webview: String,
+    sdl: String,
+}
+
+#[tauri::command]
+fn system_info() -> SystemInfo {
+    let os = os_info::get();
+    let sdl = sdl2::version::version();
+    SystemInfo {
+        app_version: env!("CARGO_PKG_VERSION").into(),
+        os: format!("{} {} ({})", os.os_type(), os.version(), os.bitness()),
+        arch: std::env::consts::ARCH.into(),
+        tauri: tauri::VERSION.into(),
+        webview: tauri::webview_version().unwrap_or_else(|_| "?".into()),
+        sdl: format!("{}.{}.{}", sdl.major, sdl.minor, sdl.patch),
+    }
+}
+
 fn log_startup(app: &AppHandle, config: &config::Config) {
     let os = os_info::get();
     info!(
@@ -721,8 +771,13 @@ fn log_startup(app: &AppHandle, config: &config::Config) {
         );
     }
     info!(
-        "config: active_env={} environments={:?} excluded_devices={:?} imagemap_choices={:?}",
-        config.active_env, config.environments, config.excluded_devices, config.imagemap_choices
+        "config: active_env={} auto_backup={} debug_logging={} environments={:?} excluded_devices={:?} imagemap_choices={:?}",
+        config.active_env,
+        config.auto_backup,
+        config.debug_logging,
+        config.environments,
+        config.excluded_devices,
+        config.imagemap_choices
     );
 }
 
@@ -776,6 +831,7 @@ pub fn run() {
                 bindings_file: None,
                 index: bindings::BindingIndex::default(),
                 bindings_error: None,
+                last_clash_log: String::new(),
             }));
             // The device list exists from the start (commands read it), but
             // the input thread only starts once the first game-data load is
@@ -788,6 +844,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_devices,
             kblayout::keyboard_layout,
+            system_info,
             get_actions,
             get_tokens,
             get_sc_status,

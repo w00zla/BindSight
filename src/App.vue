@@ -36,6 +36,8 @@ import type {
   ResolvedBinding,
   ScStatus,
   SlotStatus,
+  SystemInfo,
+  ToastType,
 } from "./types";
 import {
   inputKey,
@@ -72,6 +74,13 @@ const DEFAULT_MAPS: Partial<Record<DeviceKind, string>> = { keyboard: MAP_US, ga
 
 // OS keyboard layout (xkb code such as `de`), null when unknown.
 const keyboardLayout = ref<string | null>(null);
+// One line of environment facts for the Device Info dumps.
+const systemInfo = ref<SystemInfo | null>(null);
+const systemLine = computed(() => {
+  const s = systemInfo.value;
+  const env = s ? `BindSight ${s.app_version} · ${s.os} ${s.arch} · tauri ${s.tauri} · webview ${s.webview} · SDL ${s.sdl}` : "BindSight";
+  return `${env} · keyboard layout ${keyboardLayout.value ?? "unknown"}`;
+});
 
 // Case-insensitive glob: `*` any run, `?` one char.
 function wildcard(pattern: string, text: string): boolean {
@@ -317,6 +326,7 @@ async function reloadMaps() {
   try {
     mapSummaries.value = await invoke<ImageMapSummary[]>("list_imagemaps");
   } catch (e) {
+    console.error("image-map list failed", e);
     error.value = String(e);
     return;
   }
@@ -416,6 +426,13 @@ function deviceOf(sdlGuid: string): DeviceInfo | undefined {
   return devices.value.find((d) => d.sdl_guid === sdlGuid);
 }
 
+// The device an event came from: SDL GUID plus instance id — two sticks of
+// the same type share the GUID, the instance id tells them apart (the
+// keyboard is GUID "keyboard", instance 0).
+function deviceOfEvent(p: JoyInput): DeviceInfo | undefined {
+  return devices.value.find((d) => d.sdl_guid === p.guid && d.sdl_instance_id === p.instance_id);
+}
+
 // The connected device a binding belongs to: joysticks by GUID, keyboard and
 // gamepad by kind (SC has exactly one of each).
 // A joystick binding sits on the device SC ranks at its jsN (the game's own
@@ -476,7 +493,7 @@ function isFlashed(b: ResolvedBinding): boolean {
 // cannot (a missing area is already tagged on the row itself).
 function flashBinding(b: ResolvedBinding) {
   const r = resolvePin(b);
-  if ("reason" in r && !missingInMap(b)) notify(r.reason, "error");
+  if ("reason" in r && !missingInMap(b)) notify(r.reason, "hint");
   flash.value = { b, target: "reason" in r ? null : r };
   if (flashTimer) clearTimeout(flashTimer);
   flashTimer = window.setTimeout(() => {
@@ -722,7 +739,8 @@ function bindingClash(token: string): string | undefined {
 async function loadClash() {
   try {
     clash.value = await invoke<ClashReport>("get_clash_report");
-  } catch {
+  } catch (e) {
+    console.warn("clash report failed", e);
     clash.value = null;
   }
 }
@@ -799,7 +817,7 @@ async function showBinding(p: JoyInput) {
 }
 
 function applyResolution(p: JoyInput, key: string, res: InputResolution) {
-  const d = deviceOf(p.guid);
+  const d = deviceOfEvent(p);
   currentKey.value = { guid: p.guid, key };
   currentInput.value = {
     device: d ? deviceName(d) : p.guid,
@@ -817,7 +835,7 @@ function applyResolution(p: JoyInput, key: string, res: InputResolution) {
     const now = Date.now();
     if (lastMissingToast.key !== tk || now - lastMissingToast.at > TOAST_MS) {
       lastMissingToast = { key: tk, at: now };
-      notify(`No shape for ${res.token ? tokenLabel(res.token) : currentInput.value.sdl}`, "error");
+      notify(`No shape for ${res.token ? tokenLabel(res.token) : currentInput.value.sdl}`, "hint");
     }
   }
 }
@@ -840,7 +858,7 @@ function rebindToken(p: JoyInput): string | null {
 // order, device not listed, pad without a slot, unknown axis name, hat
 // diagonal or centre).
 function eventToken(p: JoyInput): string | null {
-  const d = deviceOf(p.guid);
+  const d = deviceOfEvent(p);
   const js = () => slotFor(d?.sc_product_guid ?? null)?.effective_instance ?? null;
   switch (p.kind) {
     case "key":
@@ -875,7 +893,7 @@ function onInput(p: JoyInput) {
   if (mode.value !== "monitor") return;
   trackActive(p);
   // A pad without a slot is not gp1 — SC has no bindings for it.
-  if ((p.kind === "padbutton" || p.kind === "padaxis") && deviceOf(p.guid)?.gamepad_slot === null) return;
+  if ((p.kind === "padbutton" || p.kind === "padaxis") && deviceOfEvent(p)?.gamepad_slot === null) return;
   switch (p.kind) {
     case "button":
     case "padbutton":
@@ -894,10 +912,12 @@ function onInput(p: JoyInput) {
   }
 }
 
+// "hint" looks like an error but is guidance ("Press an input first"),
+// logged as info rather than as a broken feature.
 interface Toast {
   id: number;
   message: string;
-  type: "ok" | "error";
+  type: ToastType;
 }
 
 // How long a toast stays on screen.
@@ -908,8 +928,11 @@ let lastMissingToast = { key: "", at: 0 };
 let toastSeq = 0;
 let eventSeq = 0;
 
-// Show a transient toast that dismisses itself after a few seconds.
-function notify(message: string, type: "ok" | "error" = "ok") {
+// Show a transient toast that dismisses itself after a few seconds. An
+// error toast is the only trace of most failures, so it goes to the log too.
+function notify(message: string, type: ToastType = "ok") {
+  if (type === "error") console.error(`toast: ${message}`);
+  else if (type === "hint") console.info(`hint: ${message}`);
   const id = ++toastSeq;
   toasts.value.push({ id, message, type });
   setTimeout(() => {
@@ -999,6 +1022,7 @@ async function refresh() {
     const s = await invoke<LoadStatus>("reload");
     takeStatus(s);
   } catch (e) {
+    console.error("refresh failed", e);
     error.value = String(e);
   } finally {
     loading.value = false;
@@ -1013,6 +1037,7 @@ async function refreshDevices() {
   try {
     devices.value = await invoke<DeviceInfo[]>("list_devices");
   } catch (e) {
+    console.error("device list failed", e);
     error.value = String(e);
   }
   await loadClash();
@@ -1064,8 +1089,14 @@ onMounted(async () => {
   stopMouse = startMouseCapture(onInput);
   try {
     keyboardLayout.value = await invoke<string | null>("keyboard_layout");
-  } catch {
+  } catch (e) {
+    console.warn("keyboard layout unknown", e);
     keyboardLayout.value = null;
+  }
+  try {
+    systemInfo.value = await invoke<SystemInfo>("system_info");
+  } catch (e) {
+    console.warn("system info unavailable", e);
   }
   window.addEventListener("blur", clearHeld);
   // Closing (top-bar button or the window manager) settles unsaved changes
@@ -1132,12 +1163,25 @@ onMounted(async () => {
     // whether the profile parsed, and its error.
     takeStatus(await invoke<LoadStatus>("get_load_status"));
   } catch (e) {
+    console.error("startup: game data / config load failed", e);
     error.value = String(e);
     // Never leave the startup tile up: the other features work regardless.
     endStartup();
   }
   await step("Image-maps", reloadMaps);
+  // What only the frontend knows: the viewport (the layout wants 1280x720),
+  // the pixel ratio, whether localStorage works (-1 = it does not: every
+  // remembered width, chip and filter silently falls back to its default).
+  console.info(`frontend ready: ${innerWidth}x${innerHeight}@${devicePixelRatio}x, storage ${storageKeyCount()} key(s), keyboard layout ${keyboardLayout.value ?? "unknown"}`);
 });
+
+function storageKeyCount(): number {
+  try {
+    return localStorage.length;
+  } catch {
+    return -1;
+  }
+}
 
 onUnmounted(() => {
   unlisten.forEach((fn) => fn());
@@ -1273,6 +1317,8 @@ onUnmounted(() => {
       :chosenMapId="chosenMapId"
       :tokenLabel="tokenLabel"
       :isExcluded="isExcludedDevice"
+      :clash="clash"
+      :systemLine="systemLine"
       @choose="setMapChoice"
       @notify="notify"
       @saved="onMapsSaved"

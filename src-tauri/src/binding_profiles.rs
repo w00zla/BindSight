@@ -16,7 +16,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use log::warn;
+use log::{info, warn};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use serde::Serialize;
@@ -273,12 +273,16 @@ pub(crate) fn save_binding_profile(name: String, data: State<Mutex<AppData>>) ->
     let dir = binding_profiles_dir(&data);
     let data = data.lock().unwrap();
     let path = config::actionmaps_path(data.config.base_path());
-    save_profile(&dir, &path, &name, &data.sc.data.actions)
+    let summary = save_profile(&dir, &path, &name, &data.sc.data.actions)?;
+    info!("binding profile saved: {} ({} bindings)", summary.file, summary.bindings);
+    Ok(summary)
 }
 
 #[tauri::command]
 pub(crate) fn delete_binding_profile(file: String, data: State<Mutex<AppData>>) -> Result<(), String> {
-    delete(&binding_profiles_dir(&data), &file)
+    delete(&binding_profiles_dir(&data), &file)?;
+    info!("binding profile deleted: {file}");
+    Ok(())
 }
 
 /// Open the binding profiles folder in the system file manager (created
@@ -302,7 +306,9 @@ pub(crate) fn import_binding_profile(
     data: State<Mutex<AppData>>,
 ) -> Result<BindingProfileSummary, String> {
     let dir = binding_profiles_dir(&data);
-    import(&dir, Path::new(&source_path), &data.lock().unwrap().sc.data.actions)
+    let summary = import(&dir, Path::new(&source_path), &data.lock().unwrap().sc.data.actions)?;
+    info!("binding profile imported from {source_path}: {} ({} bindings)", summary.file, summary.bindings);
+    Ok(summary)
 }
 
 #[tauri::command]
@@ -312,7 +318,9 @@ pub(crate) fn export_binding_profile(file: String, dest_path: String, data: Stat
         let data = data.lock().unwrap();
         config::actionmaps_path(data.config.base_path()).parent().map(Path::to_path_buf)
     };
-    export(&dir, &file, Path::new(&dest_path), live_dir.as_deref().unwrap_or(Path::new("")))
+    export(&dir, &file, Path::new(&dest_path), live_dir.as_deref().unwrap_or(Path::new("")))?;
+    info!("binding profile exported: {file} -> {dest_path}");
+    Ok(())
 }
 
 fn binding_profiles_dir(data: &State<Mutex<AppData>>) -> PathBuf {

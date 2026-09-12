@@ -15,7 +15,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use log::{info, warn};
+use log::{error, info, warn};
 
 use crate::{backups, scdata};
 
@@ -77,15 +77,24 @@ pub fn replace_live_file(
     if !path.is_file() {
         return Err(format!("{}: not found", path.display()));
     }
-    scdata::parse_actionmaps(new_xml).map_err(|e| format!("refusing to write: new content is not readable: {e}"))?;
+    scdata::parse_actionmaps(new_xml).map_err(|e| {
+        error!("refusing to write {}: new content is not readable: {e}", path.display());
+        format!("refusing to write: new content is not readable: {e}")
+    })?;
     let backup = if auto_backup {
-        Some(backups::create(backups_root, path, reason, game_version, actions)?.id)
+        match backups::create(backups_root, path, reason, game_version, actions) {
+            Ok(summary) => Some(summary.id),
+            Err(e) => {
+                error!("{}: no backup made, not writing: {e}", path.display());
+                return Err(e);
+            }
+        }
     } else {
         warn!("{}: writing without a backup (auto-backups off)", path.display());
         None
     };
     if let Err(e) = write_atomic(path, new_xml.as_bytes()) {
-        warn!("write of {} failed ({}): {e}", path.display(), backup_label(&backup));
+        error!("write of {} failed ({}): {e}", path.display(), backup_label(&backup));
         return Err(e);
     }
     info!("{} replaced ({})", path.display(), backup_label(&backup));

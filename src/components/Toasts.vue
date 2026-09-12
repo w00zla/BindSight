@@ -2,7 +2,7 @@
 interface Toast {
   id: number;
   message: string;
-  type: "ok" | "error";
+  type: "ok" | "error" | "hint";
 }
 
 defineProps<{ toasts: Toast[] }>();
@@ -37,7 +37,8 @@ defineProps<{ toasts: Toast[] }>();
   max-width: 24rem;
 }
 
-.toast.error {
+.toast.error,
+.toast.hint {
   border-left-color: var(--err);
 }
 </style>

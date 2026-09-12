@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-use log::info;
+use log::{error, info};
 use serde::Deserialize;
 use tauri::{AppHandle, State};
 
@@ -123,15 +123,33 @@ pub(crate) fn apply_bindings(
     let live = parse_actionmaps(&xml)?;
 
     let changes = plan_apply(&live, &source_file, &devices);
+    // The chosen devices with the slot each one lands on, for the log lines.
+    let selection: Vec<String> = devices
+        .iter()
+        .map(|d| {
+            let p = d.kind.token_prefix();
+            format!("{p}{}->{p}{}", d.instance, target_of(d))
+        })
+        .collect();
     if changes.is_empty() {
-        info!("apply: nothing differs for the chosen devices");
+        info!("apply: {:?} matches [{}], nothing to write", source, selection.join(" "));
         return Ok(crate::reload_bindings(&mut data));
     }
-    let rewritten = rebind::apply_rebinds(&xml, &changes)?;
+    let rewritten = rebind::apply_rebinds(&xml, &changes).map_err(|e| {
+        error!("apply rewrite refused ({} change(s)): {e}", changes.len());
+        e
+    })?;
 
     let version = data.sc.version.as_ref().map(|v| v.label.as_str());
     let backup = gamefile::replace_live_file(&backups_root, &path, &rewritten, "before apply", data.config.auto_backup, version, &data.sc.data.actions)?;
-    info!("applied {:?} to {}: {} change(s) ({})", source, path.display(), changes.len(), gamefile::backup_label(&backup));
+    info!(
+        "applied {:?} to {}: devices [{}], {} change(s) ({})",
+        source,
+        path.display(),
+        selection.join(" "),
+        changes.len(),
+        gamefile::backup_label(&backup)
+    );
     Ok(crate::reload_bindings(&mut data))
 }
 

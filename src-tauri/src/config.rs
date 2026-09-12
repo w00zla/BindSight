@@ -149,10 +149,10 @@ pub fn load(app: &AppHandle) -> Config {
 pub fn save(app: &AppHandle, config: &Config) -> Result<(), String> {
     let path = config_file(app).ok_or("no config directory available")?;
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     let json = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    std::fs::write(path, json).map_err(|e| e.to_string())
+    std::fs::write(&path, json).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Path to the user's live `actionmaps.xml`, derived from the SC base path.

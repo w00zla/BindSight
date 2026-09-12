@@ -81,6 +81,19 @@ export type JoyInput =
 // `id` is a running number, the stable key of a log line.
 export type LoggedInput = JoyInput & { id: number; at: number; token: string | null };
 
+// The backend's environment facts (app version, OS, toolkit versions).
+export interface SystemInfo {
+  app_version: string;
+  os: string;
+  arch: string;
+  tauri: string;
+  webview: string;
+  sdl: string;
+}
+
+// Toast kinds: "hint" is guidance styled like an error.
+export type ToastType = "ok" | "error" | "hint";
+
 // Top-level GUI mode.
 export type Mode = "monitor" | "bindings" | "devices";
 

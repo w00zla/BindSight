@@ -271,12 +271,16 @@ pub(crate) fn create_backup(
     let data = data.lock().unwrap();
     let path = config::actionmaps_path(data.config.base_path());
     let version = data.sc.version.as_ref().map(|v| v.label.as_str());
-    create(&root, &path, &reason, version, &data.sc.data.actions)
+    let summary = create(&root, &path, &reason, version, &data.sc.data.actions)?;
+    info!("backup {} created: reason={}, {} bindings", summary.id, summary.reason, summary.bindings);
+    Ok(summary)
 }
 
 #[tauri::command]
 pub(crate) fn delete_backup(id: String, app: AppHandle) -> Result<(), String> {
-    delete(&backups_root(&app)?, &id)
+    delete(&backups_root(&app)?, &id)?;
+    info!("backup {id} deleted");
+    Ok(())
 }
 
 #[tauri::command]
@@ -285,7 +289,10 @@ pub(crate) fn restore_backup(id: String, app: AppHandle, data: State<Mutex<AppDa
     let mut data = data.lock().unwrap();
     let path = config::actionmaps_path(data.config.base_path());
     let version = data.sc.version.as_ref().map(|v| v.label.as_str());
-    let safety = restore(&root, &id, &path, data.config.auto_backup, version, &data.sc.data.actions)?;
+    let safety = restore(&root, &id, &path, data.config.auto_backup, version, &data.sc.data.actions).map_err(|e| {
+        error!("restore of backup {id} refused: {e}");
+        e
+    })?;
     let label = gamefile::backup_label(&safety.map(|s| s.id));
     info!("backup {id} restored to {} ({label})", path.display());
     Ok(crate::reload_bindings(&mut data))
