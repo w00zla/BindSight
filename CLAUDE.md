@@ -26,6 +26,27 @@ user never has to translate between the two.
   SC has it.** If it does not, the game's way is the answer. Ask when
   unsure.
 
+## Game-file safety (the second top rule)
+
+The app edits the game's **live** data (`actionmaps.xml`, the profiles
+folder), whose structure and processing can change with any game patch.
+**BACKUP, BACKUP, BACKUPS**: the user must be able to undo any change at
+any time. Concretely:
+
+- **A verified backup before every write** to a live game file; restore is
+  byte-exact. Never write without one.
+- **Watertight sanitizing** of every user input that reaches a file, a path
+  or an XML attribute (names, tokens, ids, paths: no traversal, nothing
+  that needs escaping).
+- **Rock-solid XML**: parsing tolerates whatever SC or the user may produce
+  (comments, CDATA, CRLF, tabs, BOM, self-closing elements, entities,
+  single quotes) and never panics; a textual rewrite is re-parsed before it
+  touches the disk; writes are atomic (temp file + rename).
+- **Tests and safeguards first**: the highest test coverage goes to
+  game-file handling (`rebind.rs`, `resort.rs`, `apply.rs`, `backups.rs`,
+  `binding_profiles.rs`, `diff.rs`, `scdata.rs` parsing, every writing
+  command); every edge case above has a test, added with the change.
+
 ## Conventions
 
 - **English only** — all code, comments, commit messages and GUI text.
@@ -152,15 +173,31 @@ presentational components:
   source), `plan_resort` / `resort_commands`.
 - `gamelog.rs` — parse `Connected joystickN: <Product {GUID}>` and
   `Connected xinputN: <name>` (the latter only says SC saw a gamepad).
+- `xmltext.rs` — helpers for the textual editors: `mask_markup` (a copy of
+  the text with comments, CDATA and processing instructions blanked, same
+  byte offsets — every search runs on the mask, every edit on the
+  original), `tag_end` (quote-aware), `find_attr` / `attr` / `set_attr`
+  (double or single quotes, whitespace around `=`).
+- `gamefile.rs` — the one road every live-file write takes:
+  `write_atomic` (temp file next to the target, `sync_all`, rename, read-back
+  compare) and `replace_live_file` (new text must parse, verified backup
+  first, then the atomic write; not gated by any setting). Used by
+  `save_rebinds`, `apply_resort`, `apply.rs`, `backups.rs` (copy + restore),
+  `binding_profiles.rs` (save / export) and `write_text_file`.
 - `resort.rs` — textual `actionmaps.xml` rewrite applying a resort (joystick
   `<options>` instances + `jsN_` prefixes in `input="..."`), the out-of-game
-  counterpart of `pp_resortdevices`.
+  counterpart of `pp_resortdevices`. Re-parses its output and checks it
+  against the intent (`verify_applied`: every rebind in place with mapped
+  tokens, devices on their new slots, nothing else changed).
 - `rebind.rs` — textual `actionmaps.xml` rewrite writing rebinds (one
   binding per action and device kind, like SC: every `<rebind>` of that kind
   under the action is replaced, the first one keeping its other attributes
-  such as `activationMode`; missing `<action>` / `<actionmap>` elements are
-  created in SC's layout), the out-of-game counterpart of the keybinding
-  screen. `lib.rs::save_rebinds` backs up first (reason "before rebind").
+  such as `activationMode` unless the change carries its own `attrs` list;
+  missing `<action>` / `<actionmap>` elements are created in SC's layout),
+  the out-of-game counterpart of the keybinding screen. Every change passes
+  `validate` (SC identifiers only, the input must be an SC token of the
+  change's kind or a blank of it, attributes whitelisted) and the result
+  `verify_applied` (the parsed before/after differ exactly by the changes).
 - `config.rs` — JSON in the app config dir: the SC environments
   (`ENVIRONMENTS` = LIVE / HOTFIX / PTU / EPTU, each a base path + optional
   `global.ini` override; Windows default paths), the active one
@@ -182,14 +219,19 @@ presentational components:
 - `apply.rs` — applies a profile or backup to the live file per device
   (`plan_apply`: the source's rebinds for the chosen `kb1` / `gp1` / `jsN`
   are written, live rebinds the source lacks are removed via an empty
-  `RebindChange::input`, everything else stays), auto-backup "before
-  apply"; a backup with every device chosen is restored byte for byte.
+  `RebindChange::input`, the source's rebind attributes carried along,
+  everything else stays), backup "before apply"; a backup with every device
+  chosen is restored byte for byte.
 - `names.rs` — the name rule (see Image-map data model).
 - `backups.rs` — backups of the live `actionmaps.xml`, one folder per backup
   (`meta.json` with reason + game version, `actionmaps.xml`) under
   `<app_data_dir>/backups/<id>/`, id = `YYYYMMDD-HHMMSS` (UTC) with a `-2`,
-  `-3`, … suffix on collision. Taken manually, and while `Config::auto_backup`
-  is on (default) before a resort and before a restore.
+  `-3`, … suffix on collision (folders are created, not checked, so
+  concurrent backups cannot collide). Taken manually and, always, before
+  every write to the live file (rebind, apply, order fix, restore); a
+  backup counts only once its copy compares byte for byte with the source,
+  a restore refuses a backup that no longer parses. `Config::auto_backup`
+  no longer gates anything.
 - `diff.rs` — compares the joystick bindings of two sources (live file,
   binding profile, or backup) by SC token: the `(actionmap, action)` set per
   token in A vs B (label-only differences are not changes); added / removed /
