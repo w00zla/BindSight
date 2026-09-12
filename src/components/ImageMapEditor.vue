@@ -196,6 +196,10 @@ type EditorState = "view" | "edit" | "new";
 const state = ref<EditorState>("view");
 const editing = computed(() => state.value === "edit" && !locked.value);
 const isNew = computed(() => state.value === "new");
+// A device (or unused hardware id) is selected but no image-map is open and
+// none is being created: the canvas column becomes one placeholder tile
+// offering "New Image-Map", the shapes column stays hidden.
+const noMap = computed(() => !showDeviceInfo.value && !map.value && !isNew.value && !!selectedHw.value);
 // The map the Monitor shows for the selected device is the one open here.
 const isChosen = computed(
   () => !!device.value && !!openId.value && props.chosenMapId(device.value) === openId.value,
@@ -1745,7 +1749,7 @@ function noMaps(d: DeviceInfo): boolean {
 <template>
   <section
     class="devices"
-    :class="{ 'device-info': showDeviceInfo }"
+    :class="{ 'device-info': showDeviceInfo, 'no-map': noMap }"
     :style="{ '--left-w': `${leftWidth}px`, '--right-w': `${rightWidth}px` }"
   >
     <!-- left: devices and their image-maps, and the system panel -->
@@ -2264,13 +2268,19 @@ function noMaps(d: DeviceInfo): boolean {
       <template v-else-if="isNew">
         <div class="none">Choose image…</div>
       </template>
-      <div v-else class="none">{{ props.devices.length ? "No image-map" : "No device" }}</div>
+      <div v-else-if="noMap" class="none">
+        <button type="button" class="btn primary" @click="newMap">
+          <Icon name="plus" :size="14" />
+          New Image-Map
+        </button>
+      </div>
+      <div v-else class="none">{{ listed.length ? "No image-map" : "No device" }}</div>
     </section>
 
     <Splitter direction="col" class="col-split-left" @drag="dragLeft" @end="endDragLeft" @reset="leftWidth = LEFT_W.def" />
 
     <Splitter
-      v-if="!showDeviceInfo"
+      v-if="!showDeviceInfo && !noMap"
       direction="col"
       class="col-split"
       @drag="dragRight"
@@ -2279,7 +2289,7 @@ function noMaps(d: DeviceInfo): boolean {
     />
 
     <!-- right: live input and shapes -->
-    <aside v-if="!showDeviceInfo" class="col-right">
+    <aside v-if="!showDeviceInfo && !noMap" class="col-right">
       <div v-if="editing" class="input-card">
         <div class="ic-key" :class="{ on: !!currentKey }">
           <Icon name="bolt" :size="22" />
@@ -2406,8 +2416,10 @@ function noMaps(d: DeviceInfo): boolean {
   min-height: 0;
 }
 
-/* Device Info takes the canvas column and the right one. */
-.devices.device-info {
+/* Device Info and the no-image-map placeholder take the canvas column and
+   the right one. */
+.devices.device-info,
+.devices.no-map {
   grid-template-columns: var(--left-w, 300px) 16px minmax(0, 1fr);
   grid-template-areas:
     "left gap tile"
