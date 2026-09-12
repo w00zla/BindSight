@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
-import Dropdown from "./Dropdown.vue";
 import ColumnHead from "./ColumnHead.vue";
+import Splitter from "./Splitter.vue";
 import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
 import ConfirmDialog, { type ConfirmButton, type ConfirmIcon } from "./ConfirmDialog.vue";
 import { KIND_RANK } from "../devices";
 import { persistedRef } from "../persist";
 import { recording } from "../keyboard";
+import { NAME_MAX, sanitizeName, stripNameChars } from "../names";
 import type {
   ActionMap,
   ActionRef,
@@ -18,6 +19,7 @@ import type {
   BindingProfileSummary,
   BoundAction,
   DeviceKind,
+  DeviceSel,
   DiffKind,
   DiffReport,
   DiffRow,
@@ -45,8 +47,31 @@ const props = defineProps<{
 const emit = defineEmits<{
   notify: [message: string, type: "ok" | "error"];
   restored: [status: LoadStatus];
+  applied: [status: LoadStatus];
   saved: [status: LoadStatus];
 }>();
+
+// --- layout: the left column's width and the Binding Profiles panel's
+// height, both dragged at a splitter and remembered --------------------------
+
+const LEFT_W = { min: 280, max: 640, def: 360 };
+const leftWidth = persistedRef<number>("bindsight.bindings.leftWidth", LEFT_W.def);
+let leftStart: number | null = null;
+function dragLeft(delta: number) {
+  leftStart ??= leftWidth.value;
+  leftWidth.value = Math.min(LEFT_W.max, Math.max(LEFT_W.min, Math.round(leftStart + delta)));
+}
+const PROFILES_H = { min: 120, max: 700, def: 220 };
+const profilesHeight = persistedRef<number>("bindsight.bindings.profilesHeight", PROFILES_H.def);
+let profilesStart: number | null = null;
+function dragProfiles(delta: number) {
+  profilesStart ??= profilesHeight.value;
+  profilesHeight.value = Math.min(PROFILES_H.max, Math.max(PROFILES_H.min, Math.round(profilesStart + delta)));
+}
+function endDrag() {
+  leftStart = null;
+  profilesStart = null;
+}
 
 const profiles = ref<BindingProfileSummary[]>([]);
 const backups = ref<BackupSummary[]>([]);
@@ -96,12 +121,13 @@ function stamp(unixSecs: number): string {
 
 // --- compare sources -------------------------------------------------------
 
-// A source is addressed by a flat key so it can live in a <select> value:
-// "current", "profile:<file>" or "backup:<id>".
+// A source is addressed by a flat key: "current", "profile:<file>" or
+// "backup:<id>". Compare is always Current (A) against the source picked
+// on the left (B).
 const CURRENT = "current";
 const PROFILE_PREFIX = "profile:";
+const BACKUP_PREFIX = "backup:";
 
-const aKey = ref(CURRENT);
 const bKey = ref(CURRENT);
 
 interface SourceOption {
@@ -112,14 +138,12 @@ interface SourceOption {
 const sourceOptions = computed<SourceOption[]>(() => [
   ...(props.hasCurrent ? [{ key: CURRENT, name: "Current" }] : []),
   ...profiles.value.map((m) => ({ key: `${PROFILE_PREFIX}${m.file}`, name: m.name })),
-  ...backups.value.map((b) => ({ key: `backup:${b.id}`, name: `${stamp(b.created)} · ${b.reason}` })),
+  ...backups.value.map((b) => ({ key: `${BACKUP_PREFIX}${b.id}`, name: `${stamp(b.created)} · ${b.reason}` })),
 ]);
-
-const sourceDropdown = computed(() => sourceOptions.value.map((o) => ({ value: o.key, label: o.name })));
 
 function sourceFor(key: string): DiffSource {
   if (key.startsWith(PROFILE_PREFIX)) return { kind: "profile", file: key.slice(PROFILE_PREFIX.length) };
-  if (key.startsWith("backup:")) return { kind: "backup", id: key.slice(7) };
+  if (key.startsWith(BACKUP_PREFIX)) return { kind: "backup", id: key.slice(BACKUP_PREFIX.length) };
   return { kind: "current" };
 }
 
@@ -127,19 +151,24 @@ function nameFor(key: string): string {
   return sourceOptions.value.find((o) => o.key === key)?.name ?? "—";
 }
 
-// The B side, when it is an exported binding profile (Export works on that only).
+// The picked source as a profile / a backup (null when it is the other).
 const bProfile = computed<BindingProfileSummary | null>(() => {
   const s = sourceFor(bKey.value);
   return s.kind === "profile" ? profiles.value.find((m) => m.file === s.file) ?? null : null;
+});
+const bBackup = computed<BackupSummary | null>(() => {
+  const s = sourceFor(bKey.value);
+  return s.kind === "backup" ? backups.value.find((b) => b.id === s.id) ?? null : null;
 });
 
 // A source that vanished (deleted backup, reloaded list, no Current) falls
 // back to Current, else to the first source there is.
 function ensureKeys() {
   const keys = sourceOptions.value.map((o) => o.key);
-  const fallback = keys.includes(CURRENT) ? CURRENT : (keys[0] ?? "");
-  if (!keys.includes(aKey.value)) aKey.value = fallback;
-  if (!keys.includes(bKey.value)) bKey.value = fallback;
+  if (!keys.includes(bKey.value)) {
+    bKey.value = CURRENT;
+    view.value = "list";
+  }
 }
 
 // --- loading ---------------------------------------------------------------
@@ -161,13 +190,13 @@ async function loadBackups() {
 }
 
 async function runCompare() {
-  if (!aKey.value || !bKey.value) {
+  if (bKey.value === CURRENT) {
     report.value = null;
     return;
   }
   try {
     report.value = await invoke<DiffReport>("compare_bindings", {
-      a: sourceFor(aKey.value),
+      a: { kind: "current" },
       b: sourceFor(bKey.value),
     });
   } catch (e) {
@@ -195,6 +224,56 @@ async function importProfile() {
     bKey.value = `${PROFILE_PREFIX}${s.file}`;
     await runCompare();
     emit("notify", `Imported ${s.name}`, "ok");
+  } catch (e) {
+    emit("notify", String(e), "error");
+  } finally {
+    busy.value = false;
+  }
+}
+
+// Save the live file as a new binding profile: the name is asked in a
+// small dialog (letters, digits, space, _ - and brackets, like image-maps).
+const nameDialog = ref<{ name: string } | null>(null);
+const nameInput = ref<HTMLInputElement | null>(null);
+
+function openSaveProfile() {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  nameDialog.value = { name: `Bindings ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` };
+  nextTick(() => {
+    nameInput.value?.focus();
+    nameInput.value?.select();
+  });
+}
+
+async function onNameChoose(value: string) {
+  const d = nameDialog.value;
+  nameDialog.value = null;
+  if (!d || value !== "save") return;
+  busy.value = true;
+  try {
+    const s = await invoke<BindingProfileSummary>("save_binding_profile", { name: sanitizeName(d.name, "") });
+    await loadProfiles();
+    emit("notify", `Saved ${s.name}`, "ok");
+  } catch (e) {
+    emit("notify", String(e), "error");
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function deleteProfile(m: BindingProfileSummary) {
+  const choice = await ask(`Delete ${m.name}?`, "trash", [
+    { label: "Delete", kind: "danger", value: "delete" },
+    { label: "Cancel", kind: "outline", value: "cancel" },
+  ]);
+  if (choice !== "delete") return;
+  busy.value = true;
+  try {
+    await invoke("delete_binding_profile", { file: m.file });
+    await loadProfiles();
+    ensureKeys();
+    await runCompare();
   } catch (e) {
     emit("notify", String(e), "error");
   } finally {
@@ -233,21 +312,73 @@ async function createBackup() {
   }
 }
 
-// Restoring overwrites the file underneath any pending rebinds: settle
-// them first.
-async function restoreBackup(b: BackupSummary) {
-  if (!(await requestLeave())) return;
-  const choice = await ask("Restore backup?", "rotate", [
-    { label: "Restore", kind: "primary", value: "restore" },
-    { label: "Cancel", kind: "outline", value: "cancel" },
-  ]);
-  if (choice !== "restore") return;
+// --- apply ----------------------------------------------------------------
+
+// The devices a profile / backup and the live file bind, for the Apply
+// dialog: kb1 and gp1 always, every jsN either side names, all ticked.
+interface ApplyDevice {
+  key: string;
+  sel: DeviceSel;
+  label: string;
+}
+
+const applyDialog = ref<{ devices: ApplyDevice[]; on: Set<string> } | null>(null);
+
+function applyDeviceList(): ApplyDevice[] {
+  const instances = new Set<number>();
+  for (const r of report.value?.rows ?? []) {
+    if (r.device_kind === "joystick" && r.instance !== null) instances.add(r.instance);
+  }
+  for (const j of info.value?.joysticks ?? []) instances.add(j.instance);
+  const nameOf = (n: number) => info.value?.joysticks.find((j) => j.instance === n)?.product_name;
+  return [
+    { key: "kb1", sel: { kind: "keyboard", instance: 1 }, label: "Keyboard/Mouse" },
+    { key: "gp1", sel: { kind: "gamepad", instance: 1 }, label: "Gamepad" },
+    ...[...instances]
+      .sort((a, b) => a - b)
+      .map((n) => ({ key: `js${n}`, sel: { kind: "joystick" as DeviceKind, instance: n }, label: nameOf(n) ?? "" })),
+  ];
+}
+
+function openApply() {
+  if (bKey.value === CURRENT) return;
+  const devices = applyDeviceList();
+  applyDialog.value = { devices, on: new Set(devices.map((d) => d.key)) };
+}
+
+function toggleApplyDevice(key: string) {
+  const d = applyDialog.value;
+  if (!d) return;
+  const on = new Set(d.on);
+  if (!on.delete(key)) on.add(key);
+  applyDialog.value = { ...d, on };
+}
+
+const applyButtons = computed<ConfirmButton[]>(() => [
+  { label: "Apply", kind: "primary", value: "apply", disabled: !applyDialog.value?.on.size },
+  { label: "Cancel", kind: "outline", value: "cancel" },
+]);
+
+// A backup with every device ticked is put back byte for byte (`restore`);
+// anything else is merged device by device (`apply`).
+async function onApplyChoose(value: string) {
+  const d = applyDialog.value;
+  applyDialog.value = null;
+  if (!d || value !== "apply") return;
+  const source = sourceFor(bKey.value);
+  const devices = d.devices.filter((x) => d.on.has(x.key)).map((x) => x.sel);
   busy.value = true;
   try {
-    const s = await invoke<LoadStatus>("restore_backup", { id: b.id });
-    emit("restored", s);
-    // Restoring takes a safety backup of its own — the list has a new entry.
+    if (source.kind === "backup" && devices.length === d.devices.length) {
+      const s = await invoke<LoadStatus>("restore_backup", { id: source.id });
+      emit("restored", s);
+    } else {
+      const s = await invoke<LoadStatus>("apply_bindings", { source, devices });
+      emit("applied", s);
+    }
+    // The write takes a safety backup of its own — the list has a new entry.
     await loadBackups();
+    await loadInfo();
     ensureKeys();
     await runCompare();
   } catch (e) {
@@ -269,6 +400,7 @@ async function deleteBackup(b: BackupSummary) {
     await loadBackups();
     ensureKeys();
     await runCompare();
+    emit("notify", "Backup deleted", "ok");
   } catch (e) {
     emit("notify", String(e), "error");
   } finally {
@@ -276,22 +408,32 @@ async function deleteBackup(b: BackupSummary) {
   }
 }
 
-// Immediate: opens the backup's folder in the file manager.
-async function openBackupDir(b: BackupSummary) {
-  try {
-    await invoke("open_backup_dir", { id: b.id });
-  } catch (e) {
-    emit("notify", String(e), "error");
-  }
-}
-
 // --- diff filters ----------------------------------------------------------
 
 // Toggled chips; none toggled = everything. Remembered across restarts.
-const kindFilter = persistedRef<DiffKind[]>("bindsight.compare.kinds", []);
+// The kind chips live per device (`js1` -> ["changed"]).
+const kindFilter = persistedRef<Record<string, DiffKind[]>>("bindsight.compare.kindsByDevice", {});
 const deviceFilter = persistedRef<string[]>("bindsight.compare.devices", []);
+// Rows grouped under one collapsible head per device, or flat.
+const grouped = persistedRef<boolean>("bindsight.compare.grouped", false);
+
+function kindsOf(device: string): DiffKind[] {
+  return kindFilter.value[device] ?? [];
+}
+
+function toggleKind(device: string, kind: DiffKind) {
+  kindFilter.value = { ...kindFilter.value, [device]: toggleIn(kindsOf(device), kind) };
+}
 
 const search = ref("");
+
+// Written out, relative to Current: bound here only / bound to other
+// actions / bound in the source only. Unchanged rows are not listed.
+const KIND_CHIPS: { kind: DiffKind; label: string }[] = [
+  { kind: "added", label: "Added" },
+  { kind: "changed", label: "Modified" },
+  { kind: "removed", label: "Deleted" },
+];
 
 // Same order as the device tiles, joysticks by instance.
 function deviceRank(r: DiffRow): number {
@@ -306,16 +448,39 @@ function deviceLabel(r: DiffRow): string {
   return r.instance === null ? "—" : `js${r.instance}`;
 }
 
-// Distinct devices present in the report, in tile order, with counts.
-const deviceCounts = computed(() => {
-  const counts = new Map<string, { rank: number; count: number }>();
+// Every row that differs; unchanged tokens only feed the counts below.
+const diffRows = computed<DiffRow[]>(() => (report.value?.rows ?? []).filter((r) => r.kind !== "same"));
+
+// Distinct devices present in the report, in tile order, each with its
+// differing rows counted per kind.
+interface DeviceGroup {
+  label: string;
+  counts: Record<DiffKind, number>;
+}
+const deviceChips = computed<DeviceGroup[]>(() => {
+  const by = new Map<string, { rank: number; counts: Record<DiffKind, number> }>();
   for (const r of report.value?.rows ?? []) {
     const label = deviceLabel(r);
-    const hit = counts.get(label);
-    if (hit) hit.count += 1;
-    else counts.set(label, { rank: deviceRank(r), count: 1 });
+    const hit = by.get(label) ?? { rank: deviceRank(r), counts: { added: 0, removed: 0, changed: 0, same: 0 } };
+    hit.counts[r.kind] += 1;
+    by.set(label, hit);
   }
-  return [...counts.entries()].sort((a, b) => a[1].rank - b[1].rank);
+  return [...by.entries()].sort((a, b) => a[1].rank - b[1].rank).map(([label, d]) => ({ label, counts: d.counts }));
+});
+
+// Bindings of the picked source, total and per device, like the Game
+// Bindings tile's summary — from the report's B side.
+const sourceCountSummary = computed(() => {
+  const counts = new Map<string, number>();
+  let total = 0;
+  for (const r of report.value?.rows ?? []) {
+    if (!r.b.length) continue;
+    const label = deviceLabel(r);
+    counts.set(label, (counts.get(label) ?? 0) + r.b.length);
+    total += r.b.length;
+  }
+  const perDevice = deviceChips.value.filter((d) => counts.has(d.label)).map((d) => `${counts.get(d.label)} ${d.label}`);
+  return [`${total} total`, ...perDevice].join(" · ");
 });
 
 function refText(r: ActionRef): string {
@@ -337,12 +502,10 @@ const COLUMNS: ColumnSpec[] = [
   { key: "a", label: "A", width: 260, icon: "file" },
   { key: "b", label: "B", width: null, icon: "file" },
 ];
-const cols = useTableColumns("bindsight.columns.compare", COLUMNS, { key: "input", dir: "asc" });
-// The A/B headers carry the source names.
+const cols = useTableColumns("bindsight.columns.compare", COLUMNS, { key: "action", dir: "asc" });
+// A is always Current; the B header carries the source's name.
 const columns = computed<ColumnSpec[]>(() =>
-  COLUMNS.map((c) =>
-    c.key === "a" || c.key === "b" ? { ...c, label: nameFor(c.key === "a" ? aKey.value : bKey.value).toUpperCase() } : c,
-  ),
+  COLUMNS.map((c) => (c.key === "a" ? { ...c, label: "CURRENT" } : c.key === "b" ? { ...c, label: nameFor(bKey.value).toUpperCase() } : c)),
 );
 
 function cellValue(r: DiffRow, key: string): string | number {
@@ -355,21 +518,60 @@ function cellValue(r: DiffRow, key: string): string | number {
     case "action":
       return rowAction(r);
     case "a":
-      return cellText(r.a);
+      return cellLines(r.a).join(", ");
     default:
-      return cellText(r.b);
+      return cellLines(r.b).join(", ");
   }
 }
 
 const filteredRows = computed<DiffRow[]>(() => {
   const q = search.value.trim().toLowerCase();
-  const rows = (report.value?.rows ?? []).filter((r) => {
-    if (kindFilter.value.length && !kindFilter.value.includes(r.kind)) return false;
-    if (deviceFilter.value.length && !deviceFilter.value.includes(deviceLabel(r))) return false;
+  const rows = diffRows.value.filter((r) => {
+    const device = deviceLabel(r);
+    if (deviceFilter.value.length && !deviceFilter.value.includes(device)) return false;
+    const kinds = kindsOf(device);
+    if (kinds.length && !kinds.includes(r.kind)) return false;
     return !q || haystack(r).includes(q);
   });
   return sortRows(rows, cols.sort.value, cellValue, (a, b) => collator.compare(a.token, b.token));
 });
+
+// Grouped view: one bucket per device, in tile order, collapsed at start;
+// a search forces them open.
+interface DiffGroup {
+  label: string;
+  rows: DiffRow[];
+}
+const diffGroups = computed<DiffGroup[]>(() => {
+  const by = new Map<string, DiffGroup>();
+  for (const r of filteredRows.value) {
+    const label = deviceLabel(r);
+    let g = by.get(label);
+    if (!g) {
+      g = { label, rows: [] };
+      by.set(label, g);
+    }
+    g.rows.push(r);
+  }
+  const rank = new Map(deviceChips.value.map((d, i) => [d.label, i]));
+  return [...by.values()].sort((a, b) => (rank.get(a.label) ?? 99) - (rank.get(b.label) ?? 99));
+});
+const openGroups = ref(new Set<string>());
+function isGroupOpen(g: DiffGroup): boolean {
+  return !!search.value.trim() || openGroups.value.has(g.label);
+}
+function toggleDiffGroup(label: string) {
+  const s = new Set(openGroups.value);
+  if (!s.delete(label)) s.add(label);
+  openGroups.value = s;
+}
+const allGroupsOpen = computed(() => diffGroups.value.length > 0 && diffGroups.value.every((g) => openGroups.value.has(g.label)));
+function openAllGroups() {
+  openGroups.value = new Set(diffGroups.value.map((g) => g.label));
+}
+function closeAllGroups() {
+  openGroups.value = new Set();
+}
 
 // The action a row is about: the A side names it, else the B side.
 function rowAction(row: DiffRow): string {
@@ -377,11 +579,12 @@ function rowAction(row: DiffRow): string {
   return r ? refText(r) : "—";
 }
 
-function cellText(refs: ActionRef[]): string {
-  return refs.length ? refs.map(refText).join(", ") : "—";
+// One line per action in a side's cell.
+function cellLines(refs: ActionRef[]): string[] {
+  return refs.map(refText);
 }
 
-const SIGNS: Record<DiffKind, string> = { added: "+", removed: "−", changed: "~" };
+const SIGNS: Record<DiffKind, string> = { added: "+", removed: "−", changed: "~", same: "=" };
 
 // Input token without its device prefix, e.g. "js1_button5" -> "button5".
 function inputPart(token: string): string {
@@ -393,8 +596,6 @@ function inputText(token: string): string {
   const l = props.tokenLabel(token);
   return l === token ? inputPart(token) : l;
 }
-
-const sameSource = computed(() => aKey.value === bKey.value);
 
 // --- bindings list ---------------------------------------------------------
 
@@ -703,7 +904,7 @@ const rebindAfter = computed<RebindLine[]>(() => {
 });
 
 const rebindButtons = computed<ConfirmButton[]>(() => [
-  { label: "Clear all", kind: "danger", value: "clearall", side: "left", disabled: !rebindAfter.value.length },
+  { label: "Clear All", kind: "danger", value: "clearall", side: "left", disabled: !rebindAfter.value.length },
   { label: "Apply", kind: "primary", value: "apply", disabled: !rebind.value?.changes.size },
   { label: "Cancel", kind: "outline", value: "cancel" },
 ]);
@@ -862,7 +1063,7 @@ async function requestLeave(): Promise<boolean> {
   const choice = await ask("Unsaved changes", "save", [
     { label: "Discard", kind: "danger", value: "discard" },
     { label: "Save", kind: "primary", value: "save" },
-    { label: "Keep editing", kind: "outline", value: "keep" },
+    { label: "Keep Editing", kind: "outline", value: "keep" },
   ]);
   if (choice === "keep") return false;
   if (choice === "save") return await writeChanges();
@@ -874,7 +1075,7 @@ defineExpose({ requestLeave });
 
 // --- wiring ----------------------------------------------------------------
 
-watch([aKey, bKey], runCompare);
+watch(bKey, runCompare);
 watch(() => props.hasCurrent, ensureKeys);
 // The file changed underneath (reload, restore, resort, save): re-read its facts.
 watch(() => props.bindings, loadInfo);
@@ -902,26 +1103,21 @@ onUnmounted(() => {
   recording.value = false;
 });
 
-// The live bindings changed (reload, restore, resort) — re-diff if a side is Current.
+// The live bindings changed (reload, restore, resort) — re-diff, A is Current.
 watch(
   () => props.bindings,
-  () => {
-    if (aKey.value === CURRENT || bKey.value === CURRENT) runCompare();
-  },
+  () => runCompare(),
 );
 
 onMounted(async () => {
   window.addEventListener("keydown", onEscape);
   unlisten.push(await listen<JoyInput>("joy-input", (e) => takeInput(e.payload)));
   await Promise.all([loadProfiles(), loadBackups(), loadInfo()]);
-  // B starts on the newest layout, so Compare says something when opened.
-  const newest = [...profiles.value].sort((a, b) => b.modified - a.modified)[0];
-  if (newest) bKey.value = `${PROFILE_PREFIX}${newest.file}`;
-  else await runCompare();
 });
 
 // Left-hand rows: Current shows the list, anything else compares against it.
 function showList() {
+  bKey.value = CURRENT;
   view.value = "list";
 }
 
@@ -935,7 +1131,7 @@ async function compareWith(key: string) {
 </script>
 
 <template>
-  <div class="bindings-view">
+  <div class="bindings-view" :style="{ '--left-w': `${leftWidth}px` }">
     <div class="left">
       <!-- game bindings: the live file -->
       <section class="panel">
@@ -944,12 +1140,7 @@ async function compareWith(key: string) {
           <span class="head-title">Game Bindings</span>
         </div>
         <div class="rows">
-          <div
-            v-if="hasCurrent"
-            class="row-item"
-            :class="{ a: view === 'compare' && aKey === CURRENT, b: view === 'list' || bKey === CURRENT }"
-            @click="showList"
-          >
+          <div v-if="hasCurrent" class="row-item" :class="{ b: view === 'list' }" @click="showList">
             <div class="lines">
               <span class="line-title">Current</span>
               <span class="mono line-sub">actionmaps.xml · {{ info ? stamp(info.modified) : "—" }}</span>
@@ -960,17 +1151,20 @@ async function compareWith(key: string) {
       </section>
 
       <!-- binding profiles -->
-      <section class="panel">
+      <section class="panel profiles" :style="{ height: `${profilesHeight}px` }">
         <div class="head">
           <Icon name="file" :size="15" />
           <span class="head-title">Binding Profiles</span>
+          <button type="button" class="btn primary small" :disabled="busy || !hasCurrent" @click="openSaveProfile">
+            <Icon name="plus" :size="12" />Save Profile
+          </button>
         </div>
-        <div class="rows">
+        <div class="rows scroll">
           <div
             v-for="m in profiles"
             :key="m.file"
             class="row-item"
-            :class="{ a: view === 'compare' && aKey === `${PROFILE_PREFIX}${m.file}`, b: view === 'compare' && bKey === `${PROFILE_PREFIX}${m.file}` }"
+            :class="{ b: view === 'compare' && bKey === `${PROFILE_PREFIX}${m.file}` }"
             @click="compareWith(`${PROFILE_PREFIX}${m.file}`)"
           >
             <div class="lines">
@@ -987,11 +1181,10 @@ async function compareWith(key: string) {
           <button type="button" class="btn outline" :disabled="busy || !bProfile" @click="exportProfile">
             <Icon name="upload" :size="14" />Export
           </button>
-          <button type="button" class="btn outline" disabled title="Not yet">
-            <Icon name="plus" :size="14" />New
-          </button>
         </div>
       </section>
+
+      <Splitter direction="row" @drag="dragProfiles" @end="endDrag" @reset="profilesHeight = PROFILES_H.def" />
 
       <!-- backups -->
       <section class="panel grow">
@@ -999,35 +1192,28 @@ async function compareWith(key: string) {
           <Icon name="history" :size="15" />
           <span class="head-title">Backups</span>
           <button type="button" class="btn primary small" :disabled="busy" @click="createBackup">
-            <Icon name="plus" :size="12" />Backup now
+            <Icon name="plus" :size="12" />Create Backup
           </button>
         </div>
         <div class="rows scroll">
           <div
             v-for="b in backups"
             :key="b.id"
-            class="row-item backup"
-            :class="{ a: view === 'compare' && aKey === `backup:${b.id}`, b: view === 'compare' && bKey === `backup:${b.id}` }"
-            @click="compareWith(`backup:${b.id}`)"
+            class="row-item"
+            :class="{ b: view === 'compare' && bKey === `${BACKUP_PREFIX}${b.id}` }"
+            @click="compareWith(`${BACKUP_PREFIX}${b.id}`)"
           >
             <div class="lines">
               <span class="mono line-stamp">{{ stamp(b.created) }}</span>
               <span class="line-sub">{{ b.reason }} · <span class="mono">{{ b.game_version ?? "—" }}</span></span>
             </div>
-            <button type="button" class="icon-btn" title="Open folder" @click.stop="openBackupDir(b)">
-              <Icon name="folder" :size="14" />
-            </button>
-            <button type="button" class="icon-btn" title="Restore" :disabled="busy" @click.stop="restoreBackup(b)">
-              <Icon name="rotate" :size="14" />
-            </button>
-            <button type="button" class="icon-btn" title="Delete" :disabled="busy" @click.stop="deleteBackup(b)">
-              <Icon name="trash" :size="14" />
-            </button>
           </div>
           <div v-if="!backups.length" class="row-none">None</div>
         </div>
       </section>
     </div>
+
+    <Splitter direction="col" class="col-split" @drag="dragLeft" @end="endDrag" @reset="leftWidth = LEFT_W.def" />
 
     <div class="right">
     <!-- the live file: facts and the pending rebinds -->
@@ -1039,6 +1225,15 @@ async function compareWith(key: string) {
       <div class="tile-btns">
         <span class="mono tile-facts">{{ countSummary }}</span>
         <div class="spacer" />
+        <button type="button" class="btn outline small" :disabled="busy || !hasCurrent" @click="openSaveProfile">
+          <Icon name="file" :size="14" />
+          Save Profile
+        </button>
+        <button type="button" class="btn outline small" :disabled="busy || !hasCurrent" @click="createBackup">
+          <Icon name="history" :size="14" />
+          Create Backup
+        </button>
+        <div class="tile-divider" />
         <span v-if="dirty" class="tile-dirty">{{ changesText() }}</span>
         <button type="button" class="btn danger small" :disabled="!dirty || busy" @click="discardChanges">
           <Icon name="close" :size="14" />
@@ -1047,6 +1242,31 @@ async function compareWith(key: string) {
         <button type="button" class="btn primary small" :disabled="!dirty || busy" @click="saveChanges">
           <Icon name="save" :size="14" />
           Save
+        </button>
+      </div>
+    </div>
+
+    <!-- the picked profile / backup: facts and what can be done with it -->
+    <div v-else class="action-tile">
+      <div class="tile-name">
+        <Icon :name="bBackup ? 'history' : 'file'" :size="14" />
+        <span class="name-text">{{ bBackup ? stamp(bBackup.created) : (bProfile?.name ?? nameFor(bKey)) }}</span>
+      </div>
+      <div class="tile-btns">
+        <span class="mono tile-facts">{{ sourceCountSummary }}</span>
+        <div class="spacer" />
+        <button type="button" class="btn primary small" :disabled="busy || !hasCurrent" @click="openApply">
+          <Icon name="check" :size="14" />
+          Apply
+        </button>
+        <button
+          type="button"
+          class="btn danger small"
+          :disabled="busy"
+          @click="bBackup ? deleteBackup(bBackup) : bProfile && deleteProfile(bProfile)"
+        >
+          <Icon name="trash" :size="14" />
+          Delete
         </button>
       </div>
     </div>
@@ -1142,50 +1362,49 @@ async function compareWith(key: string) {
       <div class="head compare-head">
         <Icon name="compare" :size="16" />
         <span class="head-title no-grow">Compare</span>
-        <span class="head-count">{{ report?.rows.length ?? 0 }}</span>
-        <Dropdown v-model="aKey" :options="sourceDropdown" title="Source A" />
-        <Icon name="arrow-right" :size="18" class="dim" />
-        <Dropdown v-model="bKey" :options="sourceDropdown" title="Source B" />
+        <div class="divider" />
+        <button
+          type="button"
+          class="btn small square"
+          :class="grouped ? 'primary' : 'outline'"
+          title="Group by device"
+          @click="grouped = !grouped"
+        >
+          <Icon name="group" :size="14" />
+        </button>
+        <button type="button" class="btn outline small square" title="Expand all" :disabled="!grouped || allGroupsOpen" @click="openAllGroups">
+          <Icon name="unfold" :size="14" />
+        </button>
+        <button type="button" class="btn outline small square" title="Collapse all" :disabled="!grouped || !openGroups.size" @click="closeAllGroups">
+          <Icon name="fold" :size="14" />
+        </button>
         <div class="spacer" />
-        <div class="chips">
-          <button
-            type="button"
-            class="chip added"
-            :class="{ active: kindFilter.includes('added') }"
-            @click="kindFilter = toggleIn(kindFilter, 'added')"
-          >
-            +{{ report?.added ?? 0 }}
-          </button>
-          <button
-            type="button"
-            class="chip removed"
-            :class="{ active: kindFilter.includes('removed') }"
-            @click="kindFilter = toggleIn(kindFilter, 'removed')"
-          >
-            −{{ report?.removed ?? 0 }}
-          </button>
-          <button
-            type="button"
-            class="chip changed"
-            :class="{ active: kindFilter.includes('changed') }"
-            @click="kindFilter = toggleIn(kindFilter, 'changed')"
-          >
-            ~{{ report?.changed ?? 0 }}
-          </button>
-        </div>
-        <div v-if="deviceCounts.length" class="divider" />
-        <div v-if="deviceCounts.length" class="chips">
-          <button
-            v-for="[label, d] in deviceCounts"
-            :key="label"
-            type="button"
-            class="chip mono"
-            :class="{ active: deviceFilter.includes(label) }"
-            @click="deviceFilter = toggleIn(deviceFilter, label)"
-          >
-            {{ label }} <span class="count">{{ d.count }}</span>
-          </button>
-        </div>
+        <!-- one group of chips per device: the device, then its diffs by kind -->
+        <template v-for="d in deviceChips" :key="d.label">
+          <div class="divider" />
+          <div class="chips">
+            <button
+              type="button"
+              class="chip mono"
+              :class="{ active: deviceFilter.includes(d.label) }"
+              @click="deviceFilter = toggleIn(deviceFilter, d.label)"
+            >
+              {{ d.label }}
+            </button>
+            <button
+              v-for="c in KIND_CHIPS"
+              :key="c.kind"
+              type="button"
+              class="chip"
+              :class="[c.kind, { active: kindsOf(d.label).includes(c.kind) }]"
+              :disabled="!d.counts[c.kind]"
+              @click="toggleKind(d.label, c.kind)"
+            >
+              {{ c.label }} <span class="count">{{ d.counts[c.kind] }}</span>
+            </button>
+          </div>
+        </template>
+        <div class="divider" />
         <div class="search">
           <Icon name="search" :size="14" />
           <input v-model="search" placeholder="Find…" />
@@ -1203,24 +1422,94 @@ async function compareWith(key: string) {
           @resize="cols.startResize"
           @reset="cols.resetWidth"
         />
-        <div v-for="r in filteredRows" :key="r.token" class="row diff-row" :class="r.kind">
-          <span class="sign">{{ SIGNS[r.kind] }}</span>
-          <span class="input-cell dim" :title="r.token">
-            <span class="mono">{{ deviceLabel(r) }}</span>
-            <span :class="{ mono: inputText(r.token) === inputPart(r.token) }">{{ inputText(r.token) }}</span>
-          </span>
-          <span>{{ rowAction(r) }}</span>
-          <span :class="r.a.length ? 'side' : 'empty'">{{ cellText(r.a) }}</span>
-          <span :class="r.b.length ? 'side' : 'empty'">{{ cellText(r.b) }}</span>
-        </div>
-        <div v-if="!filteredRows.length" class="empty-line">
-          {{ sameSource ? "Same source" : "No differences" }}
-        </div>
+        <template v-if="grouped">
+          <template v-for="g in diffGroups" :key="g.label">
+            <div class="group-row" @click="toggleDiffGroup(g.label)">
+              <Icon :name="isGroupOpen(g) ? 'chevron-down' : 'chevron-right'" :size="14" />
+              <span class="group-label mono">{{ g.label }}</span>
+              <span class="head-count">{{ g.rows.length }}</span>
+            </div>
+            <template v-if="isGroupOpen(g)">
+              <div v-for="r in g.rows" :key="r.token" class="row diff-row" :class="r.kind">
+                <span class="sign">{{ SIGNS[r.kind] }}</span>
+                <span class="input-cell dim" :title="r.token">
+                  <span class="mono">{{ deviceLabel(r) }}</span>
+                  <span :class="{ mono: inputText(r.token) === inputPart(r.token) }">{{ inputText(r.token) }}</span>
+                </span>
+                <span>{{ rowAction(r) }}</span>
+                <span v-for="side in (['a', 'b'] as const)" :key="side" class="refs" :class="r[side].length ? 'side' : 'empty'">
+                  <template v-if="r[side].length">
+                    <span v-for="(line, i) in cellLines(r[side])" :key="i" class="ref-line">{{ line }}</span>
+                  </template>
+                  <template v-else>—</template>
+                </span>
+              </div>
+            </template>
+          </template>
+        </template>
+        <template v-else>
+          <div v-for="r in filteredRows" :key="r.token" class="row diff-row" :class="r.kind">
+            <span class="sign">{{ SIGNS[r.kind] }}</span>
+            <span class="input-cell dim" :title="r.token">
+              <span class="mono">{{ deviceLabel(r) }}</span>
+              <span :class="{ mono: inputText(r.token) === inputPart(r.token) }">{{ inputText(r.token) }}</span>
+            </span>
+            <span>{{ rowAction(r) }}</span>
+            <span v-for="side in (['a', 'b'] as const)" :key="side" class="refs" :class="r[side].length ? 'side' : 'empty'">
+              <template v-if="r[side].length">
+                <span v-for="(line, i) in cellLines(r[side])" :key="i" class="ref-line">{{ line }}</span>
+              </template>
+              <template v-else>—</template>
+            </span>
+          </div>
+        </template>
+        <div v-if="!filteredRows.length" class="empty-line">{{ diffRows.length ? "No matches" : "No differences" }}</div>
       </div>
     </section>
     </div>
 
     <ConfirmDialog v-if="confirm" :title="confirm.title" :icon="confirm.icon" :buttons="confirm.buttons" @choose="onConfirm" />
+
+    <!-- save the live file as a binding profile -->
+    <ConfirmDialog
+      v-if="nameDialog"
+      title="Save Profile"
+      icon="file"
+      :buttons="[
+        { label: 'Save', kind: 'primary', value: 'save', disabled: !sanitizeName(nameDialog.name, '') },
+        { label: 'Cancel', kind: 'outline', value: 'cancel' },
+      ]"
+      @choose="onNameChoose"
+    >
+      <input
+        ref="nameInput"
+        class="name-in"
+        :value="nameDialog.name"
+        :maxlength="NAME_MAX"
+        spellcheck="false"
+        placeholder="Name"
+        @input="nameDialog.name = stripNameChars(($event.target as HTMLInputElement).value)"
+        @keydown.enter="sanitizeName(nameDialog.name, '') && onNameChoose('save')"
+      />
+    </ConfirmDialog>
+
+    <!-- apply a profile / backup: which devices' bindings to take over -->
+    <ConfirmDialog
+      v-if="applyDialog"
+      :title="`Apply ${nameFor(bKey)}?`"
+      subtitle="Replaces the game's bindings of the ticked devices"
+      icon="check"
+      :buttons="applyButtons"
+      @choose="onApplyChoose"
+    >
+      <div class="apply-devices">
+        <label v-for="d in applyDialog.devices" :key="d.key" class="check">
+          <input type="checkbox" :checked="applyDialog.on.has(d.key)" @change="toggleApplyDevice(d.key)" />
+          <span class="mono">{{ d.key }}</span>
+          <span class="check-name">{{ d.label }}</span>
+        </label>
+      </div>
+    </ConfirmDialog>
 
     <!-- rebind: every device at once; Record or Clear changes a kind, Apply queues the changes -->
     <ConfirmDialog
@@ -1272,11 +1561,11 @@ async function compareWith(key: string) {
 </template>
 
 <style scoped>
+/* The splitter is its own 16px column between the two. */
 .bindings-view {
   flex: 1;
   display: grid;
-  grid-template-columns: 360px minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: var(--left-w, 360px) 16px minmax(0, 1fr);
   padding: 12px 16px 16px;
   min-height: 0;
 }
@@ -1285,12 +1574,88 @@ async function compareWith(key: string) {
 .right {
   display: flex;
   flex-direction: column;
-  gap: 16px;
   min-height: 0;
 }
 
 .right {
+  gap: 16px;
   min-width: 0;
+}
+
+/* Game Bindings, Binding Profiles (dragged height), the row splitter, Backups. */
+.left .panel.profiles {
+  margin-top: 16px;
+  flex: none;
+}
+
+.name-in {
+  width: 100%;
+  height: var(--h-control);
+  padding: 0 10px;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-surface-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+}
+
+.name-in:focus {
+  border-color: var(--accent);
+}
+
+/* Own checkbox look (mirrors SettingsDialog): WebKitGTK would paint GTK's. */
+.apply-devices {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.check .check-name {
+  color: var(--text-2);
+}
+
+.check input {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex-shrink: 0;
+  display: grid;
+  place-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.check input:hover {
+  border-color: var(--accent);
+}
+
+.check input:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.check input:checked::after {
+  content: "";
+  width: 8px;
+  height: 4px;
+  border-left: 2px solid var(--accent-text);
+  border-bottom: 2px solid var(--accent-text);
+  transform: translateY(-1px) rotate(-45deg);
 }
 
 /* --- action tile (mirrors the Devices mode) --- */
@@ -1337,6 +1702,13 @@ async function compareWith(key: string) {
   font-weight: 600;
   color: var(--warn);
   white-space: nowrap;
+}
+
+.tile-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--border-dim);
 }
 
 .btn.danger {
@@ -1415,13 +1787,6 @@ async function compareWith(key: string) {
 
 .row-item.b {
   border-color: var(--accent);
-}
-
-.row-item.backup {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
-  gap: 10px;
-  align-items: center;
 }
 
 .lines {
@@ -1600,6 +1965,11 @@ async function compareWith(key: string) {
   border-color: color-mix(in srgb, var(--warn) 50%, transparent);
 }
 
+.chip:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .chip.active {
   background: var(--accent);
   color: var(--accent-text);
@@ -1701,6 +2071,27 @@ async function compareWith(key: string) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* A side's actions, one per line; the row grows with them. */
+.diff-row {
+  align-items: start;
+}
+
+.diff-row .refs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  white-space: normal;
+}
+
+.ref-line {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
 
 /* Device and input side by side in the one INPUT cell. */
 .input-cell {

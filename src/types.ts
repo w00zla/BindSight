@@ -298,8 +298,9 @@ export type DiffSource =
   | { kind: "profile"; file: string }
   | { kind: "backup"; id: string };
 
-// Bound in A only / in B only / on both sides with different actions.
-export type DiffKind = "added" | "removed" | "changed";
+// Bound in A only / in B only / on both sides with different actions / on
+// both sides to the same actions.
+export type DiffKind = "added" | "removed" | "changed" | "same";
 
 // One action a token is bound to, for a diff row.
 export interface ActionRef {
@@ -326,6 +327,13 @@ export interface DiffReport {
   added: number;
   removed: number;
   changed: number;
+  same: number;
+}
+
+// One device to take over when applying a profile or backup (apply.rs).
+export interface DeviceSel {
+  kind: DeviceKind;
+  instance: number;
 }
 
 // One device with a chosen image-map, shown on the image stage.

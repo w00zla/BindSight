@@ -879,6 +879,16 @@ async function onSaved(s: LoadStatus) {
 }
 
 // A backup was written back over actionmaps.xml — same follow-up as a reload.
+async function onApplied(s: LoadStatus) {
+  takeStatus(s);
+  await loadClash();
+  if (s.loaded) {
+    notify("Applied", "ok");
+  } else {
+    notify(s.error ?? "Load failed", "error");
+  }
+}
+
 async function onRestored(s: LoadStatus) {
   takeStatus(s);
   await loadClash();
@@ -1167,6 +1177,7 @@ onUnmounted(() => {
       :inputToken="rebindToken"
       @notify="notify"
       @restored="onRestored"
+      @applied="onApplied"
       @saved="onSaved"
     />
 

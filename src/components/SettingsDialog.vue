@@ -154,7 +154,7 @@ async function browseIni(slug: string) {
           <div class="panel-title">Backups</div>
           <div class="row between">
             <label class="check"><input v-model="autoBackup" type="checkbox" /> Enable auto-backups</label>
-            <button type="button" class="btn outline" @click="openBackupsDir">Open backup folder</button>
+            <button type="button" class="btn outline" @click="openBackupsDir">Open Backup Folder</button>
           </div>
         </section>
 
@@ -162,7 +162,7 @@ async function browseIni(slug: string) {
           <div class="panel-title">Logging</div>
           <div class="row between">
             <label class="check"><input v-model="debugLogging" type="checkbox" /> Enable debug logging</label>
-            <button type="button" class="btn outline" @click="openLogDir">Open log folder</button>
+            <button type="button" class="btn outline" @click="openLogDir">Open Log Folder</button>
           </div>
         </section>
       </div>

@@ -256,7 +256,19 @@ function dropInput() {
   recording.value = false;
 }
 
-// Width of the input / shapes column, dragged at the splitter next to it.
+// Widths of the device list and of the input / shapes column, each dragged
+// at the splitter next to it.
+const LEFT_W = { min: 240, max: 520, def: 300 };
+const leftWidth = persistedRef<number>("bindsight.devices.leftWidth", LEFT_W.def);
+let leftStart: number | null = null;
+function dragLeft(delta: number) {
+  leftStart ??= leftWidth.value;
+  leftWidth.value = Math.min(LEFT_W.max, Math.max(LEFT_W.min, Math.round(leftStart + delta)));
+}
+function endDragLeft() {
+  leftStart = null;
+  measureBox?.();
+}
 const RIGHT_W = { min: 300, max: 700, def: 380 };
 const rightWidth = persistedRef<number>("bindsight.devices.rightWidth", RIGHT_W.def);
 let rightStart: number | null = null;
@@ -410,7 +422,7 @@ async function requestLeave(): Promise<boolean> {
   const choice = await ask("Unsaved changes", "save", [
     { label: "Discard", kind: "danger", value: "discard" },
     { label: "Save", kind: "primary", value: "save" },
-    { label: "Keep editing", kind: "outline", value: "keep" },
+    { label: "Keep Editing", kind: "outline", value: "keep" },
   ]);
   if (choice === "keep") return false;
   if (choice === "save") return await saveMap();
@@ -529,7 +541,7 @@ watch(stageBox, (el) => {
   measureBox = measure;
   measure();
   ro = new ResizeObserver(() => {
-    if (rightStart === null) measure();
+    if (rightStart === null && leftStart === null) measure();
   });
   ro.observe(el);
 });
@@ -1731,7 +1743,11 @@ function noMaps(d: DeviceInfo): boolean {
 </script>
 
 <template>
-  <section class="devices" :class="{ 'device-info': showDeviceInfo }" :style="{ '--right-w': `${rightWidth}px` }">
+  <section
+    class="devices"
+    :class="{ 'device-info': showDeviceInfo }"
+    :style="{ '--left-w': `${leftWidth}px`, '--right-w': `${rightWidth}px` }"
+  >
     <!-- left: devices and their image-maps, and the system panel -->
     <aside class="col-left">
       <section class="panel grow">
@@ -1774,7 +1790,7 @@ function noMaps(d: DeviceInfo): boolean {
               </div>
               <button type="button" class="map-new" @click="newMap">
                 <Icon name="plus" :size="13" />
-                <span>New image-map</span>
+                <span>New Image-Map</span>
               </button>
             </div>
           </template>
@@ -1804,7 +1820,7 @@ function noMaps(d: DeviceInfo): boolean {
                 </div>
                 <button type="button" class="map-new" @click="newMap">
                   <Icon name="plus" :size="13" />
-                  <span>New image-map</span>
+                  <span>New Image-Map</span>
                 </button>
               </div>
             </template>
@@ -1866,7 +1882,7 @@ function noMaps(d: DeviceInfo): boolean {
           @click="useForDevice"
         >
           <Icon name="check" :size="14" />
-          Use for device
+          Use for Device
         </button>
         <div class="divider" />
       </template>
@@ -1883,7 +1899,7 @@ function noMaps(d: DeviceInfo): boolean {
       </template>
       <button v-if="isNew || editing" type="button" class="btn outline small" @click="chooseImage">
         <Icon name="folder" :size="14" />
-        Choose image
+        Choose Image
       </button>
       <template v-if="map && !editing">
         <button
@@ -2251,6 +2267,8 @@ function noMaps(d: DeviceInfo): boolean {
       <div v-else class="none">{{ props.devices.length ? "No image-map" : "No device" }}</div>
     </section>
 
+    <Splitter direction="col" class="col-split-left" @drag="dragLeft" @end="endDragLeft" @reset="leftWidth = LEFT_W.def" />
+
     <Splitter
       v-if="!showDeviceInfo"
       direction="col"
@@ -2379,9 +2397,9 @@ function noMaps(d: DeviceInfo): boolean {
 .devices {
   flex: 1;
   display: grid;
-  /* The splitter is its own 16px column between the right column and the
-     canvas; the gap after the device list is a column too. */
-  grid-template-columns: 300px 16px var(--right-w, 380px) 16px minmax(0, 1fr);
+  /* Each splitter is its own 16px column: after the device list, and
+     between the right column and the canvas. */
+  grid-template-columns: var(--left-w, 300px) 16px var(--right-w, 380px) 16px minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
     "left gap tile tile tile"
@@ -2392,7 +2410,7 @@ function noMaps(d: DeviceInfo): boolean {
 
 /* Device Info takes the canvas column and the right one. */
 .devices.device-info {
-  grid-template-columns: 300px 16px minmax(0, 1fr);
+  grid-template-columns: var(--left-w, 300px) 16px minmax(0, 1fr);
   grid-template-areas:
     "left gap tile"
     "left gap centre";
@@ -2400,6 +2418,10 @@ function noMaps(d: DeviceInfo): boolean {
 
 .col-split {
   grid-area: split;
+}
+
+.col-split-left {
+  grid-area: gap;
 }
 
 .action-tile {

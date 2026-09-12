@@ -214,16 +214,19 @@ pub fn to_profile_xml(live_xml: &str, name: &str) -> Result<String, String> {
     Ok(out)
 }
 
-/// Save the live file under `dir/<name>.xml` as a binding profile. Refuses
-/// an invalid name and an existing file.
+/// Save the live file under `dir/layout_<name>_bindsight.xml` as a binding
+/// profile — the pattern marks what the app wrote, next to SC's own
+/// `layout_<name>_exported.xml`. Refuses an invalid name and an existing
+/// file.
 pub fn save_profile(dir: &Path, actionmaps: &Path, name: &str, actions: &[scdata::ActionMap]) -> Result<BindingProfileSummary, String> {
     let name = sanitize_name(name, "");
     if !is_safe_name(&name) {
         return Err("invalid profile name (letters, digits, space, _ - and brackets only)".into());
     }
-    let dest = dir.join(format!("{name}.xml"));
+    let file = format!("layout_{name}_bindsight.xml");
+    let dest = dir.join(&file);
     if dest.exists() {
-        return Err(format!("{name}.xml already exists"));
+        return Err(format!("{file} already exists"));
     }
     let xml = fs::read_to_string(actionmaps).map_err(|e| format!("{}: {e}", actionmaps.display()))?;
     let profile = to_profile_xml(&xml, &name)?;
@@ -494,7 +497,7 @@ mod tests {
         )).unwrap();
         let dir = t.path("mappings");
         let s = save_profile(&dir, &live, " My Layout (v2) ", &sample_actions()).unwrap();
-        assert_eq!(s.file, "My Layout (v2).xml");
+        assert_eq!(s.file, "layout_My Layout (v2)_bindsight.xml");
         assert_eq!(s.name, "My Layout (v2)");
         let xml = fs::read_to_string(dir.join(&s.file)).unwrap();
         assert!(xml.starts_with("<ActionMaps version=\"1\" optionsVersion=\"2\" rebindVersion=\"2\" profileName=\"My Layout (v2)\">"));

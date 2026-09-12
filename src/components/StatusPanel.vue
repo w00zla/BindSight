@@ -90,11 +90,11 @@ const hasIssue = computed(
           <span class="spacer" />
           <button type="button" class="fix-btn" @click="confirmApply = true">
             <Icon name="file" :size="14" />
-            Fix via config
+            Fix via Config
           </button>
           <button type="button" class="copy-btn" @click="showConsole = true">
             <Icon name="terminal" :size="14" />
-            Fix via console
+            Fix via Console
           </button>
         </div>
         <!-- Moves without a saved device only shuffle empty slots to close the

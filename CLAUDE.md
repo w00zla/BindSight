@@ -45,12 +45,17 @@ presentational components:
   `LastInputCard`, `BindingsDeck` (flat rows or one bucket per input, same head
   as the Bindings List).
 - `BindingsView` — the whole Bindings mode: Game Bindings (the live file as
-  the one item "Current"), binding profiles, backups, and on the right
-  either the Bindings List (Current: the game's keybinding screen as a
-  table, one toggleable column per device the file names, categories
-  collapsible, "Set binding" button / double-click = rebind dialog editing
-  one input at a time, pending rebinds kept until Save / Discard in the
-  action tile above it) or Compare (any other source picked on the left).
+  the one item "Current"), binding profiles (Save Profile, Import, Export),
+  backups (Create Backup), and on the right either the Bindings List
+  (Current: the game's keybinding screen as a table, one toggleable column
+  per device the file names, categories collapsible, "Set binding" button
+  / double-click = rebind dialog editing one input at a time, pending
+  rebinds kept until Save / Discard in the action tile above it, which
+  also holds Save Profile / Create Backup) or Compare (a profile or backup
+  picked on the left, always against Current, every token as a row, the
+  diff chips filter; its action tile: Open Folder | Apply (dialog picking
+  the devices to take over) / Delete). Left column and the profiles panel
+  are resizable.
 - `ImageMapEditor` — the Devices mode (Konva via `vue-konva`, three columns:
   devices + image-maps, canvas, live input + shapes); also hosts Device Info
   (Device List and Device Events tiles, each with its own Save).
@@ -151,7 +156,15 @@ presentational components:
   wrappers only resolve dirs.
 - `binding_profiles.rs` — SC's exported keybinding layouts
   (`controls/mappings/*.xml`, same content as `actionmaps.xml`, different
-  root): list/import/export only; applying one is not built.
+  root): list / import / export / delete, and "Save Profile" writes the
+  live file in that layout (`to_profile_xml`, textual, in-game import
+  unverified).
+- `apply.rs` — applies a profile or backup to the live file per device
+  (`plan_apply`: the source's rebinds for the chosen `kb1` / `gp1` / `jsN`
+  are written, live rebinds the source lacks are removed via an empty
+  `RebindChange::input`, everything else stays), auto-backup "before
+  apply"; a backup with every device chosen is restored byte for byte.
+- `names.rs` — the name rule (see Image-map data model).
 - `backups.rs` — backups of the live `actionmaps.xml`, one folder per backup
   (`meta.json` with reason + game version, `actionmaps.xml`) under
   `<app_data_dir>/backups/<id>/`, id = `YYYYMMDD-HHMMSS` (UTC) with a `-2`,
