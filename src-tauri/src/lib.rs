@@ -10,6 +10,7 @@ pub mod backups;
 pub mod bindings;
 pub mod config;
 pub mod diff;
+pub mod gamefile;
 pub mod gamelog;
 pub mod guid;
 pub mod hid;
@@ -22,6 +23,7 @@ pub mod rebind;
 pub mod resort;
 pub mod scdata;
 pub mod scinstall;
+pub mod xmltext;
 
 /// Game data of the configured install (action master list + token labels),
 /// and how loading it went. Empty while loading or after an error.
@@ -186,17 +188,11 @@ fn apply_resort(
     let xml = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let rewritten = resort::rewrite_actionmaps(&xml, &report.resort)?;
 
-    let backup = if data.config.auto_backup {
-        let version = data.sc.version.as_ref().map(|v| v.label.as_str());
-        let root = backups::backups_root(&app)?;
-        Some(backups::create(&root, &path, "before order fix", version, &data.sc.data.actions)?.id)
-    } else {
-        None
-    };
-    std::fs::write(&path, rewritten).map_err(|e| format!("write {}: {e}", path.display()))?;
+    let version = data.sc.version.as_ref().map(|v| v.label.as_str());
+    let root = backups::backups_root(&app)?;
+    let backup = gamefile::replace_live_file(&root, &path, &rewritten, "before order fix", version, &data.sc.data.actions)?;
     let moves: Vec<String> = report.resort.iter().map(|m| format!("js{}->js{}", m.from, m.to)).collect();
-    let backup = backup.map_or_else(|| "auto-backup off".to_string(), |id| format!("backup {id}"));
-    info!("resort applied to {}: {} ({backup})", path.display(), moves.join(" "));
+    info!("resort applied to {}: {} (backup {backup})", path.display(), moves.join(" "));
 
     Ok(reload_bindings(&mut data))
 }
@@ -220,20 +216,14 @@ fn save_rebinds(
     let xml = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let rewritten = rebind::apply_rebinds(&xml, &changes)?;
 
-    let backup = if data.config.auto_backup {
-        let version = data.sc.version.as_ref().map(|v| v.label.as_str());
-        let root = backups::backups_root(&app)?;
-        Some(backups::create(&root, &path, "before rebind", version, &data.sc.data.actions)?.id)
-    } else {
-        None
-    };
-    std::fs::write(&path, rewritten).map_err(|e| format!("write {}: {e}", path.display()))?;
+    let version = data.sc.version.as_ref().map(|v| v.label.as_str());
+    let root = backups::backups_root(&app)?;
+    let backup = gamefile::replace_live_file(&root, &path, &rewritten, "before rebind", version, &data.sc.data.actions)?;
     let summary: Vec<String> = changes
         .iter()
         .map(|c| format!("{}/{}={}", c.actionmap, c.action, c.input.trim()))
         .collect();
-    let backup = backup.map_or_else(|| "auto-backup off".to_string(), |id| format!("backup {id}"));
-    info!("rebinds written to {}: {} ({backup})", path.display(), summary.join(" "));
+    info!("rebinds written to {}: {} (backup {backup})", path.display(), summary.join(" "));
 
     Ok(reload_bindings(&mut data))
 }
@@ -342,10 +332,15 @@ fn open_log_dir(app: AppHandle) -> Result<(), String> {
 }
 
 /// Write a text file to a path the user picked in a save dialog (the Devices
-/// log).
+/// log). Only an absolute path into an existing folder is accepted — the
+/// dialog produces nothing else, anything else is not the dialog.
 #[tauri::command]
 fn write_text_file(path: String, text: String) -> Result<(), String> {
-    std::fs::write(&path, text).map_err(|e| format!("write {path}: {e}"))?;
+    let target = std::path::Path::new(&path);
+    if !target.is_absolute() || path.contains('\0') || target.components().any(|c| c == std::path::Component::ParentDir) {
+        return Err(format!("refusing to write to {path:?}"));
+    }
+    gamefile::write_atomic(target, text.as_bytes())?;
     info!("wrote {path}");
     Ok(())
 }

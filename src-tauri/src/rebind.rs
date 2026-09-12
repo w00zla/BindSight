@@ -13,9 +13,12 @@
 //! element is created in SC's own layout (one-space indent, the file's line
 //! endings).
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 
-use crate::scdata::{parse_rebind, parse_actionmaps, DeviceKind};
+use crate::scdata::{parse_actionmaps, parse_rebind, ActionMapsFile, DeviceKind};
+use crate::xmltext::{attr, mask_markup, set_attr, tag_end};
 
 /// One rebind to write: the action and the full SC input as SC stores it
 /// (`js2_button5`, `kb1_lalt+x`, `gp1_a`, or a blank `js1_ ` to unbind). An
@@ -33,30 +36,145 @@ pub struct RebindChange {
     pub attrs: Option<Vec<(String, String)>>,
 }
 
-/// Apply every change to `xml` and return the new text. The result is parsed
-/// once more so a broken rewrite never reaches the disk.
+/// Apply every change to `xml` and return the new text. Every change is
+/// validated first ([`validate`]); the result is parsed once more and checked
+/// against the intent ([`verify_applied`]), so neither a broken nor a
+/// wrong-meaning rewrite ever reaches the disk.
 pub fn apply_rebinds(xml: &str, changes: &[RebindChange]) -> Result<String, String> {
     if changes.is_empty() {
         return Err("nothing to rebind".into());
     }
+    for change in changes {
+        validate(change)?;
+    }
+    let before = parse_actionmaps(xml)?;
     let mut out = xml.to_string();
     for change in changes {
-        if change.actionmap.is_empty() || change.action.is_empty() {
-            return Err("rebind without action".into());
-        }
-        if change.input.contains('"') || change.input.contains('<') || change.input.contains('&') {
-            return Err(format!("invalid input {:?}", change.input));
-        }
-        for (name, value) in change.attrs.iter().flatten() {
-            let bad = |s: &str| s.contains('"') || s.contains('<') || s.contains('&');
-            if name.is_empty() || name.contains(char::is_whitespace) || name.contains('=') || bad(name) || bad(value) {
-                return Err(format!("invalid rebind attribute {name:?}={value:?}"));
-            }
-        }
         out = apply_one(&out, change)?;
     }
-    parse_actionmaps(&out).map_err(|e| format!("rewrite produced unreadable XML: {e}"))?;
+    let after = parse_actionmaps(&out).map_err(|e| format!("rewrite produced unreadable XML: {e}"))?;
+    verify_applied(&before, &after, changes)?;
     Ok(out)
+}
+
+/// Longest name, token or attribute value accepted from a change.
+const MAX_LEN: usize = 128;
+
+/// An SC identifier as it appears in `actionmaps.xml`: actionmap and action
+/// names (`spaceship_general`, `v_eject`), attribute names.
+fn is_identifier(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= MAX_LEN
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        && s.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+}
+
+/// Refuse anything that is not an SC token targeting the change's kind, a
+/// blank rebind of that kind, or (for a removal) empty — and anything that
+/// could not be written into an attribute verbatim. The frontend derives
+/// kind and input from the same token, but the command takes what it gets.
+pub fn validate(change: &RebindChange) -> Result<(), String> {
+    if !is_identifier(&change.actionmap) || !is_identifier(&change.action) {
+        return Err(format!("invalid action name {:?}/{:?}", change.actionmap, change.action));
+    }
+    let input = change.input.as_str();
+    if !input.is_empty() {
+        if input.len() > MAX_LEN || !input.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | ' ')) {
+            return Err(format!("invalid input {input:?}"));
+        }
+        let target = parse_rebind(input).ok_or_else(|| format!("invalid input {input:?}"))?;
+        if target.kind != change.kind {
+            return Err(format!("input {input:?} does not target the {:?} device", change.kind));
+        }
+        if target.instance == 0 || target.instance > 99 {
+            return Err(format!("invalid device instance in {input:?}"));
+        }
+        match &target.token {
+            // A blank rebind is exactly `<prefix><instance>_` plus spaces.
+            None => {
+                let core = format!("{}{}_", change.kind.token_prefix(), target.instance);
+                if input.trim_end_matches(' ') != core {
+                    return Err(format!("invalid blank input {input:?}"));
+                }
+            }
+            // A bound token has no spaces and well-formed `+` parts.
+            Some(_) => {
+                if input.contains(' ') || input.split('+').any(str::is_empty) {
+                    return Err(format!("invalid input {input:?}"));
+                }
+            }
+        }
+    }
+    let attrs = change.attrs.as_deref().unwrap_or(&[]);
+    if attrs.len() > 8 {
+        return Err("too many rebind attributes".into());
+    }
+    for (i, (name, value)) in attrs.iter().enumerate() {
+        let name_ok = is_identifier(name) && name.len() <= 32 && name != "input";
+        let value_ok = value.len() <= MAX_LEN && value.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+        if !name_ok || !value_ok || attrs[..i].iter().any(|(n, _)| n == name) {
+            return Err(format!("invalid rebind attribute {name:?}={value:?}"));
+        }
+    }
+    Ok(())
+}
+
+/// One rebind as the verification sees it.
+type Entry<'a> = (&'a str, &'a str, &'a str, &'a [(String, String)]);
+
+/// Check that `after` is `before` with exactly `changes` applied: every
+/// changed `(actionmap, action, kind)` holds the change's rebind (or none for
+/// a removal) and nothing else of that kind, every other rebind and every
+/// `<options>` device is untouched. Catches a textual rewrite that landed in
+/// the wrong place (a comment or CDATA holding a look-alike tag, say) even
+/// when its output is valid XML.
+pub fn verify_applied(before: &ActionMapsFile, after: &ActionMapsFile, changes: &[RebindChange]) -> Result<(), String> {
+    let mut wanted: BTreeMap<(&str, &str, DeviceKind), &RebindChange> = BTreeMap::new();
+    for c in changes {
+        wanted.insert((c.actionmap.as_str(), c.action.as_str(), c.kind), c);
+    }
+    let kind_of = |input: &str| parse_rebind(input).map(|t| t.kind);
+    let is_target = |r: &crate::scdata::Rebind| {
+        kind_of(&r.input).is_some_and(|k| wanted.contains_key(&(r.actionmap.as_str(), r.action.as_str(), k)))
+    };
+
+    for (&(actionmap, action, kind), change) in &wanted {
+        let found: Vec<&crate::scdata::Rebind> = after
+            .rebinds
+            .iter()
+            .filter(|r| r.actionmap == actionmap && r.action == action && kind_of(&r.input) == Some(kind))
+            .collect();
+        let expect = format!("{actionmap}/{action} ({kind:?})");
+        if change.input.is_empty() {
+            if !found.is_empty() {
+                return Err(format!("rewrite check failed: {expect} still has a rebind"));
+            }
+        } else {
+            let ok = found.len() == 1
+                && found[0].input == change.input
+                && change.attrs.as_ref().is_none_or(|a| found[0].attrs == *a);
+            if !ok {
+                return Err(format!("rewrite check failed: {expect} did not end up as {:?}", change.input));
+            }
+        }
+    }
+
+    let mut others_before: Vec<Entry> =
+        before.rebinds.iter().filter(|r| !is_target(r)).map(|r| (r.actionmap.as_str(), r.action.as_str(), r.input.as_str(), r.attrs.as_slice())).collect();
+    let mut others_after: Vec<Entry> =
+        after.rebinds.iter().filter(|r| !is_target(r)).map(|r| (r.actionmap.as_str(), r.action.as_str(), r.input.as_str(), r.attrs.as_slice())).collect();
+    others_before.sort();
+    others_after.sort();
+    if others_before != others_after {
+        return Err("rewrite check failed: a rebind outside the change set differs".into());
+    }
+    let devices = |f: &ActionMapsFile| -> Vec<(u32, String, Option<String>)> {
+        f.joysticks.iter().map(|j| (j.instance, j.product_name.clone(), j.product_guid.clone())).collect()
+    };
+    if devices(before) != devices(after) {
+        return Err("rewrite check failed: the device options differ".into());
+    }
+    Ok(())
 }
 
 /// The file's line ending and one indent unit (SC writes one space per level).
@@ -66,10 +184,14 @@ struct Layout {
 }
 
 fn layout_of(xml: &str) -> Layout {
-    Layout {
-        eol: if xml.contains("\r\n") { "\r\n" } else { "\n" },
-        unit: if xml.contains("\n\t") { "\t" } else { " " },
-    }
+    let eol = if xml.contains("\r\n") {
+        "\r\n"
+    } else if xml.contains('\n') || !xml.contains('\r') {
+        "\n"
+    } else {
+        "\r"
+    };
+    Layout { eol, unit: if xml.contains("\n\t") || xml.contains("\r\t") { "\t" } else { " " } }
 }
 
 /// A start tag and, for a non-empty element, the span of its children and
@@ -85,26 +207,28 @@ struct Element {
 }
 
 /// Locate `<tag ... name="value">…</tag>` (or the self-closing form) inside
-/// `xml[from..to]`. `tag` is matched as a whole word so `<action` never
-/// matches `<actionmap`.
-fn find_element(xml: &str, from: usize, to: usize, tag: &str, name: &str) -> Result<Option<Element>, String> {
+/// `xml[from..to]`, searching `masked` (see [`mask_markup`]: same offsets,
+/// comments and CDATA blanked) so a look-alike inside a comment is never
+/// taken for the element. `tag` is matched as a whole word so `<action`
+/// never matches `<actionmap`.
+fn find_element(xml: &str, masked: &str, from: usize, to: usize, tag: &str, name: &str) -> Result<Option<Element>, String> {
     let open = format!("<{tag}");
     let close = format!("</{tag}>");
     let mut pos = from;
-    while let Some(rel) = xml[pos..to].find(&open) {
+    while let Some(rel) = masked[pos..to].find(&open) {
         let start = pos + rel;
-        let after = xml[start + open.len()..].chars().next();
+        let after = masked[start + open.len()..].chars().next();
         if !matches!(after, Some(c) if c.is_whitespace() || c == '/' || c == '>') {
             pos = start + 1;
             continue;
         }
-        let tag_end = xml[start..to].find('>').ok_or_else(|| format!("unterminated <{tag}> tag"))? + start;
+        let tag_end = tag_end(masked, start, to).ok_or_else(|| format!("unterminated <{tag}> tag"))?;
         let head = &xml[start..=tag_end];
         let self_closing = head.ends_with("/>");
         let (close_start, end) = if self_closing {
             (tag_end + 1, tag_end + 1)
         } else {
-            let c = xml[tag_end..to].find(&close).ok_or_else(|| format!("<{tag}> without {close}"))? + tag_end;
+            let c = masked[tag_end..to].find(&close).ok_or_else(|| format!("<{tag}> without {close}"))? + tag_end;
             (c, c + close.len())
         };
         if attr(head, "name") == Some(name) {
@@ -113,14 +237,6 @@ fn find_element(xml: &str, from: usize, to: usize, tag: &str, name: &str) -> Res
         pos = end;
     }
     Ok(None)
-}
-
-/// The value of `name="..."` inside a single tag, if present.
-fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
-    let key = format!(" {name}=\"");
-    let vstart = tag.find(&key)? + key.len();
-    let vend = tag[vstart..].find('"')? + vstart;
-    Some(&tag[vstart..vend])
 }
 
 /// The whitespace between the last line break before `pos` and `pos`.
@@ -169,8 +285,10 @@ fn apply_one(xml: &str, change: &RebindChange) -> Result<String, String> {
     }
     rebind.push_str("/>");
 
-    let profiles_end = xml.find("</ActionProfiles>").ok_or("no <ActionProfiles> in actionmaps.xml")?;
-    let Some(mut map) = find_element(&xml, 0, profiles_end, "actionmap", &change.actionmap)? else {
+    // The mask is recomputed after every edit: offsets shift with the text.
+    let masked = mask_markup(&xml);
+    let profiles_end = masked.find("</ActionProfiles>").ok_or("no <ActionProfiles> in actionmaps.xml")?;
+    let Some(mut map) = find_element(&xml, &masked, 0, profiles_end, "actionmap", &change.actionmap)? else {
         if remove {
             return Ok(xml);
         }
@@ -190,7 +308,8 @@ fn apply_one(xml: &str, change: &RebindChange) -> Result<String, String> {
         map = open_up(&mut xml, &map, &layout);
     }
 
-    let Some(mut action) = find_element(&xml, map.open_end, map.close_start, "action", &change.action)? else {
+    let masked = mask_markup(&xml);
+    let Some(mut action) = find_element(&xml, &masked, map.open_end, map.close_start, "action", &change.action)? else {
         if remove {
             return Ok(xml);
         }
@@ -203,21 +322,28 @@ fn apply_one(xml: &str, change: &RebindChange) -> Result<String, String> {
 
     // Every existing rebind of the same kind goes; the first one's place
     // takes the new element, so the file keeps its shape.
+    let masked = mask_markup(&xml);
     let mut spans: Vec<(usize, usize)> = Vec::new();
     let mut pos = action.open_end;
-    while let Some(rel) = xml[pos..action.close_start].find("<rebind") {
+    while let Some(rel) = masked[pos..action.close_start].find("<rebind") {
         let start = pos + rel;
-        let tag_end = xml[start..action.close_start].find('>').ok_or("unterminated <rebind> tag")? + start;
+        let after = masked[start + "<rebind".len()..].chars().next();
+        if !matches!(after, Some(c) if c.is_whitespace() || c == '/' || c == '>') {
+            pos = start + 1;
+            continue;
+        }
+        let tag_end = tag_end(&masked, start, action.close_start).ok_or("unterminated <rebind> tag")?;
         let head = &xml[start..=tag_end];
         let end = if head.ends_with("/>") {
             tag_end + 1
         } else {
-            xml[tag_end..action.close_start].find("</rebind>").ok_or("<rebind> without </rebind>")? + tag_end + "</rebind>".len()
+            masked[tag_end..action.close_start].find("</rebind>").ok_or("<rebind> without </rebind>")? + tag_end + "</rebind>".len()
         };
-        let same_kind = attr(head, "input")
-            .and_then(parse_rebind)
-            .is_some_and(|t| t.kind == change.kind);
-        if same_kind {
+        // A <rebind> whose input the textual reader cannot see while the
+        // XML parser can would survive as a second binding of the kind:
+        // refuse rather than write a file SC reads differently.
+        let input = attr(head, "input").ok_or_else(|| format!("<rebind> without a readable input attribute: {head}"))?;
+        if parse_rebind(input).is_some_and(|t| t.kind == change.kind) {
             spans.push((start, end));
         }
         pos = end;
@@ -258,15 +384,6 @@ fn apply_one(xml: &str, change: &RebindChange) -> Result<String, String> {
         }
     }
     Ok(xml)
-}
-
-/// `tag` with the value of its `name="..."` attribute replaced; `None` when
-/// the attribute is missing.
-fn set_attr(tag: &str, name: &str, value: &str) -> Option<String> {
-    let key = format!(" {name}=\"");
-    let vstart = tag.find(&key)? + key.len();
-    let vend = tag[vstart..].find('"')? + vstart;
-    Some(format!("{}{value}{}", &tag[..vstart], &tag[vend..]))
 }
 
 #[cfg(test)]
@@ -403,5 +520,148 @@ mod tests {
         assert!(apply_rebinds(XML, &[change("a", "", DeviceKind::Joystick, "js1_x")]).is_err());
         assert!(apply_rebinds(XML, &[change("a", "b", DeviceKind::Joystick, "js1_x\"/><x")]).is_err());
         assert!(apply_rebinds("<ActionMaps/>", &[change("a", "b", DeviceKind::Joystick, "js1_x")]).is_err());
+    }
+
+    #[test]
+    fn validate_accepts_sc_tokens_and_refuses_the_rest() {
+        let ok = |kind, input| validate(&change("spaceship_general", "v_eject", kind, input)).unwrap();
+        ok(DeviceKind::Joystick, "js1_button5");
+        ok(DeviceKind::Joystick, "js12_rotz");
+        ok(DeviceKind::Joystick, "lctrl+js1_button1");
+        ok(DeviceKind::Joystick, "js2_ ");
+        ok(DeviceKind::Joystick, "");
+        ok(DeviceKind::Keyboard, "kb1_lalt+x");
+        ok(DeviceKind::Keyboard, "kb1_np_add");
+        ok(DeviceKind::Keyboard, "kb1_mwheel_up");
+        ok(DeviceKind::Keyboard, "kb1_ ");
+        ok(DeviceKind::Gamepad, "gp1_shoulderl+thumbl_left");
+        ok(DeviceKind::Gamepad, "gp1_triggerl_btn");
+
+        let bad = |kind, input| assert!(validate(&change("spaceship_general", "v_eject", kind, input)).is_err(), "{input:?}");
+        bad(DeviceKind::Keyboard, "js1_button5"); // kind mismatch
+        bad(DeviceKind::Joystick, "kb1_x");
+        bad(DeviceKind::Joystick, "button5"); // no prefix
+        bad(DeviceKind::Joystick, "js1_button 5"); // space in a bound token
+        bad(DeviceKind::Joystick, "js1_+button5"); // empty combo part
+        bad(DeviceKind::Joystick, "+js1_button5");
+        bad(DeviceKind::Joystick, "js1_button5+");
+        bad(DeviceKind::Joystick, "lctrl+js1_ "); // blank with a modifier
+        bad(DeviceKind::Joystick, "js1_\t"); // blank with a tab
+        bad(DeviceKind::Joystick, "js1_büton");
+        bad(DeviceKind::Joystick, "js1_x\"/><x");
+        let long = format!("js1_{}", "b".repeat(200));
+        bad(DeviceKind::Joystick, &long);
+        bad(DeviceKind::Keyboard, "kb2_x"); // SC knows one keyboard
+        bad(DeviceKind::Gamepad, "gp2_a");
+
+        let names = |actionmap, action| validate(&change(actionmap, action, DeviceKind::Joystick, "js1_x"));
+        assert!(names("spaceship_general", "v_eject").is_ok());
+        assert!(names("IFCS_controls", "v_ifcs_toggle-x.y").is_ok());
+        assert!(names("a\"/><action name=\"b", "v").is_err());
+        assert!(names("a&amp;b", "v").is_err());
+        assert!(names("1abc", "v").is_err());
+        assert!(names("", "v").is_err());
+        assert!(names("a b", "v").is_err());
+
+        let mut c = change("spaceship_general", "v_eject", DeviceKind::Keyboard, "kb1_x");
+        c.attrs = Some(vec![("activationMode".into(), "delayed_press".into()), ("multiTap".into(), "2".into())]);
+        assert!(validate(&c).is_ok());
+        for attrs in [
+            vec![("input".to_string(), "kb1_y".to_string())],
+            vec![("activation Mode".to_string(), "x".to_string())],
+            vec![("activationMode".to_string(), "a\"b".to_string())],
+            vec![("activationMode".to_string(), "x".to_string()), ("activationMode".to_string(), "y".to_string())],
+            vec![("a".to_string(), "b".to_string()); 9],
+        ] {
+            c.attrs = Some(attrs.clone());
+            assert!(validate(&c).is_err(), "{attrs:?}");
+        }
+    }
+
+    #[test]
+    fn verify_applied_catches_a_rewrite_with_the_wrong_meaning() {
+        let before = parse_actionmaps(XML).unwrap();
+        let c = change("spaceship_general", "v_boost", DeviceKind::Joystick, "js1_button9");
+        // The honest rewrite passes.
+        let good = apply_rebinds(XML, &[c.clone()]).unwrap();
+        verify_applied(&before, &parse_actionmaps(&good).unwrap(), &[c.clone()]).unwrap();
+        // The rebind landed under another action: valid XML, wrong meaning.
+        let wrong = XML.replace("<rebind input=\"js1_ \"/>", "<rebind input=\"js1_button9\"/>");
+        let err = verify_applied(&before, &parse_actionmaps(&wrong).unwrap(), &[c.clone()]).unwrap_err();
+        assert!(err.contains("rewrite check failed"), "{err}");
+        // The target is right but a bystander changed.
+        let bystander = good.replace("kb1_ralt+y", "kb1_ralt+z");
+        assert!(verify_applied(&before, &parse_actionmaps(&bystander).unwrap(), &[c.clone()]).is_err());
+        // The target is right but a device option changed.
+        let device = good.replace("instance=\"1\" Product", "instance=\"2\" Product");
+        assert!(verify_applied(&before, &parse_actionmaps(&device).unwrap(), &[c]).is_err());
+    }
+
+    #[test]
+    fn look_alike_tags_in_comments_and_cdata_are_ignored() {
+        // A commented-out actionmap + action + rebind for the very action
+        // being changed, a CDATA rebind inside the real action, and a
+        // commented </ActionProfiles>.
+        let xml = XML
+            .replace(
+                "  <actionmap name=\"spaceship_general\">\n",
+                "  <!-- <actionmap name=\"spaceship_general\"><action name=\"v_boost\"><rebind input=\"js1_button1\"/></action></actionmap> </ActionProfiles> -->\n  <actionmap name=\"spaceship_general\">\n",
+            )
+            .replace(
+                "    <rebind input=\"js1_button5\"/>\n",
+                "    <![CDATA[<rebind input=\"js1_button7\"/>]]>\n    <!-- <rebind input=\"js1_button8\"/> -->\n    <rebind input=\"js1_button5\"/>\n",
+            );
+        let c = change("spaceship_general", "v_boost", DeviceKind::Joystick, "js1_button9");
+        let out = apply_rebinds(&xml, &[c]).unwrap();
+        // The real rebind changed, the comment and the CDATA survived untouched.
+        assert!(out.contains("    <rebind input=\"js1_button9\"/>\n"));
+        assert!(out.contains("<![CDATA[<rebind input=\"js1_button7\"/>]]>"));
+        assert!(out.contains("<!-- <rebind input=\"js1_button8\"/> -->"));
+        assert!(out.contains("<action name=\"v_boost\"><rebind input=\"js1_button1\"/></action></actionmap> </ActionProfiles> -->"));
+        assert!(!out.contains("js1_button6"), "the duplicate of the kind went");
+        // A new actionmap lands before the real </ActionProfiles>, not the commented one.
+        let out = apply_rebinds(&xml, &[change("new_map", "v_new", DeviceKind::Keyboard, "kb1_q")]).unwrap();
+        assert!(out.find("<actionmap name=\"new_map\">").unwrap() > out.find("<!-- <actionmap").unwrap());
+        assert!(out.find("<actionmap name=\"new_map\">").unwrap() < out.rfind("</ActionProfiles>").unwrap());
+    }
+
+    #[test]
+    fn attributes_in_any_spelling_are_replaced_not_duplicated() {
+        for spelling in [
+            "<rebind input='js1_button5'/>",
+            "<rebind\tinput=\"js1_button5\" />",
+            "<rebind input = \"js1_button5\"/>",
+            "<rebind activationMode=\"press\" input=\"js1_button5\"></rebind>",
+            "<rebind input=\"js1_button5\"><child/></rebind>",
+        ] {
+            let xml = XML.replace("<rebind input=\"js1_button5\"/>", spelling);
+            let out = apply_rebinds(&xml, &[change("spaceship_general", "v_boost", DeviceKind::Joystick, "js1_button9")]).unwrap();
+            let file = parse_actionmaps(&out).unwrap();
+            let boost: Vec<&str> = file.rebinds.iter().filter(|r| r.action == "v_boost").map(|r| r.input.as_str()).collect();
+            assert_eq!(boost, vec!["js1_button9"], "{spelling}");
+        }
+        // An input the parser reads but the text scanner cannot (unquoted):
+        // refused, never a second binding.
+        let xml = XML.replace("<rebind input=\"js1_button5\"/>", "<rebind input=js1_button5/>");
+        assert!(apply_rebinds(&xml, &[change("spaceship_general", "v_boost", DeviceKind::Joystick, "js1_button9")]).is_err());
+    }
+
+    #[test]
+    fn keeps_a_bom_and_cr_only_line_endings() {
+        let bom = format!("\u{feff}{XML}");
+        let out = apply_rebinds(&bom, &[change("spaceship_general", "v_boost", DeviceKind::Joystick, "js1_button9")]).unwrap();
+        assert!(out.starts_with('\u{feff}'));
+        assert!(out.contains("<rebind input=\"js1_button9\"/>"));
+        let cr = XML.replace('\n', "\r");
+        let out = apply_rebinds(&cr, &[change("new_map", "v_new", DeviceKind::Keyboard, "kb1_q")]).unwrap();
+        assert!(!out.contains('\n'), "no foreign line ending introduced");
+        assert!(out.contains("<actionmap name=\"new_map\">\r"));
+    }
+
+    #[test]
+    fn opens_up_a_self_closing_action() {
+        let xml = XML.replace("   <action name=\"v_boost\">\n    <rebind input=\"js1_button5\"/>\n    <rebind input=\"js1_button6\"/>\n   </action>\n", "   <action name=\"v_boost\"/>\n");
+        let out = apply_rebinds(&xml, &[change("spaceship_general", "v_boost", DeviceKind::Joystick, "js1_button9")]).unwrap();
+        assert!(out.contains("   <action name=\"v_boost\">\n    <rebind input=\"js1_button9\"/>\n   </action>\n"), "{out}");
     }
 }

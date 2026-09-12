@@ -13,6 +13,8 @@
 use std::collections::BTreeMap;
 
 use crate::bindings::ResortMove;
+use crate::scdata::{parse_actionmaps, ActionMapsFile};
+use crate::xmltext::{attr, find_attr, mask_markup, tag_end};
 
 /// Rewrite `xml` so that every binding saved under `js{from}` lives under
 /// `js{to}` for each move, and the joystick `<options>` slots follow. `moves`
@@ -23,8 +25,43 @@ pub fn rewrite_actionmaps(xml: &str, moves: &[ResortMove]) -> Result<String, Str
     if map.is_empty() {
         return Err("nothing to resort".into());
     }
+    let before = parse_actionmaps(xml)?;
     let renumbered = renumber_options(xml, &map)?;
-    Ok(renumber_inputs(&renumbered, &map))
+    let out = renumber_inputs(&renumbered, &map);
+    let after = parse_actionmaps(&out).map_err(|e| format!("rewrite produced unreadable XML: {e}"))?;
+    verify_applied(&before, &after, &map)?;
+    Ok(out)
+}
+
+/// Check that `after` is `before` with the slots renumbered and nothing else:
+/// every rebind in place with its tokens mapped, attributes untouched, the
+/// joystick devices the same set on their new slots.
+pub fn verify_applied(before: &ActionMapsFile, after: &ActionMapsFile, map: &BTreeMap<u32, u32>) -> Result<(), String> {
+    if before.rebinds.len() != after.rebinds.len() {
+        return Err("rewrite check failed: the number of rebinds changed".into());
+    }
+    for (b, a) in before.rebinds.iter().zip(&after.rebinds) {
+        let same = b.actionmap == a.actionmap && b.action == a.action && b.attrs == a.attrs && renumber_tokens(&b.input, map) == a.input;
+        if !same {
+            return Err(format!("rewrite check failed: {}/{} {:?} became {:?}", b.actionmap, b.action, b.input, a.input));
+        }
+    }
+    let devices = |f: &ActionMapsFile, mapped: bool| -> Vec<(u32, String, Option<String>)> {
+        let mut v: Vec<_> = f
+            .joysticks
+            .iter()
+            .map(|j| {
+                let n = if mapped { map.get(&j.instance).copied().unwrap_or(j.instance) } else { j.instance };
+                (n, j.product_name.clone(), j.product_guid.clone())
+            })
+            .collect();
+        v.sort();
+        v
+    };
+    if devices(before, true) != devices(after, false) {
+        return Err("rewrite check failed: the joystick devices do not match the moves".into());
+    }
+    Ok(())
 }
 
 /// `from -> to` for the non-identity moves, checked for bijectivity.
@@ -53,25 +90,27 @@ struct OptionsBlock {
 }
 
 /// Locate every `<options type="joystick" instance="N" ...>` element,
-/// self-closing or with children up to its `</options>`.
+/// self-closing or with children up to its `</options>`. Searches the
+/// masked text, so one inside a comment does not count.
 fn find_joystick_options(xml: &str) -> Result<Vec<OptionsBlock>, String> {
+    let masked = mask_markup(xml);
     let mut blocks = Vec::new();
     let mut pos = 0;
-    while let Some(rel) = xml[pos..].find("<options") {
+    while let Some(rel) = masked[pos..].find("<options") {
         let start = pos + rel;
         // Make sure it is the tag and not e.g. `<optionsfoo`.
-        let after = xml[start + "<options".len()..].chars().next();
+        let after = masked[start + "<options".len()..].chars().next();
         if !matches!(after, Some(c) if c.is_whitespace() || c == '/' || c == '>') {
             pos = start + 1;
             continue;
         }
-        let tag_end = xml[start..].find('>').ok_or("unterminated <options> tag")? + start;
+        let tag_end = tag_end(&masked, start, masked.len()).ok_or("unterminated <options> tag")?;
         let tag = &xml[start..=tag_end];
         let self_closing = tag.ends_with("/>");
         let end = if self_closing {
             tag_end + 1
         } else {
-            let close = xml[tag_end..].find("</options>").ok_or("<options> without </options>")?;
+            let close = masked[tag_end..].find("</options>").ok_or("<options> without </options>")?;
             tag_end + close + "</options>".len()
         };
         if attr(tag, "type") == Some("joystick") {
@@ -84,14 +123,6 @@ fn find_joystick_options(xml: &str) -> Result<Vec<OptionsBlock>, String> {
         pos = end;
     }
     Ok(blocks)
-}
-
-/// The value of `name="..."` inside a single tag, if present.
-fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
-    let key = format!(" {name}=\"");
-    let vstart = tag.find(&key)? + key.len();
-    let vend = tag[vstart..].find('"')? + vstart;
-    Some(&tag[vstart..vend])
 }
 
 /// Renumber the joystick `<options>` elements and re-emit them, sorted by
@@ -107,10 +138,13 @@ fn renumber_options(xml: &str, map: &BTreeMap<u32, u32>) -> Result<String, Strin
         .map(|b| {
             let new = map.get(&b.instance).copied().unwrap_or(b.instance);
             let text = &xml[b.start..b.end];
-            let old_attr = format!(" instance=\"{}\"", b.instance);
-            let new_attr = format!(" instance=\"{new}\"");
             // Only the opening tag carries the attribute; children never do.
-            (new, text.replacen(&old_attr, &new_attr, 1))
+            let head_end = tag_end(text, 0, text.len()).unwrap_or(text.len() - 1);
+            let head = &text[..=head_end];
+            let renumbered = find_attr(head, "instance")
+                .map(|s| format!("{}{new}{}", &head[..s.value_start], &head[s.value_end..]))
+                .unwrap_or_else(|| head.to_string());
+            (new, format!("{renumbered}{}", &text[head_end + 1..]))
         })
         .collect();
     renumbered.sort_by_key(|(n, _)| *n);
@@ -126,21 +160,33 @@ fn renumber_options(xml: &str, map: &BTreeMap<u32, u32>) -> Result<String, Strin
     Ok(out)
 }
 
-/// Replace the `jsN_` prefix of every token inside `input="..."` values.
+/// Replace the `jsN_` prefix of every token inside the `input` attribute of
+/// every tag (comments and CDATA skipped, either quote style read).
 fn renumber_inputs(xml: &str, map: &BTreeMap<u32, u32>) -> String {
-    const KEY: &str = "input=\"";
+    let masked = mask_markup(xml);
     let mut out = String::with_capacity(xml.len());
-    let mut pos = 0;
-    while let Some(rel) = xml[pos..].find(KEY) {
-        let vstart = pos + rel + KEY.len();
-        let Some(vlen) = xml[vstart..].find('"') else {
+    // `copied`: how far `xml` has been copied into `out`; `search`: where
+    // the next tag is looked for.
+    let mut copied = 0;
+    let mut search = 0;
+    while let Some(rel) = masked[search..].find('<') {
+        let start = search + rel;
+        if masked[start + 1..].starts_with('/') {
+            search = start + 1;
+            continue;
+        }
+        let Some(end) = tag_end(&masked, start, masked.len()) else {
             break;
         };
-        out.push_str(&xml[pos..vstart]);
-        out.push_str(&renumber_tokens(&xml[vstart..vstart + vlen], map));
-        pos = vstart + vlen;
+        let head = &xml[start..=end];
+        if let Some(s) = find_attr(head, "input") {
+            out.push_str(&xml[copied..start + s.value_start]);
+            out.push_str(&renumber_tokens(&head[s.value_start..s.value_end], map));
+            copied = start + s.value_end;
+        }
+        search = end + 1;
     }
-    out.push_str(&xml[pos..]);
+    out.push_str(&xml[copied..]);
     out
 }
 
@@ -248,6 +294,49 @@ mod tests {
             .map(|s| out.find(s).unwrap())
             .collect();
         assert!(order[0] < order[1] && order[1] < order[2]);
+    }
+
+    #[test]
+    fn comments_and_single_quotes_do_not_confuse_the_rewrite() {
+        let xml = XML
+            .replace(
+                "  <options type=\"keyboard\" instance=\"1\"",
+                "  <!-- <options type=\"joystick\" instance=\"1\" Product=\"ghost\"/> <rebind input=\"js1_ghost\"/> -->\r\n  <options type='joystick' instance='9' Product='Nine'/>\r\n  <options type=\"keyboard\" instance=\"1\"",
+            )
+            .replace("<rebind input=\"js2_button5\"/>", "<rebind input='js2_button5'/>");
+        let out = rewrite_actionmaps(&xml, &[mv(1, 2), mv(2, 1), mv(9, 3), mv(3, 9)]).unwrap();
+        assert!(out.contains("<!-- <options type=\"joystick\" instance=\"1\" Product=\"ghost\"/> <rebind input=\"js1_ghost\"/> -->"), "comment untouched");
+        assert!(out.contains("<options type='joystick' instance='3' Product='Nine'/>"), "{out}");
+        assert!(out.contains("<rebind input='js1_button5'/>"));
+        // The way back restores the meaning (blocks are re-emitted sorted by
+        // slot, so with four of them the bytes rotate, the content does not).
+        let back = rewrite_actionmaps(&out, &[mv(1, 2), mv(2, 1), mv(9, 3), mv(3, 9)]).unwrap();
+        let (a, b) = (parse_actionmaps(&xml).unwrap(), parse_actionmaps(&back).unwrap());
+        let devs = |f: &ActionMapsFile| {
+            let mut v: Vec<_> = f.joysticks.iter().map(|j| (j.instance, j.product_name.clone())).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(devs(&a), devs(&b));
+        assert_eq!(a.rebinds.iter().map(|r| &r.input).collect::<Vec<_>>(), b.rebinds.iter().map(|r| &r.input).collect::<Vec<_>>());
+        assert!(back.contains("<!-- <options type=\"joystick\" instance=\"1\" Product=\"ghost\"/>"));
+    }
+
+    #[test]
+    fn verify_applied_catches_a_wrong_rewrite() {
+        let before = parse_actionmaps(XML).unwrap();
+        let map: BTreeMap<u32, u32> = [(1, 2), (2, 1)].into_iter().collect();
+        let good = rewrite_actionmaps(XML, &[mv(1, 2), mv(2, 1)]).unwrap();
+        verify_applied(&before, &parse_actionmaps(&good).unwrap(), &map).unwrap();
+        // A token left behind on its old slot.
+        let stale = good.replace("<rebind input=\"js1_button5\"/>", "<rebind input=\"js2_button5\"/>");
+        assert!(verify_applied(&before, &parse_actionmaps(&stale).unwrap(), &map).is_err());
+        // A device that did not move with its bindings.
+        let device = good.replace("instance=\"2\" Product=\" VKB R", "instance=\"3\" Product=\" VKB R");
+        assert!(verify_applied(&before, &parse_actionmaps(&device).unwrap(), &map).is_err());
+        // A rebind lost on the way.
+        let lost = good.replace("    <rebind input=\"kb1_space\"/>\r\n", "");
+        assert!(verify_applied(&before, &parse_actionmaps(&lost).unwrap(), &map).is_err());
     }
 
     #[test]

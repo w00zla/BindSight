@@ -23,7 +23,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::names::{is_safe_name, sanitize_name};
-use crate::{bindings, config, scdata, AppData};
+use crate::{AppData, bindings, config, gamefile, scdata, xmltext};
 
 /// Listing entry for one exported binding profile file.
 #[derive(Debug, Clone, Serialize)]
@@ -49,6 +49,8 @@ pub(crate) fn is_bare_xml_name(name: &str) -> bool {
         && !name.contains('/')
         && !name.contains('\\')
         && !name.contains('\0')
+        // `C:x.xml` is drive-relative on Windows and would leave the folder.
+        && !name.contains(':')
         && Path::new(name)
             .extension()
             .and_then(|e| e.to_str())
@@ -152,8 +154,10 @@ pub fn import(dir: &Path, source: &Path, actions: &[scdata::ActionMap]) -> Resul
 }
 
 /// Copy `file` (a bare name that must exist in `dir`) to `dest`. Overwrites
-/// `dest` if present — the save dialog already asked.
-pub fn export(dir: &Path, file: &str, dest: &Path) -> Result<(), String> {
+/// `dest` if present — the save dialog already asked — except inside
+/// `protected` (the game's own profile folder: the live bindings are never
+/// overwritten by an export).
+pub fn export(dir: &Path, file: &str, dest: &Path, protected: &Path) -> Result<(), String> {
     if !is_bare_xml_name(file) {
         return Err(format!("{file:?} is not a valid binding profile file name"));
     }
@@ -161,8 +165,26 @@ pub fn export(dir: &Path, file: &str, dest: &Path) -> Result<(), String> {
     if !src.is_file() {
         return Err(format!("{file}: not found"));
     }
-    fs::copy(&src, dest).map_err(|e| e.to_string())?;
-    Ok(())
+    if is_inside(dest, protected) {
+        return Err(format!("{}: not exporting into the game's profile folder", dest.display()));
+    }
+    let bytes = fs::read(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+    gamefile::write_atomic(dest, &bytes)
+}
+
+/// Whether `path` lies in `dir` (or is `dir`): the nearest existing ancestor
+/// of `path` is resolved (symlinks, `..`) and checked against `dir`. A `dir`
+/// that does not exist protects nothing.
+fn is_inside(path: &Path, dir: &Path) -> bool {
+    let Ok(dir) = dir.canonicalize() else { return false };
+    let mut probe = path.parent();
+    while let Some(p) = probe {
+        if let Ok(resolved) = p.canonicalize() {
+            return resolved.starts_with(&dir);
+        }
+        probe = p.parent();
+    }
+    false
 }
 
 /// The live `actionmaps.xml` rewritten in SC's export layout: the content of
@@ -171,19 +193,12 @@ pub fn export(dir: &Path, file: &str, dest: &Path) -> Result<(), String> {
 /// (keyboard, mouse and gamepad always). Textual, so the bindings stay byte
 /// for byte.
 pub fn to_profile_xml(live_xml: &str, name: &str) -> Result<String, String> {
-    let open = live_xml.find("<ActionProfiles").ok_or("no <ActionProfiles> in actionmaps.xml")?;
-    let open_end = live_xml[open..].find('>').ok_or("unterminated <ActionProfiles> tag")? + open + 1;
-    let close = live_xml.find("</ActionProfiles>").ok_or("<ActionProfiles> without </ActionProfiles>")?;
+    let masked = xmltext::mask_markup(live_xml);
+    let open = masked.find("<ActionProfiles").ok_or("no <ActionProfiles> in actionmaps.xml")?;
+    let open_end = xmltext::tag_end(&masked, open, masked.len()).ok_or("unterminated <ActionProfiles> tag")? + 1;
+    let close = masked[open_end..].find("</ActionProfiles>").ok_or("<ActionProfiles> without </ActionProfiles>")? + open_end;
     let head = &live_xml[open..open_end];
-    let attr = |key: &str| -> String {
-        let k = format!(" {key}=\"");
-        head.find(&k)
-            .and_then(|i| {
-                let v = &head[i + k.len()..];
-                v.find('"').map(|j| v[..j].to_string())
-            })
-            .unwrap_or_else(|| "1".to_string())
-    };
+    let attr = |key: &str| -> String { xmltext::attr(head, key).unwrap_or("1").to_string() };
     let eol = if live_xml.contains("\r\n") { "\r\n" } else { "\n" };
     let file = scdata::parse_actionmaps(live_xml)?;
     let mut instances: Vec<u32> = file.joysticks.iter().map(|j| j.instance).collect();
@@ -231,7 +246,7 @@ pub fn save_profile(dir: &Path, actionmaps: &Path, name: &str, actions: &[scdata
     let xml = fs::read_to_string(actionmaps).map_err(|e| format!("{}: {e}", actionmaps.display()))?;
     let profile = to_profile_xml(&xml, &name)?;
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    fs::write(&dest, profile).map_err(|e| format!("{}: {e}", dest.display()))?;
+    gamefile::write_atomic(&dest, profile.as_bytes())?;
     summarize(&dest, actions)
 }
 
@@ -293,7 +308,11 @@ pub(crate) fn import_binding_profile(
 #[tauri::command]
 pub(crate) fn export_binding_profile(file: String, dest_path: String, data: State<Mutex<AppData>>) -> Result<(), String> {
     let dir = binding_profiles_dir(&data);
-    export(&dir, &file, Path::new(&dest_path))
+    let live_dir = {
+        let data = data.lock().unwrap();
+        config::actionmaps_path(data.config.base_path()).parent().map(Path::to_path_buf)
+    };
+    export(&dir, &file, Path::new(&dest_path), live_dir.as_deref().unwrap_or(Path::new("")))
 }
 
 fn binding_profiles_dir(data: &State<Mutex<AppData>>) -> PathBuf {
@@ -480,6 +499,30 @@ mod tests {
     }
 
     #[test]
+    fn to_profile_xml_ignores_look_alikes_in_comments() {
+        // A commented </ActionProfiles> ahead of the real element used to
+        // reverse the slice bounds (a panic); a commented <ActionProfiles>
+        // must not be taken for the head either.
+        let live = concat!(
+            "<!-- </ActionProfiles> <ActionProfiles version=\"9\"> -->\n",
+            "<ActionMaps>\n",
+            " <ActionProfiles version=\"1\" optionsVersion=\"2\" rebindVersion=\"2\" profileName=\"default\">\n",
+            "  <options type=\"joystick\" instance=\"1\" Product=\" VKB L {0201231D-0000-0000-0000-504944564944}\"/>\n",
+            "  <actionmap name=\"m\"><action name=\"a\"><rebind input=\"js1_button1\"/></action></actionmap>\n",
+            " </ActionProfiles>\n",
+            "</ActionMaps>\n",
+        );
+        let out = to_profile_xml(live, "Test").unwrap();
+        assert!(out.starts_with("<ActionMaps version=\"1\" optionsVersion=\"2\" rebindVersion=\"2\" profileName=\"Test\">"));
+        assert!(out.contains("<joystick instance=\"1\"/>"));
+        assert!(out.contains("<rebind input=\"js1_button1\"/>"));
+        assert!(!out.contains("version=\"9\""));
+        // Attributes in single quotes are read too.
+        let single = live.replace("version=\"1\"", "version='7'");
+        assert!(to_profile_xml(&single, "Test").unwrap().starts_with("<ActionMaps version=\"7\""));
+    }
+
+    #[test]
     fn save_profile_wraps_the_live_file_in_the_export_layout() {
         let t = Tmp::new();
         let live = t.path("actionmaps.xml");
@@ -526,11 +569,20 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("layout_a_exported.xml"), layout_xml("A")).unwrap();
 
+        let live = t.path("live/default");
+        fs::create_dir_all(&live).unwrap();
         let dest = t.path("out.xml");
-        export(&dir, "layout_a_exported.xml", &dest).unwrap();
+        export(&dir, "layout_a_exported.xml", &dest, &live).unwrap();
         assert_eq!(fs::read_to_string(&dest).unwrap(), layout_xml("A"));
 
-        assert!(export(&dir, "missing.xml", &t.path("out2.xml")).unwrap_err().contains("not found"));
-        assert!(export(&dir, "../escape.xml", &t.path("out3.xml")).unwrap_err().contains("not a valid"));
+        assert!(export(&dir, "missing.xml", &t.path("out2.xml"), &live).unwrap_err().contains("not found"));
+        assert!(export(&dir, "../escape.xml", &t.path("out3.xml"), &live).unwrap_err().contains("not a valid"));
+        // Never over the game's live bindings, however the path is spelled.
+        fs::write(live.join("actionmaps.xml"), "live").unwrap();
+        for target in [live.join("actionmaps.xml"), t.path("live/../live/default/x.xml"), live.join("sub").join("y.xml")] {
+            let err = export(&dir, "layout_a_exported.xml", &target, &live).unwrap_err();
+            assert!(err.contains("profile folder"), "{}: {err}", target.display());
+        }
+        assert_eq!(fs::read_to_string(live.join("actionmaps.xml")).unwrap(), "live");
     }
 }

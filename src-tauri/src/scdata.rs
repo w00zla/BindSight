@@ -199,17 +199,19 @@ fn action_from(e: &BytesStart, loc: &HashMap<String, String>) -> Action {
 }
 
 fn attributes(e: &BytesStart) -> HashMap<String, String> {
-    attribute_list(e).into_iter().collect()
+    attribute_list(e).unwrap_or_default().into_iter().collect()
 }
 
-/// The element's attributes in file order.
-fn attribute_list(e: &BytesStart) -> Vec<(String, String)> {
+/// The element's attributes in file order. An attribute the parser cannot
+/// read (unquoted value, duplicate name) is an error, not a silent gap.
+fn attribute_list(e: &BytesStart) -> Result<Vec<(String, String)>, String> {
+    let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
     e.attributes()
-        .flatten()
         .map(|attr| {
+            let attr = attr.map_err(|err| format!("<{tag}>: {err}"))?;
             let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
-            let value = attr.unescape_value().map(|v| v.into_owned()).unwrap_or_default();
-            (key, value)
+            let value = attr.unescape_value().map_err(|err| format!("<{tag}> {key}: {err}"))?.into_owned();
+            Ok((key, value))
         })
         .collect()
 }
@@ -317,11 +319,26 @@ pub fn parse_actionmaps(xml: &str) -> Result<ActionMapsFile, String> {
     let mut rebinds = Vec::new();
     let mut cur_map = String::new();
     let mut cur_action = String::new();
+    let mut root_seen = false;
 
     loop {
-        match reader.read_event().map_err(|e| format!("XML error: {e}"))? {
+        let event = reader.read_event().map_err(|e| format!("XML error: {e}"))?;
+        // The document must be a bindings file: its root is <ActionMaps>
+        // (the live file and SC's exported profiles alike).
+        if !root_seen {
+            if let Event::Start(e) | Event::Empty(e) = &event {
+                if e.name().as_ref() != b"ActionMaps" {
+                    return Err(format!(
+                        "not a bindings file (root element <{}>, expected <ActionMaps>)",
+                        String::from_utf8_lossy(e.name().as_ref())
+                    ));
+                }
+                root_seen = true;
+            }
+        }
+        match event {
             Event::Start(e) | Event::Empty(e) if e.name().as_ref() == b"options" => {
-                let attrs = attributes(&e);
+                let attrs: HashMap<String, String> = attribute_list(&e)?.into_iter().collect();
                 if attrs.get("type").map(String::as_str) == Some("joystick") {
                     if let Some(device) = joystick_device_from(&attrs) {
                         joysticks.push(device);
@@ -329,13 +346,33 @@ pub fn parse_actionmaps(xml: &str) -> Result<ActionMapsFile, String> {
                 }
             }
             Event::Start(e) if e.name().as_ref() == b"actionmap" => {
-                cur_map = attributes(&e).get("name").cloned().unwrap_or_default();
+                cur_map = attribute_list(&e)?.into_iter().find(|(k, _)| k == "name").map(|(_, v)| v).unwrap_or_default();
             }
             Event::Start(e) if e.name().as_ref() == b"action" => {
-                cur_action = attributes(&e).get("name").cloned().unwrap_or_default();
+                cur_action = attribute_list(&e)?.into_iter().find(|(k, _)| k == "name").map(|(_, v)| v).unwrap_or_default();
+            }
+            // A self-closing <actionmap/> or <action/> opens no context.
+            Event::Empty(e) if e.name().as_ref() == b"actionmap" => {
+                cur_map.clear();
+                cur_action.clear();
+            }
+            Event::Empty(e) if e.name().as_ref() == b"action" => {
+                cur_action.clear();
+            }
+            // Leaving an element ends its context: a stray <rebind> after
+            // </action> belongs to no action (and is kept out of the list).
+            Event::End(e) if e.name().as_ref() == b"actionmap" => {
+                cur_map.clear();
+                cur_action.clear();
+            }
+            Event::End(e) if e.name().as_ref() == b"action" => {
+                cur_action.clear();
             }
             Event::Start(e) | Event::Empty(e) if e.name().as_ref() == b"rebind" => {
-                let attrs = attribute_list(&e);
+                let attrs = attribute_list(&e)?;
+                if cur_map.is_empty() || cur_action.is_empty() {
+                    continue;
+                }
                 if let Some(input) = attrs.iter().find(|(k, _)| k == "input").map(|(_, v)| v.clone()) {
                     rebinds.push(Rebind {
                         actionmap: cur_map.clone(),
@@ -350,6 +387,9 @@ pub fn parse_actionmaps(xml: &str) -> Result<ActionMapsFile, String> {
         }
     }
 
+    if !root_seen {
+        return Err("not a bindings file (empty document)".into());
+    }
     Ok(ActionMapsFile { joysticks, rebinds })
 }
 
@@ -679,6 +719,35 @@ mod tests {
         let (name, guid) = split_product("Controller (Gamepad)");
         assert_eq!(name, "Controller (Gamepad)");
         assert_eq!(guid, None);
+    }
+
+    #[test]
+    fn actionmaps_parser_is_strict_about_what_it_reads() {
+        // Not a bindings file at all: refused, not "0 rebinds".
+        assert!(parse_actionmaps("<html><body/></html>").unwrap_err().contains("not a bindings file"));
+        assert!(parse_actionmaps("").unwrap_err().contains("not a bindings file"));
+        assert!(parse_actionmaps("<?xml version=\"1.0\"?>\n<!-- x -->\n<ActionMaps/>").is_ok());
+        // An attribute the parser cannot read is an error, never a silent gap.
+        let unquoted = "<ActionMaps><actionmap name=\"m\"><action name=\"a\"><rebind input=js1_b1/></action></actionmap></ActionMaps>";
+        assert!(parse_actionmaps(unquoted).is_err());
+        // Context ends with the element: a rebind after </action>, outside
+        // any actionmap, or after a self-closing <action/> belongs to nothing.
+        let stray = r#"<ActionMaps>
+          <rebind input="js1_stray1"/>
+          <actionmap name="m">
+           <action name="a"><rebind input="js1_ok"/></action>
+           <rebind input="js1_stray2"/>
+           <action name="b"/>
+           <rebind input="js1_stray3"/>
+          </actionmap>
+          <actionmap name="n"/>
+          <rebind input="js1_stray4"/>
+         </ActionMaps>"#;
+        let file = parse_actionmaps(stray).unwrap();
+        let inputs: Vec<&str> = file.rebinds.iter().map(|r| r.input.as_str()).collect();
+        assert_eq!(inputs, vec!["js1_ok"]);
+        assert_eq!(file.rebinds[0].actionmap, "m");
+        assert_eq!(file.rebinds[0].action, "a");
     }
 
     #[test]

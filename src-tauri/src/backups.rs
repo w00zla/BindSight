@@ -1,9 +1,10 @@
 //! Backups of the live `actionmaps.xml`: one folder per backup under
 //! `<app_data_dir>/backups/<id>/`, holding a copy of the file (`actionmaps.xml`)
 //! plus `meta.json` (when it was made, why, and for which game version). Taken
-//! manually (Bindings mode) and — while `Config::auto_backup` is on — before a
-//! resort (`apply_resort` in `lib.rs`), before a rebind (`save_rebinds`) and
-//! before a restore (so a restore is itself undoable).
+//! manually (Bindings mode) and, always, before every write to the live file
+//! (`gamefile::replace_live_file`: rebind, apply, order fix) and before a
+//! restore (so a restore is itself undoable). A backup is verified byte for
+//! byte against its source before it counts as made.
 //!
 //! The pure logic works on `&Path` roots so it is testable without an
 //! `AppHandle`; the `#[tauri::command]` wrappers only resolve the root.
@@ -16,7 +17,7 @@ use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-use crate::{binding_profiles, config, scdata, AppData, LoadStatus};
+use crate::{binding_profiles, config, gamefile, scdata, AppData, LoadStatus};
 
 const META_FILE: &str = "meta.json";
 const XML_FILE: &str = "actionmaps.xml";
@@ -55,6 +56,8 @@ fn is_bare_name(name: &str) -> bool {
         && !name.contains('/')
         && !name.contains('\\')
         && !name.contains('\0')
+        // `C:x` is drive-relative on Windows and would leave the root.
+        && !name.contains(':')
 }
 
 /// Civil (proleptic Gregorian) date from a day count since the Unix epoch.
@@ -91,12 +94,20 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// `base`, or `base-2`, `base-3`, … until `root` has no such subfolder.
-fn unique_id(root: &Path, base: &str) -> String {
-    if !root.join(base).exists() {
-        return base.to_string();
+/// Create `root/base`, or `root/base-2`, `base-3`, … — the first folder that
+/// did not exist. Creating (not checking) is what makes two backups in the
+/// same second, even from two threads, land in two folders.
+fn create_unique_dir(root: &Path, base: &str) -> Result<String, String> {
+    fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
+    let candidates = std::iter::once(base.to_string()).chain((2..1000).map(|n| format!("{base}-{n}")));
+    for id in candidates {
+        match fs::create_dir(root.join(&id)) {
+            Ok(()) => return Ok(id),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("{}: {e}", root.join(&id).display())),
+        }
     }
-    (2..).map(|n| format!("{base}-{n}")).find(|c| !root.join(c).exists()).expect("unbounded counter")
+    Err(format!("{base}: too many backups in one second"))
 }
 
 /// Read one backup folder's `meta.json` + the bindings count of its
@@ -133,16 +144,22 @@ pub fn create(
         if r.is_empty() { "manual" } else { r }
     };
     let created = now_secs();
-    let id = unique_id(root, &format_timestamp(created));
+    let id = create_unique_dir(root, &format_timestamp(created))?;
     let dir = root.join(&id);
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    fs::copy(actionmaps, dir.join(XML_FILE)).map_err(|e| e.to_string())?;
-
-    let meta = BackupMeta { created, reason: reason.to_string(), game_version: game_version.map(str::to_string) };
-    let json = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
-    fs::write(dir.join(META_FILE), json).map_err(|e| e.to_string())?;
-
-    read_summary(&dir, &id, actions)
+    // A backup counts only once its bytes are on disk and identical to the
+    // source; a half-made folder is removed again so it never lists.
+    let made = (|| {
+        let source = fs::read(actionmaps).map_err(|e| format!("{}: {e}", actionmaps.display()))?;
+        gamefile::write_atomic(&dir.join(XML_FILE), &source)?;
+        let meta = BackupMeta { created, reason: reason.to_string(), game_version: game_version.map(str::to_string) };
+        let json = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
+        gamefile::write_atomic(&dir.join(META_FILE), json.as_bytes())?;
+        read_summary(&dir, &id, actions)
+    })();
+    if made.is_err() {
+        let _ = fs::remove_dir_all(&dir);
+    }
+    made
 }
 
 /// Every readable backup under `root`, newest first (then by id descending).
@@ -191,21 +208,25 @@ pub fn delete(root: &Path, id: &str) -> Result<(), String> {
     fs::remove_dir_all(root.join(id)).map_err(|e| format!("{id}: {e}"))
 }
 
-/// Restore backup `id` over the live `actionmaps`: with `auto_backup`, a safety
-/// backup of the current file is made first (reason `"before restore"`),
-/// unless `actionmaps` doesn't exist yet, then the backup's file is copied over
-/// it. Never touches the backup itself. Returns the safety backup's summary, or
-/// `None` when none was made (auto-backup off, or nothing existed to back up).
+/// Restore backup `id` over the live `actionmaps`, byte for byte: the backup
+/// must still parse as an `actionmaps.xml` (a broken file is never written
+/// over a working one), a safety backup of the current file is made first
+/// (reason `"before restore"`) unless `actionmaps` doesn't exist yet, then
+/// the backup's bytes replace it atomically. Never touches the backup
+/// itself. Returns the safety backup's summary, or `None` when nothing
+/// existed to back up.
 pub fn restore(
     root: &Path,
     id: &str,
     actionmaps: &Path,
-    auto_backup: bool,
     game_version: Option<&str>,
     actions: &[scdata::ActionMap],
 ) -> Result<Option<BackupSummary>, String> {
     let backup_path = path_of(root, id)?;
-    let safety = if auto_backup && actionmaps.is_file() {
+    let bytes = fs::read(&backup_path).map_err(|e| format!("{}: {e}", backup_path.display()))?;
+    scdata::parse_actionmaps(&String::from_utf8_lossy(&bytes))
+        .map_err(|e| format!("backup {id} is not a readable bindings file, not restored: {e}"))?;
+    let safety = if actionmaps.is_file() {
         Some(create(root, actionmaps, "before restore", game_version, actions)?)
     } else {
         None
@@ -213,7 +234,7 @@ pub fn restore(
     if let Some(parent) = actionmaps.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    fs::copy(&backup_path, actionmaps).map_err(|e| format!("restore {}: {e}", actionmaps.display()))?;
+    gamefile::write_atomic(actionmaps, &bytes).map_err(|e| format!("restore: {e}"))?;
     Ok(safety)
 }
 
@@ -262,7 +283,7 @@ pub(crate) fn restore_backup(id: String, app: AppHandle, data: State<Mutex<AppDa
     let mut data = data.lock().unwrap();
     let path = config::actionmaps_path(data.config.base_path());
     let version = data.sc.version.as_ref().map(|v| v.label.as_str());
-    restore(&root, &id, &path, data.config.auto_backup, version, &data.sc.data.actions)?;
+    restore(&root, &id, &path, version, &data.sc.data.actions)?;
     info!("backup {id} restored to {}", path.display());
     Ok(crate::reload_bindings(&mut data))
 }
@@ -287,6 +308,9 @@ pub(crate) fn open_backups_dir(app: AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A second, different, valid bindings file for the restore tests.
+    const OLD_XML: &str = "<ActionMaps>\n <ActionProfiles version=\"1\" profileName=\"default\">\n  <actionmap name=\"m\">\n   <action name=\"a\">\n    <rebind input=\"js1_button9\"/>\n   </action>\n  </actionmap>\n </ActionProfiles>\n</ActionMaps>\n";
 
     /// Fresh temp dir per test, removed on drop.
     struct Tmp(PathBuf);
@@ -376,13 +400,12 @@ mod tests {
     }
 
     #[test]
-    fn unique_id_counts_up() {
+    fn create_unique_dir_counts_up() {
         let t = Tmp::new();
-        assert_eq!(unique_id(&t.0, "20250909-120000"), "20250909-120000");
-        fs::create_dir_all(t.path("20250909-120000")).unwrap();
-        assert_eq!(unique_id(&t.0, "20250909-120000"), "20250909-120000-2");
-        fs::create_dir_all(t.path("20250909-120000-2")).unwrap();
-        assert_eq!(unique_id(&t.0, "20250909-120000"), "20250909-120000-3");
+        assert_eq!(create_unique_dir(&t.0, "20250909-120000").unwrap(), "20250909-120000");
+        assert_eq!(create_unique_dir(&t.0, "20250909-120000").unwrap(), "20250909-120000-2");
+        assert_eq!(create_unique_dir(&t.0, "20250909-120000").unwrap(), "20250909-120000-3");
+        assert!(t.0.join("20250909-120000-3").is_dir());
     }
 
     #[test]
@@ -476,19 +499,19 @@ mod tests {
         let root = t.path("backups");
         let am = t.path("live/actionmaps.xml");
         fs::create_dir_all(am.parent().unwrap()).unwrap();
-        fs::write(&am, "old content").unwrap();
+        fs::write(&am, OLD_XML).unwrap();
 
         let backup = create(&root, &am, "manual", None, &sample_actions()).unwrap();
         fs::write(&am, actionmaps_xml()).unwrap(); // live file changes after the backup
 
-        let safety = restore(&root, &backup.id, &am, true, Some("4.10.0-hotfix.12572603"), &sample_actions()).unwrap();
+        let safety = restore(&root, &backup.id, &am, Some("4.10.0-hotfix.12572603"), &sample_actions()).unwrap();
         let safety = safety.expect("a safety backup is made when the live file exists");
         assert_eq!(safety.reason, "before restore");
         assert_eq!(safety.game_version.as_deref(), Some("4.10.0-hotfix.12572603"));
         // Live file now holds the restored (old) content.
-        assert_eq!(fs::read_to_string(&am).unwrap(), "old content");
+        assert_eq!(fs::read_to_string(&am).unwrap(), OLD_XML);
         // The restored backup itself is untouched.
-        assert_eq!(fs::read_to_string(root.join(&backup.id).join(XML_FILE)).unwrap(), "old content");
+        assert_eq!(fs::read_to_string(root.join(&backup.id).join(XML_FILE)).unwrap(), OLD_XML);
         // The safety backup holds what was live just before the restore.
         assert_eq!(fs::read_to_string(root.join(&safety.id).join(XML_FILE)).unwrap(), actionmaps_xml());
     }
@@ -506,25 +529,41 @@ mod tests {
         let backup = create(&root, &t.path("source.xml"), "manual", None, &sample_actions()).unwrap();
 
         assert!(!am.is_file());
-        let safety = restore(&root, &backup.id, &am, true, None, &sample_actions()).unwrap();
+        let safety = restore(&root, &backup.id, &am, None, &sample_actions()).unwrap();
         assert!(safety.is_none());
         assert_eq!(fs::read_to_string(&am).unwrap(), actionmaps_xml());
     }
 
     #[test]
-    fn restore_without_auto_backup_makes_no_safety_backup() {
+    fn restore_refuses_a_backup_that_does_not_parse() {
         let t = Tmp::new();
         let root = t.path("backups");
         let am = t.path("live/actionmaps.xml");
         fs::create_dir_all(am.parent().unwrap()).unwrap();
-        fs::write(&am, "old content").unwrap();
-        let backup = create(&root, &am, "manual", None, &sample_actions()).unwrap();
         fs::write(&am, actionmaps_xml()).unwrap();
+        let backup = create(&root, &am, "manual", None, &sample_actions()).unwrap();
+        // The backup gets damaged on disk after it was made.
+        fs::write(root.join(&backup.id).join(XML_FILE), "<ActionMaps><broken").unwrap();
 
-        let safety = restore(&root, &backup.id, &am, false, None, &sample_actions()).unwrap();
-        assert!(safety.is_none());
-        assert_eq!(fs::read_to_string(&am).unwrap(), "old content");
-        assert_eq!(list(&root, &sample_actions()).len(), 1, "only the restored backup exists");
+        let err = restore(&root, &backup.id, &am, None, &sample_actions()).unwrap_err();
+        assert!(err.contains("not restored"), "{err}");
+        assert_eq!(fs::read_to_string(&am).unwrap(), actionmaps_xml(), "live file untouched");
+        assert_eq!(list(&root, &sample_actions()).len(), 0, "no safety backup, and the damaged one no longer lists");
+    }
+
+    #[test]
+    fn create_verifies_the_copy_byte_for_byte() {
+        let t = Tmp::new();
+        let root = t.path("backups");
+        let am = t.path("actionmaps.xml");
+        let content = format!("\u{feff}{}", actionmaps_xml().replace('\n', "\r\n"));
+        fs::write(&am, &content).unwrap();
+        let s = create(&root, &am, "manual", None, &sample_actions()).unwrap();
+        assert_eq!(fs::read(root.join(&s.id).join(XML_FILE)).unwrap(), content.as_bytes());
+        // A source that cannot be read leaves no folder behind.
+        let before = fs::read_dir(&root).unwrap().count();
+        assert!(create(&root, &t.path("missing.xml"), "manual", None, &sample_actions()).is_err());
+        assert_eq!(fs::read_dir(&root).unwrap().count(), before);
     }
 
     #[test]
@@ -546,7 +585,7 @@ mod tests {
     fn bad_ids_are_refused() {
         let t = Tmp::new();
         let root = t.path("backups");
-        for bad in ["..", "../x", "a/b", "a\\b", ""] {
+        for bad in ["..", "../x", "a/b", "a\\b", "", "C:x", "C:"] {
             assert!(path_of(&root, bad).is_err(), "{bad:?} should be rejected");
             assert!(delete(&root, bad).is_err(), "{bad:?} should be rejected");
         }

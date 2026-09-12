@@ -16,7 +16,7 @@ use tauri::{AppHandle, State};
 
 use crate::rebind::{self, RebindChange};
 use crate::scdata::{parse_actionmaps, parse_rebind, ActionMapsFile, DeviceKind, Rebind};
-use crate::{backups, config, diff, AppData, LoadStatus};
+use crate::{backups, config, diff, gamefile, AppData, LoadStatus};
 
 /// One device to take over: `kb1`, `gp1` or `jsN`. A joystick's bindings
 /// can land on another slot (`target`): the source's `js1_` rebinds are
@@ -130,15 +130,9 @@ pub(crate) fn apply_bindings(
     }
     let rewritten = rebind::apply_rebinds(&xml, &changes)?;
 
-    let backup = if data.config.auto_backup {
-        let version = data.sc.version.as_ref().map(|v| v.label.as_str());
-        Some(backups::create(&backups_root, &path, "before apply", version, &data.sc.data.actions)?.id)
-    } else {
-        None
-    };
-    std::fs::write(&path, rewritten).map_err(|e| format!("write {}: {e}", path.display()))?;
-    let backup = backup.map_or_else(|| "auto-backup off".to_string(), |id| format!("backup {id}"));
-    info!("applied {:?} to {}: {} change(s) ({backup})", source, path.display(), changes.len());
+    let version = data.sc.version.as_ref().map(|v| v.label.as_str());
+    let backup = gamefile::replace_live_file(&backups_root, &path, &rewritten, "before apply", version, &data.sc.data.actions)?;
+    info!("applied {:?} to {}: {} change(s) (backup {backup})", source, path.display(), changes.len());
     Ok(crate::reload_bindings(&mut data))
 }
 
