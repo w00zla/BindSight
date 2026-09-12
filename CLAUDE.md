@@ -2,7 +2,29 @@
 
 Star Citizen joystick binding visualizer. Answers "what does each button do, and
 where does each action live?" by joining SC's config with live joystick input.
-`.claude/HANDOFF.md` (gitignored, local) holds the current working state.
+Secondary: the tools the game lacks — editing bindings without starting it,
+binding profiles, backups, applying a profile or backup per device, comparing
+two binding sets, and fixing the joystick order.
+
+## Design philosophy (the maintainer's, and the top rule)
+
+An app is worthless if it does not follow its intention as well as it can.
+BindSight's intention: **as simple and powerful as possible, filling the
+gaps SC leaves** (missing features, bad UX). It is an **addon to the game**
+and replicates the game's data and behaviour as closely as it can, so the
+user never has to translate between the two.
+
+- **Labels, descriptions, tokens: 1:1 with the game.** Only what SC itself
+  shows is shown; nothing synthesized. If SC has no label (a `kb1_lalt+x`
+  combo), the raw token is the correct display, not an invented "Left Alt +
+  X".
+- **Behaviour: what SC does.** A combo resolves only while the modifier is
+  held, a rebind replaces the kind's binding, defaults come from
+  `defaultProfile.xml` — because that is what the game does. Where SC's
+  behaviour is unknown, say so; do not guess a nicer one.
+- **Before proposing a nicer name or a "helpful" behaviour, check whether
+  SC has it.** If it does not, the game's way is the answer. Ask when
+  unsure.
 
 ## Conventions
 
@@ -13,8 +35,6 @@ where does each action live?" by joining SC's config with live joystick input.
   override, a missing-/broken-file error detail). Say "game", never "SC"
   ("Star Citizen" is fine where it reads better). Terse: one-word states,
   explanatory sentences only where a dialog guides an action.
-- **Commits**: imperative subject, body explaining the why; one commit per
-  logical change.
 - **Repo content policy**: no SC game data in the repo — the app extracts what
   it needs from the user's install at runtime. The StarBreaker sidecar
   binaries (MIT) are not committed either: `scripts/fetch-starbreaker.sh`
