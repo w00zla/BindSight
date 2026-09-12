@@ -10,6 +10,7 @@ pub mod backups;
 pub mod bindings;
 pub mod config;
 pub mod diff;
+pub mod dinput;
 pub mod gamefile;
 pub mod gamelog;
 pub mod guid;
@@ -17,7 +18,9 @@ pub mod hid;
 pub mod imagemap;
 pub mod input;
 pub mod kblayout;
+pub mod logwatch;
 pub mod names;
+pub mod order;
 pub mod binding_profiles;
 pub mod rebind;
 pub mod resort;
@@ -67,14 +70,21 @@ struct ScStatus {
 
 /// Runtime state that depends on the configured SC install. `bindings_file`,
 /// `index` and `game_log` are snapshots taken by [`reload_bindings`] — at
-/// start, on a base-path change, after a resort, and on every Refresh.
+/// start, on a base-path change, after a resort, and on every Refresh;
+/// `device_order` also on every clash report (hot-plug).
 pub(crate) struct AppData {
     pub(crate) config: config::Config,
     sc: ScState,
     bindings_file: Option<scdata::ActionMapsFile>,
     index: bindings::BindingIndex,
-    /// SC's device enumeration from `Game.log` as of the last reload.
-    game_log: Result<gamelog::LogEnumeration, gamelog::GameLogError>,
+    /// SC's joystick order — the one thing every `jsN` comes from: the
+    /// platform's live source (`order::live`, stamped when it changed), else
+    /// the `Game.log` order below. Errors say why there is none.
+    device_order: Result<order::DeviceOrder, String>,
+    /// `Game.log` as of the last read: what the game started with. The order
+    /// source where there is no live one, the second opinion otherwise
+    /// (`ClashReport::logged_order`).
+    game_log: Result<order::DeviceOrder, String>,
     /// Why the last `reload_bindings` left `bindings_file` empty, for
     /// `get_load_status`.
     bindings_error: Option<String>,
@@ -141,24 +151,43 @@ pub(crate) fn current_bindings(data: &AppData) -> Vec<bindings::ResolvedBinding>
     }
 }
 
-/// The clash report for the loaded actionmaps.xml against the last loaded
-/// `Game.log` enumeration (see [`reload_bindings`]). Devices the user
-/// declared invisible to SC count as unplugged.
-fn clash_report(data: &mut AppData, devices: &input::DeviceList) -> bindings::ClashReport {
-    let Some(profile) = &data.bindings_file else {
+/// The clash report for the loaded actionmaps.xml against SC's joystick order
+/// (see [`AppData::device_order`]; `live` is `order::live()`, taken by the
+/// caller *before* the lock — DirectInput can take a while — so a hot-plug
+/// is in). Devices the user declared invisible to SC count as unplugged.
+/// `logged_order` carries the game's logged order when it differs.
+fn clash_report(
+    data: &mut AppData,
+    devices: &input::DeviceList,
+    live: Option<Result<order::DeviceOrder, String>>,
+) -> bindings::ClashReport {
+    if data.bindings_file.is_none() {
         return bindings::ClashReport::default();
-    };
+    }
+    refresh_device_order(data, live);
+    let profile = data.bindings_file.as_ref().expect("checked above");
     let devices = devices.lock().map(|d| d.clone()).unwrap_or_default();
     let devices = bindings::without_excluded(&devices, &data.config.excluded_devices);
-    let report = bindings::analyze_clash(profile, &devices, data.game_log.as_ref().map_err(Clone::clone));
+    let mut report = bindings::analyze_clash(profile, &devices, data.device_order.as_ref().map_err(Clone::clone));
+    // "Game devices update": when the game last listed its joysticks.
+    report.log_timestamp = data.game_log.as_ref().ok().and_then(|l| l.timestamp.clone());
+    // The game keeps the order it started with: a live order ranking the
+    // devices differently means "restart the game". Where the log is the
+    // order source the two are the same and nothing is flagged.
+    if let (Ok(live), Ok(logged)) = (&data.device_order, &data.game_log) {
+        if !live.same_ranking(logged) {
+            report.logged_order = Some(logged.clone());
+        }
+    }
     // The report is recomputed on every Refresh, hot-plug and write; only a
     // changed outcome is worth a line.
     let summary = format!(
-        "clash: has_clash={} connected={} missing={} unseen={} resort=[{}]",
+        "clash: has_clash={} connected={} missing={} unseen={} log_differs={} resort=[{}]",
         report.has_clash,
         report.connected.len(),
         report.missing.len(),
         report.unseen.len(),
+        report.logged_order.is_some(),
         report.resort_commands.join(" | ")
     );
     if summary != data.last_clash_log {
@@ -176,7 +205,8 @@ fn get_clash_report(
     devices: State<input::DeviceList>,
     data: State<Mutex<AppData>>,
 ) -> bindings::ClashReport {
-    clash_report(&mut data.lock().unwrap(), devices.inner())
+    let live = order::live();
+    clash_report(&mut data.lock().unwrap(), devices.inner(), live)
 }
 
 /// Apply the clash report's resort to the live `actionmaps.xml` — the
@@ -192,10 +222,11 @@ fn apply_resort(
     devices: State<input::DeviceList>,
     data: State<Mutex<AppData>>,
 ) -> Result<LoadStatus, String> {
+    let live = order::live();
     let mut data = data.lock().unwrap();
-    let report = clash_report(&mut data, devices.inner());
-    // GUI messages: the Status panel's tooltip already names the Game.log problem.
-    if report.log_error.is_some() {
+    let report = clash_report(&mut data, devices.inner(), live);
+    // GUI messages: the Status panel already names the order problem.
+    if report.order_error.is_some() {
         return Err("No joystick order found".into());
     }
     if report.resort.is_empty() {
@@ -286,8 +317,8 @@ fn get_current_bindings_info(data: State<Mutex<AppData>>) -> Option<CurrentBindi
     })
 }
 
-/// Re-read everything from the SC install (actionmaps.xml and Game.log)
-/// without touching the config — what Refresh does.
+/// Re-read the bindings file and re-take the joystick order without
+/// touching the config — what Refresh does.
 #[tauri::command]
 fn reload(data: State<Mutex<AppData>>) -> LoadStatus {
     reload_bindings(&mut data.lock().unwrap())
@@ -302,7 +333,7 @@ fn set_excluded_devices(
     data: State<Mutex<AppData>>,
 ) -> Vec<String> {
     let mut data = data.lock().unwrap();
-    data.config.excluded_devices = guids;
+    data.config.excluded_devices = config::excludable(guids);
     info!("excluded devices set: {:?}", data.config.excluded_devices);
     if let Err(e) = config::save(&app, &data.config) {
         error!("failed to save config: {e}");
@@ -434,9 +465,9 @@ struct InputResolution {
 
 /// Resolve a live input to its SC token and bound action(s). `kind` is
 /// "button", "hat" or "axis"; `direction` is required for hats. The `jsN`
-/// is the device's rank in SC's own enumeration (`Game.log`, the only order
-/// source — the saved `<options>` slot may be stale), so without a usable
-/// log no joystick input resolves. Empty for unknown or unlisted devices,
+/// is the device's rank in SC's joystick order (`order.rs` — the saved
+/// `<options>` slot may be stale), so without an order no joystick input
+/// resolves. Empty for unknown or unlisted devices,
 /// unbound inputs, or axes whose SC name is unknown (no usable HID
 /// descriptor — see `DeviceInfo::axes_error`).
 #[tauri::command]
@@ -455,7 +486,7 @@ fn resolve_input(
     let Some(sc_guid) = guid::sdl_guid_to_sc_product(&guid) else {
         return InputResolution::default();
     };
-    let Some(instance) = data.game_log.as_ref().ok().and_then(|log| gamelog::instance_for_guid(log, &sc_guid)) else {
+    let Some(instance) = data.device_order.as_ref().ok().and_then(|o| o.instance_for_guid(&sc_guid)) else {
         return InputResolution::default();
     };
     let axis_name = || {
@@ -492,10 +523,11 @@ fn resolve_tokens(candidates: Vec<String>, data: State<Mutex<AppData>>) -> Input
 }
 
 /// Snapshot the SC install into `data`: parse actionmaps.xml and resolve it
-/// against the current game data (bindings file + binding index), then read
-/// Game.log. Returns the actionmaps load status. Called at start (once the
-/// game data is in), on a base-path change, after a resort or restore, and
-/// on every Refresh.
+/// against the current game data (bindings file + binding index), then
+/// re-take the joystick order. Returns the actionmaps load status. Called
+/// at start (once the game data is in), on a base-path change, after a
+/// resort or restore, and on every Refresh. Game.log is not read here — the
+/// watch thread does that, outside the lock.
 pub(crate) fn reload_bindings(data: &mut AppData) -> LoadStatus {
     let am_path = config::actionmaps_path(data.config.base_path());
 
@@ -513,10 +545,8 @@ pub(crate) fn reload_bindings(data: &mut AppData) -> LoadStatus {
     if data.sc.invalid_install {
         data.bindings_file = None;
         data.index = bindings::BindingIndex::default();
-        data.game_log = Err(gamelog::GameLogError::NotFound {
-            path: config::game_log_path(data.config.base_path()).display().to_string(),
-            reason: "environment not loaded".into(),
-        });
+        data.device_order = Err("environment not loaded".into());
+        data.game_log = data.device_order.clone();
         return status;
     }
 
@@ -560,7 +590,9 @@ pub(crate) fn reload_bindings(data: &mut AppData) -> LoadStatus {
             data.bindings_error = Some(e);
         }
     }
-    data.game_log = read_game_log(data.config.base_path());
+    // Game.log is the watch thread's business (read outside the lock); the
+    // order is re-taken here so a reload never shows a stale one.
+    refresh_device_order(data, order::live());
     status
 }
 
@@ -580,29 +612,115 @@ fn get_load_status(data: State<Mutex<AppData>>) -> LoadStatus {
     }
 }
 
-/// Read SC's `Game.log` and log what it says about the device order — the
+/// The log line for a joystick order (`source`: `Game.log` or `live`) — the
 /// one thing remote troubleshooting of a `jsN` clash always needs.
-fn read_game_log(base_path: &str) -> Result<gamelog::LogEnumeration, gamelog::GameLogError> {
-    let path = config::game_log_path(base_path);
-    let result = gamelog::read(&path);
-    match &result {
-        Ok(log) => {
-            let devices: Vec<String> = log
-                .joysticks
-                .iter()
-                .map(|j| format!("js{}={} {}", j.instance, j.product_name, j.product_guid.as_deref().unwrap_or("?")))
-                .collect();
-            info!(
-                "Game.log {} (started {}): SC sees [{}], gamepads: [{}]",
-                path.display(),
-                log.timestamp.as_deref().unwrap_or("?"),
-                devices.join(", "),
-                log.gamepads.join(", ")
-            );
-        }
-        Err(e) => warn!("Game.log {}: {e:?}", path.display()),
+fn log_order(source: &str, result: &Result<order::DeviceOrder, String>) {
+    match result {
+        Ok(o) => info!("{source} joystick order (as of {}): [{}]", o.timestamp.as_deref().unwrap_or("?"), o.describe()),
+        Err(e) => warn!("{source} joystick order: {e}"),
     }
-    result
+}
+
+/// Re-take SC's joystick order: `live` is `order::live()` (taken by the
+/// caller, ideally before the lock) — only a changed outcome replaces the
+/// snapshot (stamped with the time of the change) and is logged, so a
+/// hot-plug of a device without a slot leaves it alone. Without a live
+/// source the `Game.log` order as last read is it.
+fn refresh_device_order(data: &mut AppData, live: Option<Result<order::DeviceOrder, String>>) {
+    let Some(fresh) = live else {
+        data.device_order = data.game_log.clone();
+        return;
+    };
+    let same = match (&fresh, &data.device_order) {
+        (Ok(a), Ok(b)) => a.joysticks == b.joysticks,
+        (Err(a), Err(b)) => a == b,
+        _ => false,
+    };
+    if same {
+        return;
+    }
+    let fresh = fresh.map(|mut o| {
+        o.timestamp = Some(backups::iso_utc(backups::now_secs()));
+        o
+    });
+    log_order("live", &fresh);
+    data.device_order = fresh;
+}
+
+/// Watch SC's `Game.log` for a new file (see [`logwatch`]): the game writes a
+/// fresh log at every start, and its device order with it. A new file is
+/// re-read while it settles; once it carries the order — or the window
+/// passes — a changed outcome replaces the snapshot (and the order source,
+/// where the log is it) and `gamelog-changed` tells the frontend to redo the
+/// clash report. An environment that is invalid or still loading is left
+/// alone (`reload_bindings` reads then).
+fn spawn_game_log_watch(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut watch = logwatch::Watch::default();
+        let mut tail = logwatch::Tail::default();
+        loop {
+            let state = app.state::<Mutex<AppData>>();
+            // Only the facts are taken under the lock; every read of the
+            // file happens without it — the input path must never wait for
+            // a log to be read.
+            let path = {
+                let data = state.lock().unwrap();
+                if data.sc.invalid_install {
+                    drop(data);
+                    std::thread::sleep(logwatch::POLL);
+                    continue;
+                }
+                config::game_log_path(data.config.base_path())
+            };
+            let step = watch.poll(&path, logwatch::stamp(&path), std::time::Instant::now());
+            let (started, settled) = match step {
+                logwatch::Step::Idle => {
+                    std::thread::sleep(logwatch::POLL);
+                    continue;
+                }
+                logwatch::Step::Adopt => {
+                    tail.reset();
+                    (false, true)
+                }
+                logwatch::Step::Read { settled, new_file } => {
+                    if new_file {
+                        tail.reset();
+                    }
+                    (true, settled)
+                }
+            };
+            let result = match tail.read(&path) {
+                Ok(()) => gamelog::parse(&tail.text).ok_or_else(|| format!("{}: no joystick lines", path.display())),
+                Err(e) => Err(format!("{}: {e}", path.display())),
+            };
+            // A new file gets its lines seconds after it appears: keep
+            // reading until they are in, or the window passes.
+            if result.is_err() && !settled {
+                std::thread::sleep(logwatch::POLL);
+                continue;
+            }
+            watch.done();
+            let live = order::live();
+            let mut data = state.lock().unwrap();
+            if result != data.game_log {
+                info!("Game.log {}", if started { "replaced, re-read" } else { "read" });
+                log_order("Game.log", &result);
+                data.game_log = result;
+                refresh_device_order(&mut data, live);
+                drop(data);
+                let _ = app.emit("gamelog-changed", GameLogChanged { started });
+            }
+            std::thread::sleep(logwatch::POLL);
+        }
+    });
+}
+
+/// Payload of `gamelog-changed`: `started` when the game wrote a new log
+/// (it started), false for the read at start-up or after an environment
+/// change.
+#[derive(Clone, Serialize)]
+struct GameLogChanged {
+    started: bool,
 }
 
 /// Load the configured install's game data in the background (version from
@@ -822,10 +940,8 @@ pub fn run() {
             // The bindings file and Game.log are read once the game data is
             // in (`spawn_sc_load` -> `reload_bindings`).
             app.manage(Mutex::new(AppData {
-                game_log: Err(gamelog::GameLogError::NotFound {
-                    path: config::game_log_path(config.base_path()).display().to_string(),
-                    reason: "not read yet".into(),
-                }),
+                device_order: Err("not read yet".into()),
+                game_log: Err("not read yet".into()),
                 config,
                 sc: ScState::default(),
                 bindings_file: None,
@@ -839,6 +955,7 @@ pub fn run() {
             let devices: input::DeviceList = Arc::new(Mutex::new(Vec::new()));
             app.manage(devices);
             spawn_sc_load(app.handle().clone());
+            spawn_game_log_watch(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

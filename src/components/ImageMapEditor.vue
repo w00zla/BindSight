@@ -1608,10 +1608,6 @@ const DERIVED_PAD = new Set([
   "thumbr_down",
 ]);
 
-// What the backend leaves out of the event stream, so nobody hunts for it.
-const EVENTS_CAPTION =
-  "Filtered: axes only past the deadzone, at most one event per 20 ms, only a stick's leading axis; triggers appear as their derived buttons; mouse only while recording; keyboard only while the window has focus. Last 500 events.";
-
 // Event as one line: the SC axis name comes from the device's derived axes.
 function eventText(ev: JoyInput): string {
   switch (ev.kind) {
@@ -1674,7 +1670,7 @@ function compactUsages(usages: string[]): string {
 function gameSlotText(d: DeviceInfo): string {
   const r = props.clash;
   if (!r) return "—";
-  if (r.log_error) return "order unknown (no usable game log)";
+  if (r.order_error) return "order unknown";
   const guid = d.sc_product_guid?.toLowerCase();
   const slot = r.connected.find((s) => !!guid && s.sc_product_guid?.toLowerCase() === guid);
   if (!slot) return "not in the game's device list";
@@ -1751,7 +1747,7 @@ function listText(): string {
 
 // Text dump of the Device Events tile, newest first.
 function eventsText(): string {
-  const lines = [`BindSight device events ${new Date().toISOString()} (newest first)`, props.systemLine, EVENTS_CAPTION, ""];
+  const lines = [`BindSight device events ${new Date().toISOString()} (newest first)`, props.systemLine, ""];
   for (const ev of props.events) lines.push(eventLine(ev));
   if (!props.events.length) lines.push("    none");
   return lines.join("\n") + "\n";
@@ -2000,7 +1996,6 @@ function noMaps(d: DeviceInfo): boolean {
               Save
             </button>
           </div>
-          <div class="log-caption">{{ props.systemLine }}</div>
           <div class="log mono">
             <div v-for="d in props.devices" :key="d.index" class="log-dev">
               <div class="log-line">
@@ -2020,7 +2015,6 @@ function noMaps(d: DeviceInfo): boolean {
           <div class="head">
             <Icon name="log" :size="15" />
             <span class="head-title">Device Events</span>
-            <span class="head-count">{{ props.events.length }}</span>
             <div class="grow" />
             <button type="button" class="btn outline small" :disabled="!props.events.length" @click="emit('clearLog')">
               <Icon name="trash" :size="13" />
@@ -2035,7 +2029,6 @@ function noMaps(d: DeviceInfo): boolean {
               Save
             </button>
           </div>
-          <div class="log-caption">{{ EVENTS_CAPTION }}</div>
           <div class="log mono">
             <div v-for="ev in props.events" :key="ev.id" class="log-line">
               <span class="log-time">{{ clock(ev.at) }} t{{ ev.timestamp }}</span>
@@ -2986,12 +2979,6 @@ function noMaps(d: DeviceInfo): boolean {
   overflow-y: auto;
   padding: 12px 16px;
   font-size: 12px;
-}
-
-.log-caption {
-  padding: 0 16px 6px;
-  font-size: 12px;
-  color: var(--text-3);
 }
 
 .log-line {

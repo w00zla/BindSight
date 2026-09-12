@@ -283,7 +283,7 @@ pub fn parse_token_labels(xml: &str, loc: &HashMap<String, String>) -> HashMap<S
 
 /// A joystick device as SC's user config knows it: its `jsN` instance number
 /// plus the stored product name and GUID from the `<options>` block.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct JoystickDevice {
     pub instance: u32,
     pub product_name: String,

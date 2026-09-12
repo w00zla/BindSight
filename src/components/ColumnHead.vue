@@ -29,13 +29,19 @@ function gripTarget(i: number): { key: string; fromLeft: boolean } | null {
       v-for="(c, i) in columns"
       :key="c.key"
       class="col"
-      :class="{ sortable: c.sortable !== false, active: sort.key === c.key }"
+      :class="{ sortable: c.sortable !== false, active: c.sortable !== false && sort.key === c.key }"
       @click="c.sortable !== false && emit('sort', c.key)"
     >
       <Icon v-if="c.icon" :name="c.icon as IconName" :size="13" class="col-icon" />
       <span class="txt">{{ c.label }}</span>
       <span v-if="c.note" class="txt note">{{ c.note }}</span>
-      <Icon v-if="sort.key === c.key" :name="sort.dir === 'asc' ? 'chevron-up' : 'chevron-down'" :size="12" />
+      <!-- A non-sortable column never shows a sort, whatever the state says
+           (the Bindings List keeps the game's order). -->
+      <Icon
+        v-if="c.sortable !== false && sort.key === c.key"
+        :name="sort.dir === 'asc' ? 'chevron-up' : 'chevron-down'"
+        :size="12"
+      />
       <span
         v-if="gripTarget(i)"
         class="grip"

@@ -88,7 +88,17 @@ fn format_timestamp(created: u64) -> String {
     format!("{y:04}{m:02}{d:02}-{:02}{:02}{:02}", tod / 3600, (tod % 3600) / 60, tod % 60)
 }
 
-fn now_secs() -> u64 {
+/// `secs` (unix seconds) as RFC 3339 UTC, `2026-09-12T19:30:00Z` — the
+/// shape the frontend parses (`new Date`), like a Game.log timestamp.
+pub(crate) fn iso_utc(secs: u64) -> String {
+    let secs = secs as i64;
+    let days = secs.div_euclid(86400);
+    let tod = secs.rem_euclid(86400);
+    let (y, m, d) = civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", tod / 3600, (tod % 3600) / 60, tod % 60)
+}
+
+pub(crate) fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -407,6 +417,12 @@ mod tests {
         assert_eq!(format_timestamp(1), "19700101-000001");
         assert_eq!(format_timestamp(1_700_000_000), "20231114-221320");
         assert_eq!(format_timestamp(1_757_419_200), "20250909-120000");
+    }
+
+    #[test]
+    fn iso_utc_is_rfc3339() {
+        assert_eq!(iso_utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso_utc(1_757_419_200), "2025-09-09T12:00:00Z");
     }
 
     #[test]

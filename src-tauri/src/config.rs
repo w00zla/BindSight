@@ -109,6 +109,7 @@ impl Config {
         if !ENVIRONMENTS.contains(&self.active_env.as_str()) {
             self.active_env = default_active_env();
         }
+        self.excluded_devices = excludable(self.excluded_devices);
         self
     }
 
@@ -137,6 +138,12 @@ fn config_file(app: &AppHandle) -> Option<PathBuf> {
 }
 
 /// Load the config, or the default if none is stored / it cannot be read.
+/// The exclusion list without what can never be excluded: the keyboard
+/// (with the mouse) — SC always has it. Older configs may still carry it.
+pub fn excludable(list: Vec<String>) -> Vec<String> {
+    list.into_iter().filter(|g| !g.eq_ignore_ascii_case("keyboard")).collect()
+}
+
 pub fn load(app: &AppHandle) -> Config {
     config_file(app)
         .and_then(|path| std::fs::read_to_string(path).ok())
@@ -200,6 +207,14 @@ mod tests {
         assert_eq!(c.environments["PTU"].path, r"C:\Program Files\Roberts Space Industries\StarCitizen\PTU");
         assert!(c.global_ini_override().is_none());
         assert!(c.auto_backup);
+    }
+
+    #[test]
+    fn the_keyboard_is_never_excluded() {
+        let json = r#"{"ignored_devices":["KEYBOARD","gamepad","{0201231D-0000-0000-0000-504944564944}"]}"#;
+        let c = serde_json::from_str::<Config>(json).unwrap().normalize();
+        assert_eq!(c.excluded_devices, vec!["gamepad", "{0201231D-0000-0000-0000-504944564944}"]);
+        assert_eq!(excludable(vec!["keyboard".into()]), Vec::<String>::new());
     }
 
     #[test]

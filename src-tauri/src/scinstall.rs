@@ -83,18 +83,29 @@ pub const REQUIRED_FILES: [&str; 3] = [
     "user/client/0/Profiles/default/actionmaps.xml",
 ];
 
+/// A [`REQUIRED_FILES`] entry under `base`, with the OS's own separators
+/// (the entries use `/`; joined as one piece it would show up verbatim).
+fn required_path(base: &Path, entry: &str) -> PathBuf {
+    entry.split('/').fold(base.to_path_buf(), |p, part| p.join(part))
+}
+
 /// Check that `base_path` is a folder holding every [`REQUIRED_FILES`]
-/// entry. The error names the folder, or lists what is missing in it.
+/// entry. The error names the folder, or the full path of what is missing.
 pub fn validate_install(base_path: &str) -> Result<(), String> {
     let base = Path::new(base_path);
     if !base.is_dir() {
         return Err(format!("Folder not found: {base_path}"));
     }
-    let missing: Vec<&str> = REQUIRED_FILES.iter().copied().filter(|f| !base.join(f).is_file()).collect();
+    let missing: Vec<String> = REQUIRED_FILES
+        .iter()
+        .map(|f| required_path(base, f))
+        .filter(|p| !p.is_file())
+        .map(|p| format!("'{}'", p.display()))
+        .collect();
     if missing.is_empty() {
         Ok(())
     } else {
-        Err(format!("Missing in {base_path}: {}", missing.join(", ")))
+        Err(format!("Missing {}", missing.join(", ")))
     }
 }
 
@@ -387,10 +398,14 @@ mod tests {
 
         std::fs::create_dir_all(dir.join("user/client/0/Profiles/default")).unwrap();
         std::fs::write(dir.join("Data.p4k"), b"").unwrap();
+        // Full paths, with the OS's own separators, each in quotes.
+        let manifest = dir.join("build_manifest.id");
+        let actionmaps = dir.join("user").join("client").join("0").join("Profiles").join("default").join("actionmaps.xml");
         assert_eq!(
             validate_install(&base),
-            Err(format!("Missing in {base}: build_manifest.id, user/client/0/Profiles/default/actionmaps.xml"))
+            Err(format!("Missing '{}', '{}'", manifest.display(), actionmaps.display()))
         );
+        assert!(!validate_install(&base).unwrap_err().contains("default/actionmaps"), "no foreign separators");
 
         std::fs::write(dir.join("build_manifest.id"), b"").unwrap();
         std::fs::write(dir.join("user/client/0/Profiles/default/actionmaps.xml"), b"").unwrap();

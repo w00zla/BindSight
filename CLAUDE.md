@@ -110,7 +110,8 @@ presentational components:
   `captureKeys` keeps the keyboard capture on; behind every
   unsaved-changes / delete / game-file-write question, the Fix via config /
   Fix via console dialogs and the rebind dialog), `Toasts` (`ok` / `error`
-  / `hint` — a hint looks like an error but is guidance, logged as info;
+  / `hint` — the accent tells them apart: green done, red broken, blue
+  guidance; a hint is logged as info;
   every error toast goes to the app log), `Icon` (inline
   stroke SVGs by name — never emoji), `WindowEdges`.
 - Shared modules: `imagemap.ts` (image-map types/helpers incl. token <->
@@ -136,7 +137,11 @@ presentational components:
 
 - `input.rs` — one background thread owns the single SDL context, keeps
   devices open, emits `joy-input`, maintains the shared device list, emits
-  `devices-changed` on hot-plug. `DeviceInfo` carries `kind` (`joystick` /
+  `devices-changed` on hot-plug (payload `DevicesChanged`: `added` /
+  `removed` by SDL instance id, both empty for the startup enumeration and
+  SDL's initial arrival events — the frontend toasts only real hot-plugs and
+  announces a clash appearing / going away only after those or a new
+  `Game.log`). `DeviceInfo` carries `kind` (`joystick` /
   `gamepad` / `keyboard`), `hardware_id` (image-map key: SC Product GUID,
   `gamepad`, or `keyboard`), `sc_name` (hidapi) + `sdl_name` (debug), `axes`
   / `axes_error`. A gamepad is what SDL's GameController API recognises; its
@@ -151,8 +156,9 @@ presentational components:
   passes), and of a stick's two axes (pad sticks, joystick `x`/`y`) only
   the further deflected one is forwarded. **Derived pad buttons**
   (`triggerl_btn`, `thumbl_left` …, `triggerl_r_btn` = both triggers) press
-  once the axis stayed past 30000 for 250 ms and release below 24000; the
-  loop ticks every 25 ms for that. **A trigger is only ever its derived
+  once the axis is past 30000 — a trigger at once, like a shoulder button,
+  a stick direction only after 500 ms there (the stick is an axis first) — and
+  release below 24000; the loop ticks every 25 ms for the stick hold. **A trigger is only ever its derived
   button**: SC labels the axis token like the button and ships no default
   on it, so the trigger axis is never emitted.
 - `guid.rs` — SDL joystick GUID -> SC `options/@Product` GUID (byte-swap
@@ -185,14 +191,29 @@ presentational components:
   defaults per kind with a per-kind "touched" rule), `button_token` /
   `hat_token` (+1 offset), `instance_for_guid` (the saved `<options>` slot,
   used by the clash analysis and the Bindings List only), `resolve_bindings`,
-  `analyze_clash` (saved `<options>` vs. `Game.log` order — the only order
-  source), `plan_resort` / `resort_commands`, `without_excluded` (by
-  hardware id).
-- `gamelog.rs` — parse `Connected joystickN: <Product {GUID}>` and
-  `Connected xinputN: <name>` (the latter only says SC saw a gamepad);
-  `instance_for_guid` = the rank the game gave a device, which is what the
-  Monitor resolves against (`resolve_input`): without a usable log no
-  joystick input resolves, keyboard and pad still do.
+  `analyze_clash` (saved `<options>` vs. SC's joystick order, a
+  `DeviceOrder`; an empty order is an order, every saved slot then
+  "missing"; `ClashReport::logged_order` = the game's logged order when it
+  ranks differently from the live one), `plan_resort` / `resort_commands`,
+  `without_excluded` (by hardware id).
+- `order.rs` — `DeviceOrder` (joysticks in SC's order + timestamp), the one
+  type every order source yields: `instance_for_guid` is what the Monitor
+  resolves against (`resolve_input`; without an order no joystick input
+  resolves, keyboard and pad still do), `same_ranking` the log-vs-live
+  check. `order::live()` is the platform switch: DirectInput on Windows,
+  `None` on Linux until Wine's enumeration is replicated — a Linux live
+  source plugs in there and nowhere else.
+- `dinput.rs` — Windows: DirectInput 8 `EnumDevices(DI8DEVCLASS_GAMECTRL,
+  DIEDFL_ATTACHEDONLY)` via `windows-sys` with hand-rolled COM vtables
+  (windows-sys ships none). The rank is `jsN`, `guidProduct` is byte for
+  byte SC's `options/@Product` GUID; XInput devices (path carrying `ig_`,
+  lower-case) are skipped. `DIPROP_GUIDANDPATH` is the pointer value 12,
+  not a GUID in memory. `to_order` is the pure part with tests.
+- `gamelog.rs` — parse `Connected joystickN: <Product {GUID}>` into a
+  `DeviceOrder` (gamepad lines are not read: no slot). The order source on
+  Linux; on Windows the second opinion — the game keeps the order it
+  started with, so a live order that ranks differently means "restart the
+  game" (Status panel tile).
 - `xmltext.rs` — helpers for the textual editors: `mask_markup` (a copy of
   the text with comments, CDATA and processing instructions blanked, same
   byte offsets — every search runs on the mask, every edit on the
@@ -224,8 +245,9 @@ presentational components:
   `global.ini` override; Windows default paths), the active one
   (`Config::base_path()` / `global_ini_override()`), the exclusion list
   (`excluded_devices`, hardware ids: a joystick's SC Product GUID,
-  `keyboard`, `gamepad` — any device may go, the user may just not care
-  about it; on the wire still `ignored_devices`), the image-map choice per
+  `gamepad` — joysticks and the pad may go, the user may just not care
+  about them; the keyboard never, `config::excludable` drops it; on the
+  wire still `ignored_devices`), the image-map choice per
   device, the auto-backup and debug-logging switches.
   `load` fills missing environments with defaults; no migration of older
   shapes.
@@ -262,11 +284,30 @@ presentational components:
   binding profile, or backup) by SC token: the `(actionmap, action)` set per
   token in A vs B (label-only differences are not changes); added / removed /
   changed rows, sorted `jsN` then numeric-aware by input.
+- `logwatch.rs` — the `Game.log` watch (pure state machine; the thread is
+  `lib.rs::spawn_game_log_watch`, **the only reader of the log**, always
+  outside the `AppData` lock): a metadata poll every 2 s; the first poll and
+  an environment change `Adopt` the file (one full read); a *new* file
+  (shorter, other creation time, appeared / vanished — NTFS name tunneling
+  keeps the creation time on a quick recreate) is read incrementally
+  (`Tail`: only the bytes appended since the last read) until the order is
+  in or 90 s pass; a changed outcome replaces the log snapshot (and the
+  order source, where the log is it) and emits `gamelog-changed`
+  (`{started}`: true for a new file — the frontend toasts and announces a
+  clash flip only then). Writes to a running log are ignored on purpose.
 - `kblayout.rs` — `keyboard_layout` command: xkb code (`de`, `us`, …) via
   `localectl` / `vconsole.conf` on Linux, `GetKeyboardLayoutNameW` on Windows.
 - `lib.rs` — Tauri commands, state wiring (`AppData`: config, game data +
-  load status, the bindings file + its load error, binding index, Game.log
-  snapshot, the last logged clash summary; `get_load_status` hands the last
+  load status, the bindings file + its load error, binding index, the
+  joystick order (`device_order`, re-taken from the live source on every
+  clash report) + the Game.log snapshot, the last logged clash summary.
+  **Nothing slow under the `AppData` lock**: `resolve_input` runs per input
+  event on the main thread and needs it, so `order::live()` (DirectInput)
+  is taken *before* locking (`get_clash_report`, `apply_resort`) and the
+  log is read only by the watch thread without the lock; the write
+  commands hold it for their backup + write + reload on purpose (user
+  actions, consistency);
+  `get_load_status` hands the last
   load outcome to a frontend that mounts after the first load already
   finished), `system_info` (app version, OS, toolkit versions for the
   Device Info dumps), thread spawns, the Wayland DMABUF workaround, logging
@@ -354,6 +395,8 @@ cargo run --example enum_joysticks              # list devices + GUIDs
 cargo run --example log_joystick_events         # live event log
 cargo run --example hid_names                   # HID product strings
 cargo run --example hid_axes [-- --hex]         # HID axis usages + SC axes
+cargo run --example dinput_order                # SC's joystick order (Windows)
+cargo run --example pad_events                  # pad mapping + controller-level events
 scripts/fetch-starbreaker.sh                    # sidecar binaries (once)
 ```
 
@@ -390,12 +433,19 @@ The game data cache lives per version under `~/.cache/com.w00zla.bindsight/
   `Data.p4k` (e.g. `.../StarCitizen/LIVE`).
 - **Device identity is GUID, never name**: SDL's name (evdev) differs from
   SC's (HID product string).
-- **SDL order is not SC order** (Windows: reversed, Linux: unrelated). `jsN`
-  comes from `Game.log` only; never derive it from SDL's enumeration, and
-  never from the saved `<options>` slot either — that is what the file
-  says, the log is what the game does. The Monitor, the deck and the
-  Bindings List's column names follow the log; without one the joysticks
-  show "no joystick order" and resolve nothing.
+- **SC's joystick order is DirectInput's `EnumDevices` order** (verified
+  2026-09-12 against `Game.log` and a saved `actionmaps.xml`: rank and
+  `guidProduct` identical). **SDL order is not SC order**: SDL's Windows
+  DirectInput backend prepends every device to its list (the start
+  enumeration comes out reversed, a hot-plug lands on index 0); on Linux the
+  two are unrelated. `jsN` therefore comes from `order.rs` only — DirectInput
+  live on Windows, `Game.log` on Linux — never from SDL's enumeration, and
+  never from the saved `<options>` slot either (that is what the file says,
+  the order is what the game does). The Monitor, the deck and the Bindings
+  List's column names follow it; without an order the joysticks show "no
+  joystick order" and resolve nothing. A device plugged in or out shifts
+  every slot behind it — inherent to SC, that is what Apply / the order fix
+  are for.
 - **Joystick modifiers do not exist in SC** (no `modifier+jsN_` token in
   the data or a real file); keyboard and gamepad combos do (`kb1_lalt+x`,
   `gp1_shoulderl+thumbl_left`, `gp1_shoulderl+thumblx`), always with a real

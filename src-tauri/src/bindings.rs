@@ -10,9 +10,9 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
-use crate::gamelog::{GameLogError, LogEnumeration};
 use crate::input::DeviceInfo;
-use crate::scdata::{parse_rebind, Action, ActionMap, DeviceKind, ActionMapsFile};
+use crate::order::DeviceOrder;
+use crate::scdata::{parse_rebind, Action, ActionMap, ActionMapsFile, DeviceKind};
 
 /// An action a token is bound to, with the context (actionmap) it applies in.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -273,9 +273,9 @@ pub fn resolve_bindings(maps: &[ActionMap], profile: &ActionMapsFile) -> Vec<Res
     out
 }
 
-/// One joystick in SC's device list: the `jsN` SC assigns it (its 1-based
-/// position in SC's own enumeration from `Game.log`) versus the `jsN` recorded
-/// for its GUID in the saved `<options>` block.
+/// One joystick in SC's order: the `jsN` SC assigns it (its 1-based rank,
+/// see `order.rs`) versus the `jsN` recorded for its GUID in the saved
+/// `<options>` block.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SlotStatus {
     /// `jsN` SC assigns: 1-based rank in SC's enumeration.
@@ -288,14 +288,11 @@ pub struct SlotStatus {
     /// The device is in the saved profile but under a different `jsN` than it now
     /// gets — every binding on its slot lands on the wrong stick.
     pub clash: bool,
-    /// Whether SDL sees the device right now. A slot can be in SC's last-start
-    /// list yet unplugged since — SC will renumber on its next start.
-    pub connected_now: bool,
 }
 
-/// A saved `<options>` joystick slot whose device is not in SC's device list
-/// (not seen at the last game start). Its bindings dangle, and every device
-/// enumerated after it shifts down a slot.
+/// A saved `<options>` joystick slot whose device is not in SC's order (not
+/// attached). Its bindings dangle, and every device enumerated after it
+/// shifts down a slot.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MissingSlot {
     pub stored_instance: u32,
@@ -323,22 +320,24 @@ pub struct ResortMove {
 }
 
 /// Result of comparing SC's saved instance→device map against SC's actual
-/// device order, to surface the SC "device order" binding-switch bug. Without
-/// a usable `Game.log` there is no order and the report is empty except for
-/// `log_error` — nothing is derived from SDL's order, which is not SC's.
+/// joystick order, to surface the SC "device order" binding-switch bug.
+/// Without an order the report is empty except for `order_error` — nothing
+/// is derived from SDL's order, which is not SC's.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct ClashReport {
     /// Joysticks in SC's order, each with effective vs stored `jsN`.
     pub connected: Vec<SlotStatus>,
-    /// Saved occupied slots not in SC's device list (they cause the shift).
+    /// Saved occupied slots not in SC's order (they cause the shift).
     pub missing: Vec<MissingSlot>,
-    /// SDL-visible devices absent from SC's list; informational, never a
+    /// SDL-visible joysticks absent from SC's order; informational, never a
     /// clash by itself.
     pub unseen: Vec<UnseenDevice>,
-    /// Raw log time of SC's enumeration, when the log was usable.
+    /// When the game last listed its joysticks: the `Game.log` order's
+    /// timestamp, set by the caller (the analysis itself does not read the
+    /// log; the live order's own timestamp is for the app log only).
     pub log_timestamp: Option<String>,
-    /// Why `Game.log` was unusable. When set, everything else is empty.
-    pub log_error: Option<GameLogError>,
+    /// Why there is no order. When set, everything else is empty.
+    pub order_error: Option<String>,
     pub has_clash: bool,
     /// The slot permutation that puts every listed device's bindings on the
     /// `jsN` SC now assigns it (see [`plan_resort`]). Empty when nothing moves.
@@ -347,9 +346,11 @@ pub struct ClashReport {
     /// order: `pp_resortdevices joystick A B` moves the bindings of `jsA` to
     /// `jsB` (and B's to A), so each cycle becomes a chain of swaps.
     pub resort_commands: Vec<String>,
-    /// SC listed a gamepad (`Connected xinput0: …`) at its last start. Pads
-    /// have no slot/order of their own; this is purely "does SC see it".
-    pub gamepad_seen: bool,
+    /// The order the game logged at its last start, when it ranks the
+    /// devices differently from the live order: a running game keeps it
+    /// until it restarts. `None` when they agree, when the log is unusable,
+    /// or where the log is the order source itself.
+    pub logged_order: Option<DeviceOrder>,
 }
 
 /// Case-insensitive SC Product GUID equality; `None` never matches.
@@ -375,39 +376,25 @@ pub fn without_excluded(devices: &[DeviceInfo], excluded: &[String]) -> Vec<Devi
 /// this). So a device whose SC rank differs from its saved `jsN` — or a saved
 /// device SC does not list — means its bindings land on the wrong stick.
 ///
-/// `log` is SC's own enumeration from `Game.log`, the only order source.
-/// Without it the report carries just the error.
+/// `order` is SC's joystick order (see `order.rs`); an empty one (nothing
+/// attached) is an order too — every saved slot is then missing. Without an
+/// order the report carries just the error.
 pub fn analyze_clash(
     profile: &ActionMapsFile,
     devices: &[DeviceInfo],
-    log: Result<&LogEnumeration, GameLogError>,
+    order: Result<&DeviceOrder, String>,
 ) -> ClashReport {
-    let log = match log {
-        Ok(log) => log,
-        Err(err) => return ClashReport { log_error: Some(err), ..Default::default() },
+    let order = match order {
+        Ok(order) => order,
+        Err(err) => return ClashReport { order_error: Some(err), ..Default::default() },
     };
 
     // Only joysticks have an SC slot; the keyboard and gamepads never take
     // part in the order, and must not turn up as "unseen" either.
     let devices: Vec<&DeviceInfo> = devices.iter().filter(|d| d.kind == DeviceKind::Joystick).collect();
 
-    // A log with only `xinput` lines says SC saw no joystick at all: no
-    // order to hold the saved slots against, so none of them is "missing".
-    if log.joysticks.is_empty() {
-        return ClashReport {
-            log_error: Some(GameLogError::NoJoystickLines),
-            unseen: devices
-                .iter()
-                .map(|d| UnseenDevice { name: d.sc_name.clone(), sc_product_guid: d.sc_product_guid.clone() })
-                .collect(),
-            log_timestamp: log.timestamp.clone(),
-            gamepad_seen: !log.gamepads.is_empty(),
-            ..Default::default()
-        };
-    }
-
-    let mut connected = Vec::with_capacity(log.joysticks.len());
-    for j in &log.joysticks {
+    let mut connected = Vec::with_capacity(order.joysticks.len());
+    for j in &order.joysticks {
         let stored_instance = j.product_guid.as_deref().and_then(|g| instance_for_guid(profile, g));
         let clash = matches!(stored_instance, Some(i) if i != j.instance);
         connected.push(SlotStatus {
@@ -416,13 +403,10 @@ pub fn analyze_clash(
             sc_product_guid: j.product_guid.clone(),
             name: Some(j.product_name.clone()),
             clash,
-            connected_now: devices
-                .iter()
-                .any(|d| guid_eq(d.sc_product_guid.as_deref(), j.product_guid.as_deref())),
         });
     }
 
-    let listed = |guid: Option<&str>| log.joysticks.iter().any(|j| guid_eq(j.product_guid.as_deref(), guid));
+    let listed = |guid: Option<&str>| order.joysticks.iter().any(|j| guid_eq(j.product_guid.as_deref(), guid));
 
     let missing: Vec<MissingSlot> = profile
         .joysticks
@@ -452,12 +436,12 @@ pub fn analyze_clash(
         connected,
         missing,
         unseen,
-        log_timestamp: log.timestamp.clone(),
-        log_error: None,
+        log_timestamp: None,
+        order_error: None,
         has_clash,
         resort,
         resort_commands,
-        gamepad_seen: !log.gamepads.is_empty(),
+        logged_order: None,
     }
 }
 
@@ -565,7 +549,7 @@ mod tests {
 
     /// SC's enumeration as `Game.log` would log it: one `Connected joystickN`
     /// line per (name, guid), in order.
-    fn log_of(devices: &[(&str, &str)]) -> LogEnumeration {
+    fn log_of(devices: &[(&str, &str)]) -> DeviceOrder {
         let text: String = devices
             .iter()
             .enumerate()
@@ -630,7 +614,7 @@ mod tests {
 
     /// SC's Linux enumeration exactly as logged on the real setup: R = js1,
     /// L = js2, the Keychron K2 HE absent (hidden by Wine).
-    fn linux_log() -> LogEnumeration {
+    fn linux_log() -> DeviceOrder {
         crate::gamelog::parse(concat!(
             "<2026-09-08T21:06:00.762Z> - Connected joystick0:  VKBsim Gladiator EVO  R    {0200231D-0000-0000-0000-504944564944}\n",
             "<2026-09-08T21:06:00.789Z> - Connected joystick1:  VKBsim Gladiator EVO  L    {0201231D-0000-0000-0000-504944564944}\n",
@@ -651,8 +635,7 @@ mod tests {
         let log = linux_log();
         let report = analyze_clash(&profile, &sdl, Ok(&log));
 
-        assert_eq!(report.log_timestamp.as_deref(), Some("2026-09-08T21:06:00.789Z"));
-        assert_eq!(report.log_error, None);
+        assert_eq!(report.order_error, None);
         assert!(!report.has_clash);
         assert!(report.missing.is_empty());
         // Order comes from the log, not from SDL: R is js1, L is js2.
@@ -662,7 +645,6 @@ mod tests {
             .map(|s| (s.effective_instance, s.sc_product_guid.as_deref()))
             .collect();
         assert_eq!(order, vec![(1, Some(VKB_R)), (2, Some(VKB_L))]);
-        assert!(report.connected.iter().all(|s| s.connected_now));
         // The K2 HE is SDL-only: unseen by SC, but not a clash.
         assert_eq!(report.unseen.len(), 1);
         assert_eq!(report.unseen[0].sc_product_guid.as_deref(), Some(KEYCHRON_K2HE));
@@ -694,15 +676,13 @@ mod tests {
     }
 
     #[test]
-    fn game_log_flags_device_unplugged_since_sc_start() {
+    fn the_order_is_scs_view_not_sdls() {
         let profile = parse_actionmaps("<ActionMaps/>").unwrap();
-        // SC saw R and L at start; L has since been unplugged.
+        // SC listed R and L; SDL sees only R (L unplugged since the log).
         let sdl = [dev(VKB_R, "VKB R")];
         let log = linux_log();
         let report = analyze_clash(&profile, &sdl, Ok(&log));
-        assert_eq!(report.connected.len(), 2); // SC's view, not SDL's
-        assert!(report.connected[0].connected_now);
-        assert!(!report.connected[1].connected_now);
+        assert_eq!(report.connected.len(), 2);
         assert!(report.unseen.is_empty());
     }
 
@@ -714,7 +694,7 @@ mod tests {
           <options type="joystick" instance="2" Product=" VKB L {0201231D-0000-0000-0000-504944564944}"/>
         </ActionMaps>"#;
         let profile = parse_actionmaps(xml).unwrap();
-        let log = LogEnumeration { joysticks: linux_log().joysticks.into_iter().take(1).collect(), gamepads: Vec::new(), timestamp: None };
+        let log = DeviceOrder { joysticks: linux_log().joysticks.into_iter().take(1).collect(), timestamp: None };
         let report = analyze_clash(&profile, &[dev(VKB_R, "R")], Ok(&log));
         assert_eq!(report.missing.len(), 1);
         assert!(report.resort.is_empty());
@@ -722,30 +702,29 @@ mod tests {
     }
 
     #[test]
-    fn a_pad_only_game_log_is_no_joystick_order() {
+    fn an_empty_order_leaves_every_saved_slot_missing() {
+        // Nothing attached as far as SC is concerned: the saved slot dangles,
+        // nothing shifts, and the stick SDL still sees is unseen by SC.
         let xml = r#"<ActionMaps>
           <options type="joystick" instance="1" Product=" VKB R {0200231D-0000-0000-0000-504944564944}"/>
         </ActionMaps>"#;
         let profile = parse_actionmaps(xml).unwrap();
-        let log = LogEnumeration { joysticks: Vec::new(), gamepads: vec!["Gamepad".into()], timestamp: None };
-        let report = analyze_clash(&profile, &[dev(VKB_R, "R")], Ok(&log));
-        assert_eq!(report.log_error, Some(GameLogError::NoJoystickLines));
-        assert!(report.missing.is_empty());
+        let report = analyze_clash(&profile, &[dev(VKB_R, "R")], Ok(&DeviceOrder::default()));
+        assert_eq!(report.order_error, None);
+        assert_eq!(report.missing.len(), 1);
         assert!(!report.has_clash);
-        assert!(report.gamepad_seen);
         assert_eq!(report.unseen.len(), 1);
     }
 
     #[test]
-    fn missing_game_log_yields_no_order_at_all() {
+    fn no_order_yields_nothing_but_the_error() {
         let xml = r#"<ActionMaps>
           <options type="joystick" instance="1" Product=" VKB L {0201231D-0000-0000-0000-504944564944}"/>
         </ActionMaps>"#;
         let profile = parse_actionmaps(xml).unwrap();
-        let err = GameLogError::NoDeviceLines { path: "x/Game.log".into() };
-        let report = analyze_clash(&profile, &[dev(VKB_R, "R")], Err(err.clone()));
+        let report = analyze_clash(&profile, &[dev(VKB_R, "R")], Err("x/Game.log: no joystick lines".into()));
         // Nothing is derived from SDL's order: no slots, no missing, no clash.
-        assert_eq!(report, ClashReport { log_error: Some(err), ..Default::default() });
+        assert_eq!(report, ClashReport { order_error: Some("x/Game.log: no joystick lines".into()), ..Default::default() });
     }
 
     #[test]
@@ -790,7 +769,6 @@ mod tests {
             sc_product_guid: None,
             name: Some(name.into()),
             clash: stored.is_some_and(|s| s != effective),
-            connected_now: true,
         }
     }
 
@@ -1119,13 +1097,8 @@ mod tests {
         .unwrap();
         let report = analyze_clash(&profile, &devs, Ok(&log));
 
-        assert!(report.gamepad_seen);
         assert!(!report.has_clash);
         assert_eq!(report.connected.len(), 1); // only the stick has a slot
         assert!(report.unseen.is_empty()); // pad and keyboard are not "unseen"
-
-        // No xinput line -> SC did not see a pad at its last start.
-        let log = log_of(&[("VKB L", VKB_L)]);
-        assert!(!analyze_clash(&profile, &devs, Ok(&log)).gamepad_seen);
     }
 }

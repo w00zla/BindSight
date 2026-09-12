@@ -93,7 +93,7 @@ const confirm = ref<{ title: string; icon: ConfirmIcon; buttons: ConfirmButton[]
 let confirmResolve: ((value: string) => void) | null = null;
 
 // Every write into the game's bindings file needs a game restart to show.
-const RESTART_NOTE = "Takes effect after a game restart";
+const RESTART_NOTE = "If game is running, restart for changes to take effect";
 
 function ask(title: string, icon: ConfirmIcon, buttons: ConfirmButton[], subtitle?: string): Promise<string> {
   confirm.value = { title, icon, buttons, subtitle };
@@ -736,7 +736,7 @@ const deviceCols = computed<DeviceCol[]>(() => {
   const joystick = (n: number): DeviceCol => {
     const slot = ranked.get(n);
     const col: DeviceCol = { key: `js${n}`, kind: "joystick", instance: n, label: `js${n}` };
-    if (props.clash?.log_error) {
+    if (props.clash?.order_error) {
       col.label += " ·";
       col.note = "no joystick order";
     }
@@ -757,7 +757,11 @@ const deviceCols = computed<DeviceCol[]>(() => {
 // Columns the user switched off (remembered; a device new to the file
 // starts visible).
 const hiddenCols = persistedRef<string[]>("bindsight.bindingslist.hiddencols", []);
-const visibleCols = computed(() => deviceCols.value.filter((c) => !hiddenCols.value.includes(c.key)));
+// No column toggled on means every column, like the other chip filters.
+const visibleCols = computed(() => {
+  const shown = deviceCols.value.filter((c) => !hiddenCols.value.includes(c.key));
+  return shown.length ? shown : deviceCols.value;
+});
 
 function toggleCol(key: string) {
   hiddenCols.value = toggleIn(hiddenCols.value, key);

@@ -6,6 +6,13 @@ import type { ImageMap } from "./imagemap";
 // any number of joysticks (jsN).
 export type DeviceKind = "joystick" | "gamepad" | "keyboard";
 
+// Payload of `devices-changed`: what a re-enumeration plugged in or out.
+// Both empty at startup, so only real hot-plugs are announced.
+export interface DevicesChanged {
+  added: DeviceInfo[];
+  removed: DeviceInfo[];
+}
+
 export interface DeviceInfo {
   index: number;
   kind: DeviceKind;
@@ -191,15 +198,13 @@ export interface BoundAction {
 }
 
 // One joystick in SC's order: the jsN SC assigns it vs the jsN its bindings
-// were saved under. connected_now: SDL sees it right now (a Game.log slot can
-// be unplugged since SC started).
+// were saved under.
 export interface SlotStatus {
   effective_instance: number;
   stored_instance: number | null;
   sc_product_guid: string | null;
   name: string | null;
   clash: boolean;
-  connected_now: boolean;
 }
 
 // A saved slot whose device is not in SC's list — it dangles and shifts the rest.
@@ -216,13 +221,6 @@ export interface UnseenDevice {
   sc_product_guid: string | null;
 }
 
-// Why Game.log could not be used, so the GUI can say exactly what is wrong.
-export type GameLogError =
-  | { kind: "not_found"; path: string; reason: string }
-  | { kind: "no_device_lines"; path: string }
-  // The game listed a gamepad but no joystick at its last start.
-  | { kind: "no_joystick_lines" };
-
 // One resort step: the bindings saved under js{from} belong on js{to}.
 export interface ResortMove {
   from: number;
@@ -230,20 +228,37 @@ export interface ResortMove {
   name: string | null;
 }
 
-// Game.log is the only order source: with log_error set, everything else is
-// empty and nothing is said about the order.
+// A joystick as the game's order has it: its jsN, name and GUID.
+export interface JoystickDevice {
+  instance: number;
+  product_name: string;
+  product_guid: string | null;
+}
+
+// The joysticks in the game's order (js1, js2, …) and when it was taken.
+export interface DeviceOrder {
+  joysticks: JoystickDevice[];
+  timestamp: string | null;
+}
+
+// The saved slots held against the game's joystick order (live from
+// DirectInput on Windows, from Game.log on Linux). With order_error set,
+// everything else is empty and nothing is said about the order.
 export interface ClashReport {
   connected: SlotStatus[];
   missing: MissingSlot[];
   unseen: UnseenDevice[];
+  // When the game last listed its joysticks (the Game.log's own time).
   log_timestamp: string | null;
-  log_error: GameLogError | null;
+  // Why there is no order (source failed, environment not loaded, …).
+  order_error: string | null;
   has_clash: boolean;
-  // SC listed a gamepad at its last start (`Connected xinput0:`).
-  gamepad_seen: boolean;
   resort: ResortMove[];
   // In-game equivalent of `resort`: pp_resortdevices swaps, in order.
   resort_commands: string[];
+  // The order the game logged at its last start, when it ranks the devices
+  // differently from the live one: a running game keeps it until restarted.
+  logged_order: DeviceOrder | null;
 }
 
 // Last Input card colour: "unseen" (SC does not see the device), "noorder"

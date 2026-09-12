@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onUnmounted, ref } from "vue";
 import Icon from "./Icon.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import type { ClashReport, ScStatus } from "../types";
@@ -20,27 +20,72 @@ function onConfirmApply(value: string) {
   if (value === "rewrite") emit("apply");
 }
 
-// Without the game's own device order no joystick input resolves to a
-// binding; the file detail belongs in the tooltip, not the tile.
-const logErrorTitle = computed(() => {
-  const le = props.report?.log_error;
-  if (!le || le.kind === "no_joystick_lines") return "";
-  return le.kind === "not_found" ? `${le.path}: ${le.reason}` : le.path;
+// When the game last listed its joysticks (the game log's own time); null
+// without a usable log.
+const orderDate = computed<Date | null>(() => {
+  const raw = props.report?.log_timestamp;
+  const t = raw ? new Date(raw) : null;
+  return t && !Number.isNaN(t.getTime()) ? t : null;
+});
+// "6 mins ago": re-evaluated every half minute so it does not go stale.
+const now = ref(Date.now());
+const ticker = setInterval(() => (now.value = Date.now()), 30_000);
+onUnmounted(() => clearInterval(ticker));
+const orderAgo = computed(() => {
+  const t = orderDate.value;
+  if (!t) return "unknown";
+  const s = Math.max(0, Math.floor((now.value - t.getTime()) / 1000));
+  const unit = (n: number, name: string) => `${n} ${name}${n === 1 ? "" : "s"} ago`;
+  if (s < 60) return "just now";
+  if (s < 3600) return unit(Math.floor(s / 60), "min");
+  if (s < 86400) return unit(Math.floor(s / 3600), "hour");
+  return unit(Math.floor(s / 86400), "day");
+});
+// The exact time goes into the tooltip.
+const orderTitle = computed(() => {
+  const explain = "When the game last listed its joysticks (js1, js2, …) at a start. A running game keeps that order until it restarts.";
+  const t = orderDate.value;
+  return t ? `${explain}\n${t.toLocaleString()}` : explain;
+});
+
+// The devices behind the order difference: what the game had at its start
+// and no longer has (missing), and what it did not have (new). Matched by
+// GUID against the live order.
+const orderChanges = computed(() => {
+  const logged = props.report?.logged_order;
+  if (!logged) return [];
+  const key = (g: string | null) => g?.toLowerCase() ?? "";
+  const live = new Set((props.report?.connected ?? []).map((s) => key(s.sc_product_guid)));
+  const started = new Set(logged.joysticks.map((j) => key(j.product_guid)));
+  return [
+    ...logged.joysticks
+      .filter((j) => !live.has(key(j.product_guid)))
+      .map((j) => ({ id: `gone-${j.instance}`, name: j.product_name, instance: j.instance, state: "missing" })),
+    ...(props.report?.connected ?? [])
+      .filter((s) => !started.has(key(s.sc_product_guid)))
+      .map((s) => ({ id: `new-${s.effective_instance}`, name: s.name ?? "?", instance: s.effective_instance, state: "new" })),
+  ];
 });
 
 const hasIssue = computed(
   () =>
     !!props.sc?.error ||
     !!props.loadError ||
-    !!props.report?.log_error ||
-    !!props.report?.missing.length ||
+    !!props.report?.order_error ||
+    !!props.report?.logged_order ||
     !!props.report?.has_clash,
 );
 </script>
 
 <template>
   <div class="status-panel">
-    <div class="panel-title">Status</div>
+    <div class="head">
+      <div class="panel-title">Status</div>
+      <div class="order-time" :title="orderTitle">
+        <Icon name="clock" :size="14" />
+        <span>Game devices update <b>{{ orderAgo }}</b></span>
+      </div>
+    </div>
     <div class="tiles">
       <div v-if="sc?.loading" class="tile loading">
         <div class="row">
@@ -73,19 +118,31 @@ const hasIssue = computed(
         <div class="error mono">{{ loadError }}</div>
       </div>
 
-      <div v-if="report?.log_error" class="tile issue detail" :title="logErrorTitle">
+      <!-- Without the game's joystick order no joystick input resolves. -->
+      <div v-if="report?.order_error" class="tile issue detail">
         <div class="row">
           <Icon name="warning" :size="16" />
-          <span class="name">Joystick order issue</span>
+          <span class="name">No joystick order</span>
         </div>
-        <div class="note">Unable to parse 'Game.log', some features deactivated!</div>
+        <div class="note">{{ report.order_error }}</div>
       </div>
 
-      <div v-for="m in report?.missing ?? []" :key="m.stored_instance" class="tile issue">
-        <Icon name="warning" :size="16" />
-        <span class="name">{{ m.name }}</span>
-        <span class="chip mono">js{{ m.stored_instance }}</span>
-        <span>missing</span>
+      <!-- The game started with another order (a device plugged in or out
+           since): it keeps that order until it restarts. -->
+      <div v-if="report?.logged_order" class="tile issue detail">
+        <div class="row">
+          <Icon name="warning" :size="16" />
+          <span class="name">Game started with another device order</span>
+        </div>
+        <div class="moves">
+          <div v-for="c in orderChanges" :key="c.id" class="move">
+            <span class="dot filled" />
+            <span class="name">{{ c.name }}</span>
+            <span class="chip mono">js{{ c.instance }}</span>
+            <span>{{ c.state }}</span>
+          </div>
+        </div>
+        <div class="note">If game is running, restart for changes to take effect</div>
       </div>
 
       <div v-if="report?.has_clash" class="tile issue clash">
@@ -126,7 +183,7 @@ const hasIssue = computed(
       ]"
       @choose="onConfirmApply"
     >
-      <p class="dialog-note">Takes effect after a game restart</p>
+      <p class="dialog-note">If game is running, restart for changes to take effect</p>
     </ConfirmDialog>
 
     <ConfirmDialog
@@ -167,6 +224,28 @@ const hasIssue = computed(
   gap: 12px;
 }
 
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+/* The log's enumeration time, top right of the panel. */
+.order-time {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.order-time b {
+  font-weight: 600;
+  color: var(--text-2);
+}
+
 .tiles {
   display: flex;
   flex-wrap: wrap;
@@ -189,6 +268,7 @@ const hasIssue = computed(
 }
 
 .tile.ok {
+  flex: 1;
   color: var(--ok);
 }
 
@@ -269,13 +349,14 @@ const hasIssue = computed(
   flex: 1;
 }
 
+/* Passive slot tokens, like the device tile's clash chip: a tinted fill, no
+   border — the outline belongs to the buttons. */
 .chip {
-  height: 24px;
   display: inline-flex;
   align-items: center;
-  padding: 0 8px;
-  border-radius: var(--radius-control);
-  border: 1px solid rgba(242, 179, 76, 0.7);
+  padding: 2px 8px;
+  border-radius: 3px;
+  background: rgba(242, 179, 76, 0.15);
   color: var(--warn);
   font-size: 13px;
 }
@@ -310,6 +391,7 @@ const hasIssue = computed(
   display: flex;
   flex-wrap: wrap;
   gap: 8px 20px;
+  padding-top: 4px;
 }
 
 .move {

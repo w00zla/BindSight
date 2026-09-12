@@ -59,13 +59,13 @@ function onNoBackupChoose(value: string) {
   if (value === "disable") autoBackup.value = false;
 }
 const debugLogging = ref(props.debugLogging);
-// Exclusion is by hardware id (a joystick's SC Product GUID, `keyboard`,
-// `gamepad`): any device can go, the keyboard too — whoever does not care
-// about it wants the screen space. Several pads are one entry.
+// Exclusion is by hardware id (a joystick's SC Product GUID, `gamepad`):
+// joysticks and the pad can go, the keyboard (with the mouse) never — SC
+// always has it. Several pads are one entry.
 const withId = computed(() => {
   const seen = new Set<string>();
   return props.devices.filter((d): d is DeviceInfo & { hardware_id: string } => {
-    if (!d.hardware_id || seen.has(d.hardware_id.toLowerCase())) return false;
+    if (!d.hardware_id || d.kind === "keyboard" || seen.has(d.hardware_id.toLowerCase())) return false;
     seen.add(d.hardware_id.toLowerCase());
     return true;
   });

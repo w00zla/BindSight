@@ -40,7 +40,7 @@ os_info = { version = "3", default-features = false }
 [target.'cfg(windows)'.dependencies]
 sdl2 = { version = "0.37", features = ["bundled", "static-link"] }
 # GetKeyboardLayoutNameW for the default keyboard image-map (kblayout.rs).
-windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation"] }
+windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation", "Win32_Devices_HumanInterfaceDevice", "Win32_System_LibraryLoader"] }
 
 [target.'cfg(not(windows))'.dependencies]
 sdl2 = "0.37"

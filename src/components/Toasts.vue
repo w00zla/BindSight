@@ -37,8 +37,13 @@ defineProps<{ toasts: Toast[] }>();
   max-width: 24rem;
 }
 
-.toast.error,
-.toast.hint {
+/* The accent says what kind of message it is: green done, red broken,
+   blue guidance. */
+.toast.error {
   border-left-color: var(--err);
+}
+
+.toast.hint {
+  border-left-color: var(--accent);
 }
 </style>

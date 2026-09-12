@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import ImageMapEditor from "./components/ImageMapEditor.vue";
 import TopBar from "./components/TopBar.vue";
 import DeviceTile from "./components/DeviceTile.vue";
+import ScrollRail from "./components/ScrollRail.vue";
 import StatusPanel from "./components/StatusPanel.vue";
 import ImageStage from "./components/ImageStage.vue";
 import LastInputCard from "./components/LastInputCard.vue";
@@ -26,6 +27,7 @@ import type {
   Config,
   CurrentInput,
   DeviceInfo,
+  DevicesChanged,
   Environment,
   ImageMapView,
   JoyInput,
@@ -610,12 +612,10 @@ function bindingCountFor(d: DeviceInfo): number {
   return n === undefined ? 0 : bindings.value.filter((b) => b.device_kind === "joystick" && b.instance === n).length;
 }
 
-// SC did not list this device at its last start. The keyboard is always there;
-// a slotted pad rides on the log's xinput line.
+// A joystick SDL sees that is not in the game's order. The keyboard and the
+// pad take no slot and are never "unseen".
 function deviceUnseen(d: DeviceInfo): boolean {
-  if (d.kind === "keyboard") return false;
-  if (d.kind === "gamepad") return d.gamepad_slot !== null && clash.value?.gamepad_seen === false;
-  return isUnseen(d.sc_product_guid);
+  return d.kind === "joystick" && isUnseen(d.sc_product_guid);
 }
 
 // Connected-slot status by GUID, from the clash report.
@@ -636,11 +636,11 @@ const slotByInstance = computed<Map<number, SlotStatus>>(
   () => new Map((clash.value?.connected ?? []).map((s) => [s.effective_instance, s])),
 );
 
-// The game's device order is unknown (no usable log): no joystick has a jsN,
-// so none of its input resolves. The keyboard and the pad are unaffected.
-const noOrder = computed(() => !!clash.value?.log_error);
+// The game's joystick order is unknown: no joystick has a jsN, so none of
+// its input resolves. The keyboard and the pad are unaffected.
+const noOrder = computed(() => !!clash.value?.order_error);
 
-// GUIDs SC did not list at its last start (device-order log source only).
+// GUIDs of joysticks SDL sees that are not in the game's order.
 const unseenGuids = computed<Set<string>>(
   () => new Set((clash.value?.unseen ?? []).map((u) => u.sc_product_guid).filter((g): g is string => !!g)),
 );
@@ -720,6 +720,7 @@ async function switchEnv(slug: string) {
   try {
     const changed = await invoke<boolean>("set_active_env", { slug });
     activeEnv.value = slug;
+    notify(`Switched to ${slug}`, "ok");
     if (changed) await awaitScLoad();
   } catch (e) {
     notify(String(e), "error");
@@ -736,13 +737,48 @@ function bindingClash(token: string): string | undefined {
   return slot.stored_instance === null ? "joystick not saved" : `joystick saved as js${slot.stored_instance}`;
 }
 
-async function loadClash() {
+// `announce`: the report follows something that happened by itself (a
+// hot-plug, a new game log), so a clash appearing or going away is toasted.
+// Refreshes and writes stay quiet: the Status panel shows the outcome.
+async function loadClash(announce = false) {
+  const before = clash.value?.has_clash ?? false;
   try {
     clash.value = await invoke<ClashReport>("get_clash_report");
   } catch (e) {
     console.warn("clash report failed", e);
     clash.value = null;
   }
+  const after = clash.value?.has_clash ?? false;
+  if (announce && before !== after) {
+    if (after) notify("Joystick order clash detected", "hint");
+    else notify("Joystick order clash resolved", "ok");
+  }
+}
+
+// Hot-plug toasts, one per device; excluded devices are the user's "I do not
+// care", so they stay silent.
+function announceDevices(change: DevicesChanged) {
+  for (const d of change.added) {
+    if (!isExcludedDevice(d)) notify(`${deviceName(d)} connected`, "ok");
+  }
+  for (const d of change.removed) {
+    if (!isExcludedDevice(d)) notify(`${deviceName(d)} disconnected`, "hint");
+  }
+}
+
+// The game log was read: at start-up / after an environment change quietly,
+// or because the game started and wrote a new one with the order it took.
+// Either way redo the report (the order source itself on Linux, the
+// "restart the game" check on Windows).
+async function onGameLogChanged(started: boolean) {
+  if (started) notify("Game started, device order checked", "hint");
+  await loadClash(started);
+}
+
+// The write went through the backend's one road (`replace_live_file`), which
+// backs the file up first unless the user switched that off in Settings.
+function withBackup(message: string): string {
+  return autoBackup.value ? `${message} (backup created)` : `${message} without backup`;
 }
 
 // Put the pp_resortdevices command line from the Fix via console dialog on the
@@ -763,7 +799,7 @@ async function applyResort() {
     takeStatus(s);
     await loadClash();
     if (s.loaded) {
-      notify("Bindings resorted", "ok");
+      notify(withBackup("Bindings resorted"), "ok");
     } else {
       notify(s.error ?? "Reload failed", "error");
     }
@@ -953,7 +989,7 @@ async function onSaved(s: LoadStatus) {
   takeStatus(s);
   await loadClash();
   if (s.loaded) {
-    notify("Saved", "ok");
+    notify(withBackup("Saved"), "ok");
   } else {
     notify(s.error ?? "Load failed", "error");
   }
@@ -964,7 +1000,7 @@ async function onApplied(s: LoadStatus) {
   takeStatus(s);
   await loadClash();
   if (s.loaded) {
-    notify("Applied", "ok");
+    notify(withBackup("Applied"), "ok");
   } else {
     notify(s.error ?? "Load failed", "error");
   }
@@ -974,7 +1010,7 @@ async function onRestored(s: LoadStatus) {
   takeStatus(s);
   await loadClash();
   if (s.loaded) {
-    notify("Restored", "ok");
+    notify(withBackup("Restored"), "ok");
   } else {
     notify(s.error ?? "Load failed", "error");
   }
@@ -1033,14 +1069,14 @@ async function refresh() {
 // Hot-plug (and startup): re-list the devices and redo the clash report on
 // top of them; actionmaps.xml and Game.log are not re-read (SDL raises one
 // devices-changed per device at startup, and the install did not change).
-async function refreshDevices() {
+async function refreshDevices(announce = false) {
   try {
     devices.value = await invoke<DeviceInfo[]>("list_devices");
   } catch (e) {
     console.error("device list failed", e);
     error.value = String(e);
   }
-  await loadClash();
+  await loadClash(announce);
 }
 
 // SDL-side name of a live input, e.g. "button 5", "hat 0 up", "key lshift".
@@ -1068,7 +1104,6 @@ function liveState(): LiveState {
   if (isExcluded(hardwareIdOf(c))) return "unseen";
   if (c.kind === "joystick" && isUnseen(c.sc_guid)) return "unseen";
   if (c.kind === "joystick" && noOrder.value) return "noorder";
-  if (c.kind === "gamepad" && clash.value?.gamepad_seen === false) return "unseen";
   return c.actions.length ? "bound" : "none";
 }
 
@@ -1126,11 +1161,17 @@ onMounted(async () => {
   });
   await step("Device events", async () => {
     unlisten.push(
-      await listen("devices-changed", async () => {
-        await refreshDevices();
+      await listen<DevicesChanged>("devices-changed", async (e) => {
+        const changed = e.payload.added.length > 0 || e.payload.removed.length > 0;
+        announceDevices(e.payload);
+        await refreshDevices(changed);
         await reloadMaps();
       }),
     );
+  });
+  // The game started and wrote a new log: its device order may have changed.
+  await step("Game log events", async () => {
+    unlisten.push(await listen<{ started: boolean }>("gamelog-changed", (e) => onGameLogChanged(e.payload.started)));
   });
   // Registered before the initial fetch below, so a load finishing in
   // between is not missed.
@@ -1228,8 +1269,8 @@ onUnmounted(() => {
     <div v-else-if="mode === 'monitor'" class="content">
       <div class="top-row">
       <div class="devices-panel">
-        <div class="panel-title">Connected Devices</div>
-        <div class="rail">
+        <div class="panel-title">Input Devices</div>
+        <ScrollRail>
         <DeviceTile
           v-for="d in monitorDevices"
           :key="d.index"
@@ -1242,7 +1283,7 @@ onUnmounted(() => {
           @toggleMap="toggleStageHidden(d)"
         />
         <div v-if="!monitorDevices.length" class="tile-none">None</div>
-        </div>
+        </ScrollRail>
       </div>
       <StatusPanel
         :report="clash"
@@ -1367,13 +1408,6 @@ onUnmounted(() => {
   padding: 12px 16px 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-}
-
-.rail {
-  display: flex;
-  align-items: flex-start;
-  flex-wrap: wrap;
   gap: 12px;
 }
 

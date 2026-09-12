@@ -42,6 +42,7 @@ export const ICONS = {
   'chevron-down': '<path d="m6 9 6 6 6-6"/>',
   'chevron-up': '<path d="m6 15 6-6 6 6"/>',
   'chevron-right': '<path d="m9 6 6 6-6 6"/>',
+  'chevron-left': '<path d="m15 6-6 6 6 6"/>',
   unfold: '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
   // Two collapsed buckets: chevron plus head line, twice.
   group: '<path d="m4 4 3 3-3 3"/><path d="M11 7h10"/><path d="m4 14 3 3-3 3"/><path d="M11 17h10"/>',

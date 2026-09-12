@@ -58,15 +58,17 @@ const PAD_TRIGGER_DEADZONE: i16 = 4000;
 
 /// Near full travel: the point past which a gamepad trigger or thumb stick
 /// direction counts as a pressed button (SC's `triggerl_btn`, `thumbl_left`,
-/// …, which have no axis of their own) — once it has stayed there for
-/// [`DERIVED_BUTTON_HOLD_MS`]. SC's own rule is unknown; half and three
-/// quarter travel both felt too early (user, 2026-09-12).
+/// …, which have no axis of their own). A trigger presses right there, like
+/// a shoulder button; a stick direction only after [`STICK_HOLD_MS`]. SC's
+/// own rule is unknown; half and three quarter travel both felt too early
+/// (user, 2026-09-12).
 const DERIVED_BUTTON_THRESHOLD: i16 = 30000;
 
-/// How long the axis must stay past the threshold before the button
-/// presses, so a stick swept through the corner on its way somewhere
-/// else does not press it.
-const DERIVED_BUTTON_HOLD_MS: u32 = 250;
+/// How long a thumb stick must stay in a corner before its direction button
+/// presses: the stick is an axis first, and only a deliberate hold turns it
+/// into `thumbl_left` & co. — a sweep through the corner must not (user,
+/// 2026-09-12).
+const STICK_HOLD_MS: u32 = 500;
 
 /// A derived button lets go only below this (hysteresis): a stick held right
 /// at the threshold would otherwise flutter between pressed and released.
@@ -321,9 +323,16 @@ fn derived_step(travel: i32, pressed: bool) -> DerivedStep {
     }
 }
 
-/// Whether a button waiting since `since` (SDL ticks) presses at `now`.
+/// A trigger button presses the moment its axis is past the threshold; a
+/// stick direction waits out [`STICK_HOLD_MS`] first.
+fn presses_at_once(name: &str) -> bool {
+    name.starts_with("trigger")
+}
+
+/// Whether a stick direction waiting since `since` (SDL ticks) presses at
+/// `now`.
 fn derived_due(since: u32, now: u32) -> bool {
-    now.wrapping_sub(since) >= DERIVED_BUTTON_HOLD_MS
+    now.wrapping_sub(since) >= STICK_HOLD_MS
 }
 
 /// SC's `triggerl_r_btn` ("Left and Right Trigger", the Melee Block default):
@@ -622,7 +631,7 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
     let mut waiting: HashMap<(u32, &'static str), u32> = HashMap::new();
     let timer = sdl.timer()?;
 
-    reopen_all(&joystick, &controllers, &mut opened, &mut guids, &app, &devices)?;
+    reopen_all(&joystick, &controllers, &mut opened, &mut guids, &app, &devices, true)?;
 
     loop {
         // Derived buttons whose wait is over press now; a stick held still
@@ -656,7 +665,7 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
                 raw_axis.clear();
                 derived.clear();
                 waiting.clear();
-                reopen_all(&joystick, &controllers, &mut opened, &mut guids, &app, &devices)?;
+                reopen_all(&joystick, &controllers, &mut opened, &mut guids, &app, &devices, false)?;
             }
             Event::JoyButtonDown { timestamp, which, button_idx, .. } if !opened.pad_instances.contains(&which) => {
                 if let Some(guid) = guids.get(&which) {
@@ -762,6 +771,19 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
                                 },
                             );
                         }
+                        DerivedStep::Wait if presses_at_once(name) => {
+                            derived.insert(key, true);
+                            let _ = app.emit(
+                                "joy-input",
+                                InputEvent::PadButton {
+                                    guid: guid.clone(),
+                                    name: name.to_string(),
+                                    pressed: true,
+                                    timestamp,
+                                    instance_id: which,
+                                },
+                            );
+                        }
                         DerivedStep::Wait => {
                             waiting.entry(key).or_insert(timestamp);
                         }
@@ -777,7 +799,9 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
                 // Both buttons together are a third one, `triggerl_r_btn`.
                 if matches!(axis, Axis::TriggerLeft | Axis::TriggerRight) {
                     let both = both_triggers(&derived, which);
-                    if derived.insert((which, "triggerl_r_btn"), both) != Some(both) {
+                    // The first trigger event only sets the state; unknown
+                    // counts as released, not as a change.
+                    if derived.insert((which, "triggerl_r_btn"), both).unwrap_or(false) != both {
                         let _ = app.emit(
                             "joy-input",
                             InputEvent::PadButton {
@@ -823,9 +847,25 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
     Ok(())
 }
 
+/// Payload of `devices-changed`: what a re-enumeration added and removed
+/// (by SDL instance id, which is unique per connection). Both are empty at
+/// startup and for SDL's initial arrival events, so the frontend announces
+/// only real hot-plugs.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DevicesChanged {
+    pub added: Vec<DeviceInfo>,
+    pub removed: Vec<DeviceInfo>,
+}
+
+/// The devices in `new` that `old` lacks, by instance id.
+fn devices_added(old: &[DeviceInfo], new: &[DeviceInfo]) -> Vec<DeviceInfo> {
+    new.iter().filter(|n| !old.iter().any(|o| o.sdl_instance_id == n.sdl_instance_id)).cloned().collect()
+}
+
 /// Re-enumerate everything: reopen every device, rebuild the GUID map and the
 /// shared device list (with the synthetic keyboard last), and tell the
-/// frontend the list changed.
+/// frontend the list changed. `initial` is the startup enumeration: nothing
+/// was plugged in or out, so the payload carries no change.
 fn reopen_all(
     joystick: &JoystickSubsystem,
     controllers: &GameControllerSubsystem,
@@ -833,11 +873,18 @@ fn reopen_all(
     guids: &mut HashMap<u32, String>,
     app: &AppHandle,
     devices: &DeviceList,
+    initial: bool,
 ) -> Result<(), String> {
     guids.clear();
 
     let hid = hid_table();
+    let before = std::mem::take(&mut opened.infos);
     *opened = open_all(joystick, controllers, &hid)?;
+    let change = if initial {
+        DevicesChanged::default()
+    } else {
+        DevicesChanged { added: devices_added(&before, &opened.infos), removed: devices_added(&opened.infos, &before) }
+    };
     for stick in &opened.sticks {
         if let Some(info) = opened.infos.iter().find(|i| i.sdl_instance_id == stick.instance_id()) {
             guids.insert(stick.instance_id(), info.sdl_guid.clone());
@@ -853,7 +900,7 @@ fn reopen_all(
     if let Ok(mut shared) = devices.lock() {
         *shared = list;
     }
-    let _ = app.emit("devices-changed", ());
+    let _ = app.emit("devices-changed", &change);
     Ok(())
 }
 
@@ -966,9 +1013,14 @@ mod tests {
         assert_eq!(derived_step(24000, true), DerivedStep::Release);
         assert_eq!(derived_step(0, true), DerivedStep::Release);
         // The wait is over after the hold time, wrapping ticks included.
-        assert!(!derived_due(1000, 1249));
-        assert!(derived_due(1000, 1250));
-        assert!(derived_due(u32::MAX - 10, 240));
+        assert!(!derived_due(1000, 1000 + STICK_HOLD_MS - 1));
+        assert!(derived_due(1000, 1000 + STICK_HOLD_MS));
+        assert!(derived_due(u32::MAX - 10, STICK_HOLD_MS - 10));
+        // A trigger is a button like a shoulder button: no wait at all.
+        assert!(presses_at_once("triggerl_btn"));
+        assert!(presses_at_once("triggerr_btn"));
+        assert!(!presses_at_once("thumbl_left"));
+        assert!(!presses_at_once("thumbr_down"));
     }
 
     #[test]
