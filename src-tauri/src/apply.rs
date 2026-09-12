@@ -15,7 +15,7 @@ use serde::Deserialize;
 use tauri::{AppHandle, State};
 
 use crate::rebind::{self, RebindChange};
-use crate::scdata::{parse_actionmaps, ActionMapsFile, DeviceKind};
+use crate::scdata::{parse_actionmaps, parse_rebind, ActionMapsFile, DeviceKind, Rebind};
 use crate::{backups, config, diff, AppData, LoadStatus};
 
 /// One device to take over: `kb1`, `gp1` or `jsN`. A joystick's bindings
@@ -41,14 +41,19 @@ fn target_of(d: &DeviceSel) -> u32 {
     }
 }
 
-/// `(actionmap, action) -> input` for the rebinds of one device in a file.
-fn rebinds_of<'a>(file: &'a ActionMapsFile, prefix: &str) -> BTreeMap<(&'a str, &'a str), &'a str> {
+/// `(actionmap, action) -> rebind` for the rebinds of one device in a file.
+/// Matched by what the input targets, so a joystick rebind with a modifier
+/// in front (`lctrl+js1_button1`) counts for js1 like a plain one.
+fn rebinds_of(file: &ActionMapsFile, kind: DeviceKind, instance: u32) -> BTreeMap<(&str, &str), &Rebind> {
     file.rebinds
         .iter()
-        .filter(|r| r.input.starts_with(prefix))
-        .map(|r| ((r.actionmap.as_str(), r.action.as_str()), r.input.as_str()))
+        .filter(|r| parse_rebind(&r.input).is_some_and(|t| t.kind == kind && t.instance == instance))
+        .map(|r| ((r.actionmap.as_str(), r.action.as_str()), r))
         .collect()
 }
+
+/// `(actionmap, action) -> (input on the target slot, attributes)`.
+type Planned<'a> = BTreeMap<(&'a str, &'a str), (String, &'a [(String, String)])>;
 
 /// The rebind changes that make `live` match `source` for `devices`: the
 /// source's rebinds where they differ, a removal where the live file has a
@@ -58,25 +63,36 @@ pub fn plan_apply(live: &ActionMapsFile, source: &ActionMapsFile, devices: &[Dev
     for d in devices {
         let from_prefix = prefix(d.kind, d.instance);
         let to_prefix = prefix(d.kind, target_of(d));
-        // The source's rebinds, renamed onto the target slot.
-        let from: BTreeMap<(&str, &str), String> = rebinds_of(source, &from_prefix)
+        // The source's rebinds, renamed onto the target slot (the `jsN_`
+        // part only — a modifier in front stays where it is).
+        let from: Planned = rebinds_of(source, d.kind, d.instance)
             .into_iter()
-            .map(|(k, input)| (k, format!("{to_prefix}{}", &input[from_prefix.len()..])))
+            .map(|(k, r)| (k, (r.input.replacen(&from_prefix, &to_prefix, 1), r.attrs.as_slice())))
             .collect();
-        let now = rebinds_of(live, &to_prefix);
-        for (&(actionmap, action), input) in &from {
-            if now.get(&(actionmap, action)).copied() != Some(input.as_str()) {
+        let now = rebinds_of(live, d.kind, target_of(d));
+        for (&(actionmap, action), (input, attrs)) in &from {
+            let same = now
+                .get(&(actionmap, action))
+                .is_some_and(|r| r.input == *input && r.attrs.as_slice() == *attrs);
+            if !same {
                 out.push(RebindChange {
                     actionmap: actionmap.into(),
                     action: action.into(),
                     kind: d.kind,
                     input: input.clone(),
+                    attrs: Some(attrs.to_vec()),
                 });
             }
         }
         for &(actionmap, action) in now.keys() {
             if !from.contains_key(&(actionmap, action)) {
-                out.push(RebindChange { actionmap: actionmap.into(), action: action.into(), kind: d.kind, input: String::new() });
+                out.push(RebindChange {
+                    actionmap: actionmap.into(),
+                    action: action.into(),
+                    kind: d.kind,
+                    input: String::new(),
+                    attrs: None,
+                });
             }
         }
     }
@@ -136,9 +152,47 @@ mod tests {
             joysticks: Vec::new(),
             rebinds: rebinds
                 .iter()
-                .map(|(m, a, i)| Rebind { actionmap: m.to_string(), action: a.to_string(), input: i.to_string() })
+                .map(|(m, a, i)| Rebind { actionmap: m.to_string(), action: a.to_string(), input: i.to_string(), attrs: Vec::new() })
                 .collect(),
         }
+    }
+
+    fn attr(r: Rebind, name: &str, value: &str) -> Rebind {
+        Rebind { attrs: vec![(name.to_string(), value.to_string())], ..r }
+    }
+
+    #[test]
+    fn plan_carries_the_source_rebinds_attributes() {
+        let mut live = file(&[("seat", "eject", "js1_button1"), ("seat", "boost", "js1_button2")]);
+        let mut source = file(&[("seat", "eject", "js1_button1"), ("seat", "boost", "js1_button2")]);
+        // Same inputs, but the source holds eject with activationMode: that
+        // alone is a change, and the plan carries the attribute along.
+        source.rebinds[0] = attr(source.rebinds[0].clone(), "activationMode", "hold");
+        live.rebinds[1] = attr(live.rebinds[1].clone(), "multiTap", "2");
+        let plan = plan_apply(&live, &source, &[sel(DeviceKind::Joystick, 1)]);
+        let as_text: Vec<String> = plan.iter().map(|c| format!("{}/{}={} {:?}", c.actionmap, c.action, c.input, c.attrs)).collect();
+        assert_eq!(
+            as_text,
+            vec![
+                "seat/boost=js1_button2 Some([])",
+                "seat/eject=js1_button1 Some([(\"activationMode\", \"hold\")])",
+            ]
+        );
+    }
+
+    #[test]
+    fn plan_sees_joystick_rebinds_with_a_modifier_in_front() {
+        let live = file(&[("seat", "eject", "lctrl+js1_button1")]);
+        let source = file(&[("seat", "lights", "lctrl+js1_button3")]);
+        // The modifier stays in front, the slot rename hits the `js1_` part.
+        let plan = plan_apply(&live, &source, &[DeviceSel { kind: DeviceKind::Joystick, instance: 1, target: Some(2) }]);
+        let as_text: Vec<String> = plan.iter().map(|c| format!("{}/{}={}", c.actionmap, c.action, c.input)).collect();
+        assert_eq!(as_text, vec!["seat/lights=lctrl+js2_button3"]);
+        // Live js1's modifier rebind is js1's, so applying a source without
+        // it onto js1 removes it.
+        let plan = plan_apply(&live, &file(&[]), &[sel(DeviceKind::Joystick, 1)]);
+        let as_text: Vec<String> = plan.iter().map(|c| format!("{}/{}={}", c.actionmap, c.action, c.input)).collect();
+        assert_eq!(as_text, vec!["seat/eject="]);
     }
 
     fn sel(kind: DeviceKind, instance: u32) -> DeviceSel {

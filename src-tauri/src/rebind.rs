@@ -7,9 +7,11 @@
 //! byte. SC keeps one binding per action and device kind (joystick, keyboard,
 //! gamepad), so a change replaces every existing rebind of that kind under
 //! the action — the first one keeps its other attributes (`activationMode`,
-//! `multiTap`, …), only its `input` changes; a missing `<action>` or
-//! `<actionmap>` element is created in SC's own layout (one-space indent,
-//! the file's line endings).
+//! `multiTap`, …) and only its `input` changes, unless the change carries
+//! its own attribute list (an apply copying a source's rebind), which then
+//! replaces the element as a whole; a missing `<action>` or `<actionmap>`
+//! element is created in SC's own layout (one-space indent, the file's line
+//! endings).
 
 use serde::Deserialize;
 
@@ -18,13 +20,17 @@ use crate::scdata::{parse_rebind, parse_actionmaps, DeviceKind};
 /// One rebind to write: the action and the full SC input as SC stores it
 /// (`js2_button5`, `kb1_lalt+x`, `gp1_a`, or a blank `js1_ ` to unbind). An
 /// empty `input` removes the action's rebinds of that kind instead, so the
-/// shipped default applies again.
+/// shipped default applies again. `attrs` are the element's other
+/// attributes to write (`activationMode`, …): `None` keeps whatever the
+/// replaced element had, `Some` writes exactly these.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RebindChange {
     pub actionmap: String,
     pub action: String,
     pub kind: DeviceKind,
     pub input: String,
+    #[serde(default)]
+    pub attrs: Option<Vec<(String, String)>>,
 }
 
 /// Apply every change to `xml` and return the new text. The result is parsed
@@ -40,6 +46,12 @@ pub fn apply_rebinds(xml: &str, changes: &[RebindChange]) -> Result<String, Stri
         }
         if change.input.contains('"') || change.input.contains('<') || change.input.contains('&') {
             return Err(format!("invalid input {:?}", change.input));
+        }
+        for (name, value) in change.attrs.iter().flatten() {
+            let bad = |s: &str| s.contains('"') || s.contains('<') || s.contains('&');
+            if name.is_empty() || name.contains(char::is_whitespace) || name.contains('=') || bad(name) || bad(value) {
+                return Err(format!("invalid rebind attribute {name:?}={value:?}"));
+            }
         }
         out = apply_one(&out, change)?;
     }
@@ -151,7 +163,11 @@ fn apply_one(xml: &str, change: &RebindChange) -> Result<String, String> {
     let layout = layout_of(xml);
     let mut xml = xml.to_string();
     let remove = change.input.is_empty();
-    let rebind = format!("<rebind input=\"{}\"/>", change.input);
+    let mut rebind = format!("<rebind input=\"{}\"", change.input);
+    for (name, value) in change.attrs.iter().flatten() {
+        rebind.push_str(&format!(" {name}=\"{value}\""));
+    }
+    rebind.push_str("/>");
 
     let profiles_end = xml.find("</ActionProfiles>").ok_or("no <ActionProfiles> in actionmaps.xml")?;
     let Some(mut map) = find_element(&xml, 0, profiles_end, "actionmap", &change.actionmap)? else {
@@ -225,14 +241,19 @@ fn apply_one(xml: &str, change: &RebindChange) -> Result<String, String> {
         Some((first_start, first_end)) => {
             // Remove the duplicates back to front (whole lines), then swap
             // the first one's input, keeping its other attributes
-            // (`activationMode`, `multiTap`, …).
+            // (`activationMode`, `multiTap`, …) — or, with an attribute list
+            // given, replace the element as a whole.
             for &(start, end) in spans.iter().skip(1).rev() {
                 let line_start = start - indent_before(&xml, start).len();
                 let line_end = if xml[end..].starts_with(layout.eol) { end + layout.eol.len() } else { end };
                 xml.replace_range(line_start..line_end, "");
             }
-            let swapped = set_attr(&xml[first_start..first_end], "input", &change.input)
-                .ok_or("<rebind> without an input attribute")?;
+            let swapped = if change.attrs.is_some() {
+                rebind.clone()
+            } else {
+                set_attr(&xml[first_start..first_end], "input", &change.input)
+                    .ok_or("<rebind> without an input attribute")?
+            };
             xml.replace_range(first_start..first_end, &swapped);
         }
     }
@@ -253,7 +274,7 @@ mod tests {
     use super::*;
 
     fn change(actionmap: &str, action: &str, kind: DeviceKind, input: &str) -> RebindChange {
-        RebindChange { actionmap: actionmap.into(), action: action.into(), kind, input: input.into() }
+        RebindChange { actionmap: actionmap.into(), action: action.into(), kind, input: input.into(), attrs: None }
     }
 
     // Shaped like SC's own output (LF here, one-space indent).
@@ -331,6 +352,24 @@ mod tests {
         assert!(out.contains("  <actionmap name=\"spaceship_general_extra\">\n   <action name=\"v_extra\">\n    <rebind input=\"kb1_e\"/>\n   </action>\n  </actionmap>\n"));
         let profile = parse_actionmaps(&out).unwrap();
         assert_eq!(profile.rebinds.len(), 7);
+    }
+
+    #[test]
+    fn an_attribute_list_replaces_the_element_as_a_whole() {
+        let xml = XML.replace("<rebind input=\"kb1_ralt+y\"/>", "<rebind input=\"kb1_ralt+y\" activationMode=\"hold\"/>");
+        let mut c = change("spaceship_general", "v_eject", DeviceKind::Keyboard, "kb1_e");
+        c.attrs = Some(vec![("multiTap".into(), "2".into())]);
+        let out = apply_rebinds(&xml, &[c.clone()]).unwrap();
+        assert!(out.contains("    <rebind input=\"kb1_e\" multiTap=\"2\"/>\n"));
+        assert!(!out.contains("activationMode"));
+        // An empty list strips the attributes; a new element gets them too.
+        c.attrs = Some(Vec::new());
+        let out = apply_rebinds(&xml, &[c.clone()]).unwrap();
+        assert!(out.contains("    <rebind input=\"kb1_e\"/>\n"));
+        c.action = "v_new".into();
+        c.attrs = Some(vec![("activationMode".into(), "press".into())]);
+        let out = apply_rebinds(&xml, &[c]).unwrap();
+        assert!(out.contains("<rebind input=\"kb1_e\" activationMode=\"press\"/>"));
     }
 
     #[test]

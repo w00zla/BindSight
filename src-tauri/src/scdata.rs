@@ -199,16 +199,19 @@ fn action_from(e: &BytesStart, loc: &HashMap<String, String>) -> Action {
 }
 
 fn attributes(e: &BytesStart) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    for attr in e.attributes().flatten() {
-        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
-        let value = attr
-            .unescape_value()
-            .map(|v| v.into_owned())
-            .unwrap_or_default();
-        map.insert(key, value);
-    }
-    map
+    attribute_list(e).into_iter().collect()
+}
+
+/// The element's attributes in file order.
+fn attribute_list(e: &BytesStart) -> Vec<(String, String)> {
+    e.attributes()
+        .flatten()
+        .map(|attr| {
+            let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+            let value = attr.unescape_value().map(|v| v.into_owned()).unwrap_or_default();
+            (key, value)
+        })
+        .collect()
 }
 
 /// Resolve an `@ui_*` key against the localization table. Returns `None` for a
@@ -292,6 +295,9 @@ pub struct Rebind {
     pub actionmap: String,
     pub action: String,
     pub input: String,
+    /// The element's other attributes in file order (`activationMode`,
+    /// `multiTap`, …) — part of the binding, carried along by an apply.
+    pub attrs: Vec<(String, String)>,
 }
 
 /// The user's `actionmaps.xml`: the joystick instance→device map and every
@@ -329,11 +335,13 @@ pub fn parse_actionmaps(xml: &str) -> Result<ActionMapsFile, String> {
                 cur_action = attributes(&e).get("name").cloned().unwrap_or_default();
             }
             Event::Start(e) | Event::Empty(e) if e.name().as_ref() == b"rebind" => {
-                if let Some(input) = attributes(&e).get("input") {
+                let attrs = attribute_list(&e);
+                if let Some(input) = attrs.iter().find(|(k, _)| k == "input").map(|(_, v)| v.clone()) {
                     rebinds.push(Rebind {
                         actionmap: cur_map.clone(),
                         action: cur_action.clone(),
-                        input: input.clone(),
+                        input,
+                        attrs: attrs.into_iter().filter(|(k, _)| k != "input").collect(),
                     });
                 }
             }
