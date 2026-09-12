@@ -56,11 +56,26 @@ const JOYSTICK_DEADZONE: i16 = 4000;
 const PAD_THUMB_DEADZONE: i16 = 8000;
 const PAD_TRIGGER_DEADZONE: i16 = 4000;
 
-/// About three quarters of SDL's axis range: the point at which a gamepad
-/// trigger or thumb stick direction counts as a pressed button (SC's
-/// `triggerl_btn`, `thumbl_left`, …, which have no axis of their own). SC's
-/// own threshold is unknown; half travel felt too early (user, 2026-09-12).
-const DERIVED_BUTTON_THRESHOLD: i16 = 24000;
+/// Near full travel: the point past which a gamepad trigger or thumb stick
+/// direction counts as a pressed button (SC's `triggerl_btn`, `thumbl_left`,
+/// …, which have no axis of their own) — once it has stayed there for
+/// [`DERIVED_BUTTON_HOLD_MS`]. SC's own rule is unknown; half and three
+/// quarter travel both felt too early (user, 2026-09-12).
+const DERIVED_BUTTON_THRESHOLD: i16 = 30000;
+
+/// How long the axis must stay past the threshold before the button
+/// presses, so a stick swept through the corner on its way somewhere
+/// else does not press it.
+const DERIVED_BUTTON_HOLD_MS: u32 = 250;
+
+/// A derived button lets go only below this (hysteresis): a stick held right
+/// at the threshold would otherwise flutter between pressed and released.
+const DERIVED_BUTTON_RELEASE: i16 = 24000;
+
+/// How long the event loop waits for an event before it checks the derived
+/// buttons that are past the threshold but not yet pressed — a stick held
+/// still sends no event of its own.
+const LOOP_TICK_MS: u32 = 25;
 
 /// SDL index of the synthetic keyboard entry — far beyond any real device, so
 /// it never collides and always sorts last.
@@ -266,22 +281,49 @@ fn apply_deadzone(value: i16, deadzone: i16) -> i16 {
     }
 }
 
-/// The buttons SC derives from a pad axis, as `(name, pressed)` for the
-/// current axis value: triggers press past half travel, thumb sticks press in
-/// each direction. SDL's Y axis is negative upwards.
-fn derived_pad_buttons(axis: Axis, value: i16) -> Vec<(&'static str, bool)> {
+/// The buttons SC derives from a pad axis, as `(name, travel)`: the axis
+/// value as travel towards that button (positive = pressing it). Triggers
+/// have one, thumb sticks one per direction; SDL's Y axis is negative
+/// upwards.
+fn derived_pad_buttons(axis: Axis, value: i16) -> Vec<(&'static str, i32)> {
+    let towards = value as i32;
+    let away = -(value as i32);
     let (low, high) = match axis {
         Axis::LeftX => ("thumbl_left", "thumbl_right"),
         Axis::LeftY => ("thumbl_up", "thumbl_down"),
         Axis::RightX => ("thumbr_left", "thumbr_right"),
         Axis::RightY => ("thumbr_up", "thumbr_down"),
-        Axis::TriggerLeft => return vec![("triggerl_btn", value >= DERIVED_BUTTON_THRESHOLD)],
-        Axis::TriggerRight => return vec![("triggerr_btn", value >= DERIVED_BUTTON_THRESHOLD)],
+        Axis::TriggerLeft => return vec![("triggerl_btn", towards)],
+        Axis::TriggerRight => return vec![("triggerr_btn", towards)],
     };
-    vec![
-        (low, value <= -DERIVED_BUTTON_THRESHOLD),
-        (high, value >= DERIVED_BUTTON_THRESHOLD),
-    ]
+    vec![(low, away), (high, towards)]
+}
+
+/// What a derived button does at this travel, given whether it is pressed:
+/// a pressed one lets go below the release point, an unpressed one starts
+/// (or keeps) waiting past the threshold and stops waiting below it. The
+/// press itself happens once the wait is over, see [`derived_due`].
+#[derive(Debug, PartialEq)]
+enum DerivedStep {
+    Release,
+    Wait,
+    Idle,
+    Hold,
+}
+
+fn derived_step(travel: i32, pressed: bool) -> DerivedStep {
+    if pressed {
+        if travel > DERIVED_BUTTON_RELEASE as i32 { DerivedStep::Hold } else { DerivedStep::Release }
+    } else if travel >= DERIVED_BUTTON_THRESHOLD as i32 {
+        DerivedStep::Wait
+    } else {
+        DerivedStep::Idle
+    }
+}
+
+/// Whether a button waiting since `since` (SDL ticks) presses at `now`.
+fn derived_due(since: u32, now: u32) -> bool {
+    now.wrapping_sub(since) >= DERIVED_BUTTON_HOLD_MS
 }
 
 /// SC's `triggerl_r_btn` ("Left and Right Trigger", the Melee Block default):
@@ -575,10 +617,36 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
     // (instance_id, derived button) -> last emitted state, so a stick held
     // past the threshold reports one press, not one per axis event
     let mut derived: HashMap<(u32, &'static str), bool> = HashMap::new();
+    // (instance_id, derived button) -> SDL ticks since when the axis has been
+    // past the threshold without the button being pressed yet
+    let mut waiting: HashMap<(u32, &'static str), u32> = HashMap::new();
+    let timer = sdl.timer()?;
 
     reopen_all(&joystick, &controllers, &mut opened, &mut guids, &app, &devices)?;
 
-    for event in event_pump.wait_iter() {
+    loop {
+        // Derived buttons whose wait is over press now; a stick held still
+        // sends no event, so this runs on the tick as well as on events.
+        let now = timer.ticks();
+        let due: Vec<(u32, &'static str)> =
+            waiting.iter().filter(|(_, since)| derived_due(**since, now)).map(|(k, _)| *k).collect();
+        for key in due {
+            waiting.remove(&key);
+            derived.insert(key, true);
+            if let Some(guid) = guids.get(&key.0) {
+                let _ = app.emit(
+                    "joy-input",
+                    InputEvent::PadButton {
+                        guid: guid.clone(),
+                        name: key.1.to_string(),
+                        pressed: true,
+                        timestamp: now,
+                        instance_id: key.0,
+                    },
+                );
+            }
+        }
+        let Some(event) = event_pump.wait_event_timeout(LOOP_TICK_MS) else { continue };
         // A pad reports every input twice — raw and named. Only the named one
         // carries SC's vocabulary, so the raw copy is dropped (the
         // `!opened.pad_instances.contains(..)` guards below).
@@ -587,6 +655,7 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
                 last_axis.clear();
                 raw_axis.clear();
                 derived.clear();
+                waiting.clear();
                 reopen_all(&joystick, &controllers, &mut opened, &mut guids, &app, &devices)?;
             }
             Event::JoyButtonDown { timestamp, which, button_idx, .. } if !opened.pad_instances.contains(&which) => {
@@ -676,18 +745,30 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
                 let value = apply_deadzone(value, pad_axis_deadzone(axis));
                 // SC's trigger/thumb-direction "buttons" have no axis, so they
                 // are derived here and reported only when they change.
-                for (name, pressed) in derived_pad_buttons(axis, value) {
-                    if derived.insert((which, name), pressed) != Some(pressed) {
-                        let _ = app.emit(
-                            "joy-input",
-                            InputEvent::PadButton {
-                                guid: guid.clone(),
-                                name: name.to_string(),
-                                pressed,
-                                timestamp,
-                                instance_id: which,
-                            },
-                        );
+                for (name, travel) in derived_pad_buttons(axis, value) {
+                    let key = (which, name);
+                    let pressed = derived.get(&key).copied().unwrap_or(false);
+                    match derived_step(travel, pressed) {
+                        DerivedStep::Release => {
+                            derived.insert(key, false);
+                            let _ = app.emit(
+                                "joy-input",
+                                InputEvent::PadButton {
+                                    guid: guid.clone(),
+                                    name: name.to_string(),
+                                    pressed: false,
+                                    timestamp,
+                                    instance_id: which,
+                                },
+                            );
+                        }
+                        DerivedStep::Wait => {
+                            waiting.entry(key).or_insert(timestamp);
+                        }
+                        DerivedStep::Idle => {
+                            waiting.remove(&key);
+                        }
+                        DerivedStep::Hold => {}
                     }
                 }
                 // A trigger is only ever its derived button: SC labels the
@@ -859,30 +940,35 @@ mod tests {
 
     #[test]
     fn derives_trigger_and_thumb_buttons_from_axes() {
-        // Triggers rest at 0 and press past half travel.
-        assert_eq!(derived_pad_buttons(Axis::TriggerLeft, 0), vec![("triggerl_btn", false)]);
-        assert_eq!(derived_pad_buttons(Axis::TriggerLeft, 23999), vec![("triggerl_btn", false)]);
-        assert_eq!(derived_pad_buttons(Axis::TriggerLeft, 24000), vec![("triggerl_btn", true)]);
-        assert_eq!(derived_pad_buttons(Axis::TriggerRight, 32767), vec![("triggerr_btn", true)]);
+        // Triggers rest at 0 and press towards their travel.
+        assert_eq!(derived_pad_buttons(Axis::TriggerLeft, 0), vec![("triggerl_btn", 0)]);
+        assert_eq!(derived_pad_buttons(Axis::TriggerRight, 30000), vec![("triggerr_btn", 30000)]);
 
-        // A thumb stick reports both directions of its axis, never both at once.
-        assert_eq!(
-            derived_pad_buttons(Axis::LeftX, 0),
-            vec![("thumbl_left", false), ("thumbl_right", false)]
-        );
-        assert_eq!(
-            derived_pad_buttons(Axis::LeftX, -30000),
-            vec![("thumbl_left", true), ("thumbl_right", false)]
-        );
+        // A thumb stick reports both directions of its axis: travel towards
+        // one is travel away from the other.
+        assert_eq!(derived_pad_buttons(Axis::LeftX, -30000), vec![("thumbl_left", 30000), ("thumbl_right", -30000)]);
         // SDL's Y axis is negative upwards.
-        assert_eq!(
-            derived_pad_buttons(Axis::LeftY, -30000),
-            vec![("thumbl_up", true), ("thumbl_down", false)]
-        );
-        assert_eq!(
-            derived_pad_buttons(Axis::RightY, 30000),
-            vec![("thumbr_up", false), ("thumbr_down", true)]
-        );
+        assert_eq!(derived_pad_buttons(Axis::LeftY, -30000), vec![("thumbl_up", 30000), ("thumbl_down", -30000)]);
+        assert_eq!(derived_pad_buttons(Axis::RightY, 30000), vec![("thumbr_up", -30000), ("thumbr_down", 30000)]);
+    }
+
+    #[test]
+    fn derived_buttons_wait_past_the_threshold_and_let_go_below_the_release_point() {
+        // Unpressed: past the threshold the button waits, below it idles.
+        assert_eq!(derived_step(29999, false), DerivedStep::Idle);
+        assert_eq!(derived_step(30000, false), DerivedStep::Wait);
+        // Travel away from the button never presses it.
+        assert_eq!(derived_step(-32768, false), DerivedStep::Idle);
+        // Pressed: a wobble around the threshold keeps it, below the release
+        // point it lets go.
+        assert_eq!(derived_step(29000, true), DerivedStep::Hold);
+        assert_eq!(derived_step(24001, true), DerivedStep::Hold);
+        assert_eq!(derived_step(24000, true), DerivedStep::Release);
+        assert_eq!(derived_step(0, true), DerivedStep::Release);
+        // The wait is over after the hold time, wrapping ticks included.
+        assert!(!derived_due(1000, 1249));
+        assert!(derived_due(1000, 1250));
+        assert!(derived_due(u32::MAX - 10, 240));
     }
 
     #[test]

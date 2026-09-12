@@ -808,10 +808,11 @@ function applyResolution(p: JoyInput, key: string, res: InputResolution) {
 
 // The full SC token a press stands for when it is meant as a new binding:
 // `eventToken` plus the other held keys / pad buttons folded in as modifiers
-// (`kb1_lalt+x`), the way SC stores a combo.
+// (`kb1_lalt+x`, `gp1_shoulderl+thumblx` — SC has such axis combos among its
+// defaults), the way SC stores a combo.
 function rebindToken(p: JoyInput): string | null {
   const token = eventToken(p);
-  if (!token || (p.kind !== "key" && p.kind !== "padbutton")) return token;
+  if (!token || (p.kind !== "key" && p.kind !== "padbutton" && p.kind !== "padaxis")) return token;
   const others = (heldNames.get(p.guid) ?? []).filter((n) => n !== p.name);
   if (!others.length) return token;
   const prefix = p.kind === "key" ? "kb1" : "gp1";

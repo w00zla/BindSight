@@ -3,10 +3,10 @@
 import type { DeviceInfo, DeviceKind } from "./types";
 
 // Past this deflection an axis counts as pressed wherever an input is
-// recorded (rebind dialog, image-map editor): about three quarters of SDL's
-// range, the same point at which the backend derives a pad's trigger and
-// stick direction buttons (`DERIVED_BUTTON_THRESHOLD` in input.rs).
-export const AXIS_PRESS = 24000;
+// recorded (rebind dialog, image-map editor): near full travel, the same
+// point past which the backend derives a pad's trigger and stick direction
+// buttons (`DERIVED_BUTTON_THRESHOLD` in input.rs).
+export const AXIS_PRESS = 30000;
 
 // The name a device is shown under: pads carry SDL's controller name, the
 // rest SC's HID product string with SDL's name as the fallback.
