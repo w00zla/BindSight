@@ -1,6 +1,6 @@
 [package]
 name = "bindsight"
-version = "0.1.0"
+version = "0.9.0"
 description = "Star Citizen Joystick Binding Visualizer & Mapper"
 authors = ["w00zla"]
 license = "MIT"
