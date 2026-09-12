@@ -269,7 +269,7 @@ function endDragLeft() {
   leftStart = null;
   measureBox?.();
 }
-const RIGHT_W = { min: 300, max: 700, def: 380 };
+const RIGHT_W = { min: 300, max: 700, def: 400 };
 const rightWidth = persistedRef<number>("bindsight.devices.rightWidth", RIGHT_W.def);
 let rightStart: number | null = null;
 // Refitting the canvas re-lays out every shape; while the splitter moves
@@ -288,7 +288,7 @@ function endDragRight() {
 
 // One bucket per input (always grouped), the same table as the bindings.
 const COLUMNS: ColumnSpec[] = [
-  { key: "input", label: "INPUT", width: 190, icon: "bolt" },
+  { key: "input", label: "INPUT", width: 140, icon: "bolt" },
   { key: "shape", label: "SHAPE", width: null, icon: "shape" },
 ];
 const cols = useTableColumns("bindsight.columns.shapes", COLUMNS, { key: "input", dir: "asc" });

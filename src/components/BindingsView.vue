@@ -8,7 +8,7 @@ import ColumnHead from "./ColumnHead.vue";
 import Splitter from "./Splitter.vue";
 import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
 import ConfirmDialog, { type ConfirmButton, type ConfirmIcon } from "./ConfirmDialog.vue";
-import { KIND_RANK } from "../devices";
+import { KIND_RANK, kindIcon } from "../devices";
 import { persistedRef } from "../persist";
 import { recording } from "../keyboard";
 import { NAME_MAX, sanitizeName, stripNameChars } from "../names";
@@ -54,14 +54,14 @@ const emit = defineEmits<{
 // --- layout: the left column's width and the Binding Profiles panel's
 // height, both dragged at a splitter and remembered --------------------------
 
-const LEFT_W = { min: 280, max: 640, def: 360 };
+const LEFT_W = { min: 280, max: 640, def: 380 };
 const leftWidth = persistedRef<number>("bindsight.bindings.leftWidth", LEFT_W.def);
 let leftStart: number | null = null;
 function dragLeft(delta: number) {
   leftStart ??= leftWidth.value;
   leftWidth.value = Math.min(LEFT_W.max, Math.max(LEFT_W.min, Math.round(leftStart + delta)));
 }
-const PROFILES_H = { min: 120, max: 700, def: 220 };
+const PROFILES_H = { min: 120, max: 700, def: 260 };
 const profilesHeight = persistedRef<number>("bindsight.bindings.profilesHeight", PROFILES_H.def);
 let profilesStart: number | null = null;
 function dragProfiles(delta: number) {
@@ -122,8 +122,10 @@ function stamp(unixSecs: number): string {
 // --- compare sources -------------------------------------------------------
 
 // A source is addressed by a flat key: "current", "profile:<file>" or
-// "backup:<id>". Compare is always Current (A) against the source picked
-// on the left (B).
+// "backup:<id>". Compare always sets the source picked on the left against
+// Current, seen from Current: the backend's A is the source, its B is
+// Current, so "added" means the source adds it, "removed" that Current has
+// it and the source does not.
 const CURRENT = "current";
 const PROFILE_PREFIX = "profile:";
 const BACKUP_PREFIX = "backup:";
@@ -196,8 +198,8 @@ async function runCompare() {
   }
   try {
     report.value = await invoke<DiffReport>("compare_bindings", {
-      a: { kind: "current" },
-      b: sourceFor(bKey.value),
+      a: sourceFor(bKey.value),
+      b: { kind: "current" },
     });
   } catch (e) {
     report.value = null;
@@ -414,11 +416,17 @@ async function deleteBackup(b: BackupSummary) {
 // The kind chips live per device (`js1` -> ["changed"]).
 const kindFilter = persistedRef<Record<string, DiffKind[]>>("bindsight.compare.kindsByDevice", {});
 const deviceFilter = persistedRef<string[]>("bindsight.compare.devices", []);
-// Rows grouped under one collapsible head per device, or flat.
-const grouped = persistedRef<boolean>("bindsight.compare.grouped", false);
+// Rows grouped under one collapsible head per input (device + input, like
+// the Monitor's deck), the actions inside — or flat. Grouped and open by
+// default.
+const grouped = persistedRef<boolean>("bindsight.compare.grouped", true);
 
+// The kinds toggled on for a device that this compare actually has rows
+// for — a remembered toggle on a kind with no rows (its chip is disabled)
+// must not filter, or nothing would show.
 function kindsOf(device: string): DiffKind[] {
-  return kindFilter.value[device] ?? [];
+  const counts = deviceChips.value.find((d) => d.label === device)?.counts;
+  return (kindFilter.value[device] ?? []).filter((k) => !!counts?.[k]);
 }
 
 function toggleKind(device: string, kind: DiffKind) {
@@ -427,8 +435,8 @@ function toggleKind(device: string, kind: DiffKind) {
 
 const search = ref("");
 
-// Written out, relative to Current: bound here only / bound to other
-// actions / bound in the source only. Unchanged rows are not listed.
+// Written out, seen from Current: the source adds it / binds it to other
+// actions / lacks it. Unchanged rows are not listed.
 const KIND_CHIPS: { kind: DiffKind; label: string }[] = [
   { kind: "added", label: "Added" },
   { kind: "changed", label: "Modified" },
@@ -455,29 +463,37 @@ const diffRows = computed<DiffRow[]>(() => (report.value?.rows ?? []).filter((r)
 // differing rows counted per kind.
 interface DeviceGroup {
   label: string;
+  kind: DeviceKind;
   counts: Record<DiffKind, number>;
 }
 const deviceChips = computed<DeviceGroup[]>(() => {
-  const by = new Map<string, { rank: number; counts: Record<DiffKind, number> }>();
+  const by = new Map<string, { rank: number; kind: DeviceKind; counts: Record<DiffKind, number> }>();
   for (const r of report.value?.rows ?? []) {
     const label = deviceLabel(r);
-    const hit = by.get(label) ?? { rank: deviceRank(r), counts: { added: 0, removed: 0, changed: 0, same: 0 } };
+    const hit = by.get(label) ?? { rank: deviceRank(r), kind: r.device_kind, counts: { added: 0, removed: 0, changed: 0, same: 0 } };
     hit.counts[r.kind] += 1;
     by.set(label, hit);
   }
-  return [...by.entries()].sort((a, b) => a[1].rank - b[1].rank).map(([label, d]) => ({ label, counts: d.counts }));
+  return [...by.entries()].sort((a, b) => a[1].rank - b[1].rank).map(([label, d]) => ({ label, kind: d.kind, counts: d.counts }));
+});
+
+// What the compare found, for the source tile: "3 added · 1 modified · 2 deleted".
+const diffSummary = computed(() => {
+  const r = report.value;
+  if (!r) return "";
+  return [`${r.added} added`, `${r.changed} modified`, `${r.removed} deleted`].join(" · ");
 });
 
 // Bindings of the picked source, total and per device, like the Game
-// Bindings tile's summary — from the report's B side.
+// Bindings tile's summary — from the report's A side (the source).
 const sourceCountSummary = computed(() => {
   const counts = new Map<string, number>();
   let total = 0;
   for (const r of report.value?.rows ?? []) {
-    if (!r.b.length) continue;
+    if (!r.a.length) continue;
     const label = deviceLabel(r);
-    counts.set(label, (counts.get(label) ?? 0) + r.b.length);
-    total += r.b.length;
+    counts.set(label, (counts.get(label) ?? 0) + r.a.length);
+    total += r.a.length;
   }
   const perDevice = deviceChips.value.filter((d) => counts.has(d.label)).map((d) => `${counts.get(d.label)} ${d.label}`);
   return [`${total} total`, ...perDevice].join(" · ");
@@ -488,18 +504,42 @@ function refText(r: ActionRef): string {
 }
 
 // Haystack for the search box: token plus every action name and label.
+// The game's category of an actionmap (its label, else its name).
+const categoryOf = computed(() => {
+  const m = new Map<string, string>();
+  for (const am of props.actionMaps) m.set(am.name, am.label ?? am.name);
+  return m;
+});
+
+function categoryLabel(actionmap: string): string {
+  return categoryOf.value.get(actionmap) ?? actionmap;
+}
+
+// The category a row is about: the A side's first action, else the B side's.
+function rowCategory(row: DiffRow): string {
+  const r = row.a[0] ?? row.b[0];
+  return r ? categoryLabel(r.actionmap) : "—";
+}
+
 function haystack(row: DiffRow): string {
   const refs = [...row.a, ...row.b];
-  return [row.token, inputText(row.token), ...refs.map((r) => r.action), ...refs.map((r) => r.label ?? "")]
+  return [
+    row.token,
+    inputText(row.token),
+    ...refs.map((r) => r.action),
+    ...refs.map((r) => r.label ?? ""),
+    ...refs.map((r) => categoryLabel(r.actionmap)),
+  ]
     .join(" ")
     .toLowerCase();
 }
 
 const COLUMNS: ColumnSpec[] = [
   { key: "sign", label: "", width: 28 },
-  { key: "input", label: "INPUT", width: 200, icon: "bolt" },
+  { key: "input", label: "INPUT", width: 220, icon: "bolt" },
   { key: "action", label: "ACTION", width: 300, icon: "target" },
-  { key: "a", label: "A", width: 260, icon: "file" },
+  { key: "category", label: "CATEGORY", width: 200, icon: "list" },
+  { key: "a", label: "A", width: 300, icon: "file" },
   { key: "b", label: "B", width: null, icon: "file" },
 ];
 const cols = useTableColumns("bindsight.columns.compare", COLUMNS, { key: "action", dir: "asc" });
@@ -517,10 +557,13 @@ function cellValue(r: DiffRow, key: string): string | number {
       return `${String(deviceRank(r)).padStart(4, "0")} ${inputText(r.token)}`;
     case "action":
       return rowAction(r);
+    case "category":
+      return rowCategory(r);
+    // Column "a" is CURRENT = the report's B side; column "b" the source = A.
     case "a":
-      return cellLines(r.a).join(", ");
-    default:
       return cellLines(r.b).join(", ");
+    default:
+      return cellLines(r.a).join(", ");
   }
 }
 
@@ -536,41 +579,45 @@ const filteredRows = computed<DiffRow[]>(() => {
   return sortRows(rows, cols.sort.value, cellValue, (a, b) => collator.compare(a.token, b.token));
 });
 
-// Grouped view: one bucket per device, in tile order, collapsed at start;
-// a search forces them open.
-interface DiffGroup {
+// Grouped view: one bucket per row (= per input), the actions of both
+// sides inside — each action once, with a tick in the side that binds it.
+interface DiffLine {
+  key: string;
   label: string;
-  rows: DiffRow[];
+  category: string;
+  inA: boolean;
+  inB: boolean;
 }
-const diffGroups = computed<DiffGroup[]>(() => {
-  const by = new Map<string, DiffGroup>();
-  for (const r of filteredRows.value) {
-    const label = deviceLabel(r);
-    let g = by.get(label);
-    if (!g) {
-      g = { label, rows: [] };
-      by.set(label, g);
-    }
-    g.rows.push(r);
-  }
-  const rank = new Map(deviceChips.value.map((d, i) => [d.label, i]));
-  return [...by.values()].sort((a, b) => (rank.get(a.label) ?? 99) - (rank.get(b.label) ?? 99));
-});
-const openGroups = ref(new Set<string>());
-function isGroupOpen(g: DiffGroup): boolean {
-  return !!search.value.trim() || openGroups.value.has(g.label);
+function diffLines(r: DiffRow): DiffLine[] {
+  const by = new Map<string, DiffLine>();
+  const add = (ref: ActionRef, side: "a" | "b") => {
+    const key = `${ref.actionmap}/${ref.action}`;
+    const line = by.get(key) ?? { key, label: refText(ref), category: categoryLabel(ref.actionmap), inA: false, inB: false };
+    if (side === "a") line.inA = true;
+    else line.inB = true;
+    by.set(key, line);
+  };
+  for (const ref of r.a) add(ref, "a");
+  for (const ref of r.b) add(ref, "b");
+  return [...by.values()];
 }
-function toggleDiffGroup(label: string) {
-  const s = new Set(openGroups.value);
-  if (!s.delete(label)) s.add(label);
-  openGroups.value = s;
+// Buckets start open; the closed ones are remembered per token, a search
+// forces everything open.
+const closedGroups = ref(new Set<string>());
+function isGroupOpen(r: DiffRow): boolean {
+  return !!search.value.trim() || !closedGroups.value.has(r.token);
 }
-const allGroupsOpen = computed(() => diffGroups.value.length > 0 && diffGroups.value.every((g) => openGroups.value.has(g.label)));
+function toggleDiffGroup(token: string) {
+  const s = new Set(closedGroups.value);
+  if (!s.delete(token)) s.add(token);
+  closedGroups.value = s;
+}
+const allGroupsOpen = computed(() => filteredRows.value.every((r) => !closedGroups.value.has(r.token)));
 function openAllGroups() {
-  openGroups.value = new Set(diffGroups.value.map((g) => g.label));
+  closedGroups.value = new Set();
 }
 function closeAllGroups() {
-  openGroups.value = new Set();
+  closedGroups.value = new Set(filteredRows.value.map((r) => r.token));
 }
 
 // The action a row is about: the A side names it, else the B side.
@@ -1254,6 +1301,8 @@ async function compareWith(key: string) {
       </div>
       <div class="tile-btns">
         <span class="mono tile-facts">{{ sourceCountSummary }}</span>
+        <div class="tile-divider" />
+        <span class="mono tile-facts tile-diff">{{ diffSummary }}</span>
         <div class="spacer" />
         <button type="button" class="btn primary small" :disabled="busy || !hasCurrent" @click="openApply">
           <Icon name="check" :size="14" />
@@ -1302,6 +1351,7 @@ async function compareWith(key: string) {
             :title="c.label"
             @click="toggleCol(c.key)"
           >
+            <Icon :name="kindIcon(c.kind)" :size="14" />
             {{ c.key }}
           </button>
         </div>
@@ -1367,7 +1417,7 @@ async function compareWith(key: string) {
           type="button"
           class="btn small square"
           :class="grouped ? 'primary' : 'outline'"
-          title="Group by device"
+          title="Group by input"
           @click="grouped = !grouped"
         >
           <Icon name="group" :size="14" />
@@ -1375,13 +1425,22 @@ async function compareWith(key: string) {
         <button type="button" class="btn outline small square" title="Expand all" :disabled="!grouped || allGroupsOpen" @click="openAllGroups">
           <Icon name="unfold" :size="14" />
         </button>
-        <button type="button" class="btn outline small square" title="Collapse all" :disabled="!grouped || !openGroups.size" @click="closeAllGroups">
+        <button type="button" class="btn outline small square" title="Collapse all" :disabled="!grouped || !closedGroups.size" @click="closeAllGroups">
           <Icon name="fold" :size="14" />
         </button>
         <div class="spacer" />
-        <!-- one group of chips per device: the device, then its diffs by kind -->
-        <template v-for="d in deviceChips" :key="d.label">
-          <div class="divider" />
+        <div class="search">
+          <Icon name="search" :size="14" />
+          <input v-model="search" placeholder="Find…" />
+          <button v-if="search" type="button" class="clear" title="Clear" @click="search = ''">
+            <Icon name="close" :size="12" />
+          </button>
+        </div>
+      </div>
+      <!-- one group of chips per device: the device, then its diffs by kind -->
+      <div v-if="deviceChips.length" class="filters">
+        <template v-for="(d, i) in deviceChips" :key="d.label">
+          <div v-if="i > 0" class="divider" />
           <div class="chips">
             <button
               type="button"
@@ -1389,6 +1448,7 @@ async function compareWith(key: string) {
               :class="{ active: deviceFilter.includes(d.label) }"
               @click="deviceFilter = toggleIn(deviceFilter, d.label)"
             >
+              <Icon :name="kindIcon(d.kind)" :size="14" />
               {{ d.label }}
             </button>
             <button
@@ -1404,14 +1464,6 @@ async function compareWith(key: string) {
             </button>
           </div>
         </template>
-        <div class="divider" />
-        <div class="search">
-          <Icon name="search" :size="14" />
-          <input v-model="search" placeholder="Find…" />
-          <button v-if="search" type="button" class="clear" title="Clear" @click="search = ''">
-            <Icon name="close" :size="12" />
-          </button>
-        </div>
       </div>
 
       <div class="table">
@@ -1423,26 +1475,27 @@ async function compareWith(key: string) {
           @reset="cols.resetWidth"
         />
         <template v-if="grouped">
-          <template v-for="g in diffGroups" :key="g.label">
-            <div class="group-row" @click="toggleDiffGroup(g.label)">
-              <Icon :name="isGroupOpen(g) ? 'chevron-down' : 'chevron-right'" :size="14" />
-              <span class="group-label mono">{{ g.label }}</span>
-              <span class="head-count">{{ g.rows.length }}</span>
+          <template v-for="r in filteredRows" :key="r.token">
+            <div class="row diff-row bucket-row" :class="r.kind" @click="toggleDiffGroup(r.token)">
+              <span class="sign">{{ SIGNS[r.kind] }}</span>
+              <span class="input-cell" :title="r.token">
+                <Icon :name="isGroupOpen(r) ? 'chevron-down' : 'chevron-right'" :size="14" class="chevron" />
+                <span class="mono dim">{{ deviceLabel(r) }}</span>
+                <span class="bucket-input" :class="{ mono: inputText(r.token) === inputPart(r.token) }">{{ inputText(r.token) }}</span>
+              </span>
+              <span />
+              <span />
+              <span />
+              <span />
             </div>
-            <template v-if="isGroupOpen(g)">
-              <div v-for="r in g.rows" :key="r.token" class="row diff-row" :class="r.kind">
-                <span class="sign">{{ SIGNS[r.kind] }}</span>
-                <span class="input-cell dim" :title="r.token">
-                  <span class="mono">{{ deviceLabel(r) }}</span>
-                  <span :class="{ mono: inputText(r.token) === inputPart(r.token) }">{{ inputText(r.token) }}</span>
-                </span>
-                <span>{{ rowAction(r) }}</span>
-                <span v-for="side in (['a', 'b'] as const)" :key="side" class="refs" :class="r[side].length ? 'side' : 'empty'">
-                  <template v-if="r[side].length">
-                    <span v-for="(line, i) in cellLines(r[side])" :key="i" class="ref-line">{{ line }}</span>
-                  </template>
-                  <template v-else>—</template>
-                </span>
+            <template v-if="isGroupOpen(r)">
+              <div v-for="line in diffLines(r)" :key="line.key" class="row diff-row line-row" :class="r.kind">
+                <span />
+                <span />
+                <span class="bucket-action">{{ line.label }}</span>
+                <span class="bucket-category">{{ line.category }}</span>
+                <span :class="line.inB ? 'side' : 'empty'">{{ line.inB ? line.label : "—" }}</span>
+                <span :class="line.inA ? 'side' : 'empty'">{{ line.inA ? line.label : "—" }}</span>
               </div>
             </template>
           </template>
@@ -1455,7 +1508,8 @@ async function compareWith(key: string) {
               <span :class="{ mono: inputText(r.token) === inputPart(r.token) }">{{ inputText(r.token) }}</span>
             </span>
             <span>{{ rowAction(r) }}</span>
-            <span v-for="side in (['a', 'b'] as const)" :key="side" class="refs" :class="r[side].length ? 'side' : 'empty'">
+            <span class="bucket-category">{{ rowCategory(r) }}</span>
+            <span v-for="side in (['b', 'a'] as const)" :key="side" class="refs" :class="r[side].length ? 'side' : 'empty'">
               <template v-if="r[side].length">
                 <span v-for="(line, i) in cellLines(r[side])" :key="i" class="ref-line">{{ line }}</span>
               </template>
@@ -1711,6 +1765,10 @@ async function compareWith(key: string) {
   background: var(--border-dim);
 }
 
+.tile-diff {
+  color: var(--text);
+}
+
 .btn.danger {
   background: transparent;
   color: var(--err);
@@ -1929,6 +1987,16 @@ async function compareWith(key: string) {
   gap: 4px;
 }
 
+/* The per-device diff chips, a row of their own under the Compare head. */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 16px;
+  border-bottom: 1px solid var(--border-dim);
+}
+
 .chip {
   height: var(--h-chip-sm);
   display: flex;
@@ -1950,19 +2018,53 @@ async function compareWith(key: string) {
   font-weight: 400;
 }
 
+/* The kind chips stay quiet: regular weight, the colour muted; only the
+   count is bold. */
+.chip.added,
+.chip.removed,
+.chip.changed {
+  font-weight: 400;
+}
+
+.chip.added .count,
+.chip.removed .count,
+.chip.changed .count {
+  font-weight: 600;
+  color: inherit;
+}
+
 .chip.added {
-  color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 50%, transparent);
+  color: color-mix(in srgb, var(--ok) 70%, var(--text-2));
+  border-color: color-mix(in srgb, var(--ok) 30%, transparent);
 }
 
 .chip.removed {
-  color: var(--err);
-  border-color: color-mix(in srgb, var(--err) 50%, transparent);
+  color: color-mix(in srgb, var(--err) 70%, var(--text-2));
+  border-color: color-mix(in srgb, var(--err) 30%, transparent);
 }
 
 .chip.changed {
-  color: var(--warn);
-  border-color: color-mix(in srgb, var(--warn) 50%, transparent);
+  color: color-mix(in srgb, var(--warn) 70%, var(--text-2));
+  border-color: color-mix(in srgb, var(--warn) 30%, transparent);
+}
+
+/* Toggled on: the kind's own colour, full, on a light tint — not the accent. */
+.chip.added.active {
+  color: color-mix(in srgb, var(--ok) 85%, var(--text-2));
+  border-color: color-mix(in srgb, var(--ok) 60%, transparent);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+
+.chip.removed.active {
+  color: color-mix(in srgb, var(--err) 85%, var(--text-2));
+  border-color: color-mix(in srgb, var(--err) 60%, transparent);
+  background: color-mix(in srgb, var(--err) 12%, transparent);
+}
+
+.chip.changed.active {
+  color: color-mix(in srgb, var(--warn) 85%, var(--text-2));
+  border-color: color-mix(in srgb, var(--warn) 60%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
 
 .chip:disabled {
@@ -2089,6 +2191,44 @@ async function compareWith(key: string) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Grouped view: the bucket head is the token's row, its actions hang below
+   it without the tint, tied to the head by a thin tree line under the chevron. */
+.bucket-row {
+  cursor: pointer;
+  user-select: none;
+  align-items: center;
+  border-top: 1px solid var(--border-dim);
+}
+
+.bucket-row .chevron {
+  flex-shrink: 0;
+}
+
+.bucket-row .bucket-input {
+  font-weight: 600;
+}
+
+.line-row {
+  position: relative;
+  background: transparent;
+  align-items: center;
+}
+
+.line-row::before {
+  content: "";
+  position: absolute;
+  left: 50px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-dim);
+}
+
+.bucket-action,
+.bucket-category {
+  color: var(--text-2);
 }
 
 

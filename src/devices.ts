@@ -11,8 +11,12 @@ export function deviceName(d: DeviceInfo): string {
 
 // The icon for a device's kind (Icon names); the Devices icon is a joystick.
 export function deviceIcon(d: DeviceInfo): "keyboard" | "gamepad" | "devices" {
-  if (d.kind === "keyboard") return "keyboard";
-  return d.kind === "gamepad" ? "gamepad" : "devices";
+  return kindIcon(d.kind);
+}
+
+export function kindIcon(kind: DeviceKind): "keyboard" | "gamepad" | "devices" {
+  if (kind === "keyboard") return "keyboard";
+  return kind === "gamepad" ? "gamepad" : "devices";
 }
 
 // Device-kind order of the filter chips and the DEVICE column, matching the

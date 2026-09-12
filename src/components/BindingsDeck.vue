@@ -4,7 +4,7 @@ import Icon from "./Icon.vue";
 import ColumnHead from "./ColumnHead.vue";
 import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
 import type { ResolvedBinding } from "../types";
-import { KIND_RANK } from "../devices";
+import { KIND_RANK, kindIcon } from "../devices";
 import { persistedRef } from "../persist";
 
 const props = defineProps<{
@@ -87,15 +87,14 @@ function deviceRank(b: ResolvedBinding): number {
 }
 
 // Distinct devices present in the bindings, in SC's order, with counts.
-const deviceCounts = computed(() => {
-  const counts = new Map<string, { rank: number; count: number }>();
+// Distinct devices with bindings, in tile order, each with its kind's icon.
+const deviceChips = computed(() => {
+  const by = new Map<string, { rank: number; kind: ResolvedBinding["device_kind"] }>();
   for (const b of props.bindings) {
     const label = props.deviceLabel(b);
-    const hit = counts.get(label);
-    if (hit) hit.count += 1;
-    else counts.set(label, { rank: deviceRank(b), count: 1 });
+    if (!by.has(label)) by.set(label, { rank: deviceRank(b), kind: b.device_kind });
   }
-  return [...counts.entries()].sort((a, b) => a[1].rank - b[1].rank);
+  return [...by.entries()].sort((a, b) => a[1].rank - b[1].rank).map(([label, d]) => ({ label, kind: d.kind }));
 });
 
 function matchesSearch(b: ResolvedBinding, q: string): boolean {
@@ -186,14 +185,15 @@ function deviceTitle(b: ResolvedBinding): string | undefined {
       <div class="spacer" />
       <div class="chips">
         <button
-          v-for="[label, d] in deviceCounts"
-          :key="label"
+          v-for="d in deviceChips"
+          :key="d.label"
           type="button"
           class="chip mono"
-          :class="{ active: deviceFilter.includes(label) }"
-          @click="toggleDevice(label)"
+          :class="{ active: deviceFilter.includes(d.label) }"
+          @click="toggleDevice(d.label)"
         >
-          {{ label }} <span class="count">{{ d.count }}</span>
+          <Icon :name="kindIcon(d.kind)" :size="14" />
+          {{ d.label }}
         </button>
       </div>
       <div class="divider" />
