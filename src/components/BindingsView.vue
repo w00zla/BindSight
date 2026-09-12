@@ -861,9 +861,10 @@ function parseToken(token: string): { kind: DeviceKind; instance: number } | nul
   return { kind, instance: Number(m[2]) };
 }
 
-// SC's "deliberately unbound" rebind for a kind: a blank token on instance 1.
-function blankToken(kind: DeviceKind): string {
-  return `${kind === "keyboard" ? "kb" : kind === "gamepad" ? "gp" : "js"}1_ `;
+// SC's "deliberately unbound" rebind: a blank token naming the device the
+// binding was on (`js2_ `).
+function blankToken(kind: DeviceKind, instance: number): string {
+  return `${kind === "keyboard" ? "kb" : kind === "gamepad" ? "gp" : "js"}${instance}_ `;
 }
 
 function isBlank(token: string): boolean {
@@ -1003,9 +1004,12 @@ const rebindButtons = computed<ConfirmButton[]>(() => [
   { label: "Cancel", kind: "outline", value: "cancel" },
 ]);
 
-// Clear one kind: no binding on any of its devices.
+// Clear one kind: no binding on any of its devices. The blank goes on the
+// device that shows the binding (a joystick default sits on js1).
 function clearKind(kind: DeviceKind) {
-  rebind.value?.changes.set(kind, blankToken(kind));
+  const shown = rebindBefore.value.find((l) => l.kind === kind);
+  const instance = Number(/^js(\d+)$/.exec(shown?.device ?? "")?.[1] ?? 1);
+  rebind.value?.changes.set(kind, blankToken(kind, instance));
 }
 
 // Clear every kind that still has a binding on show.
