@@ -109,7 +109,9 @@ presentational components:
   each may be `disabled` or parked `side: "left"` — optional body slot,
   `captureKeys` keeps the keyboard capture on; behind every
   unsaved-changes / delete / game-file-write question, the Fix via config /
-  Fix via console dialogs and the rebind dialog), `Toasts`, `Icon` (inline
+  Fix via console dialogs and the rebind dialog), `Toasts` (`ok` / `error`
+  / `hint` — a hint looks like an error but is guidance, logged as info;
+  every error toast goes to the app log), `Icon` (inline
   stroke SVGs by name — never emoji), `WindowEdges`.
 - Shared modules: `imagemap.ts` (image-map types/helpers incl. token <->
   input key), `keyboard.ts` (webview keyboard capture, `KeyboardEvent.code`
@@ -139,10 +141,20 @@ presentational components:
   `gamepad`, or `keyboard`), `sc_name` (hidapi) + `sdl_name` (debug), `axes`
   / `axes_error`. A gamepad is what SDL's GameController API recognises; its
   raw `Joy*` events are dropped in favour of `padbutton` / `padaxis` with
-  SC's names (`a`, `shoulderl`, `thumblx`, … plus the derived `triggerl_btn`
-  / `thumbl_left` … at 50 %). Only the first pad (SDL index order) holds the
-  slot `gp1`, further pads get `gamepad_slot: None`. The keyboard is one
-  synthetic entry appended last (`sdl_guid` `keyboard`).
+  SC's names (`a`, `shoulderl`, `thumblx`, …). Only the first pad (SDL
+  index order) holds the slot `gp1`, further pads get `gamepad_slot: None`.
+  The keyboard is one synthetic entry appended last (`sdl_guid` `keyboard`).
+  **Axis rules, all here so every consumer sees one stream**: a fixed
+  resting zone per axis (joysticks 4000, pad sticks 8000, pad triggers
+  4000; the game's `<deviceoptions>` deadzones are a 1.0 goal), a delta
+  filter plus at most one event per axis per 20 ms (the centre always
+  passes), and of a stick's two axes (pad sticks, joystick `x`/`y`) only
+  the further deflected one is forwarded. **Derived pad buttons**
+  (`triggerl_btn`, `thumbl_left` …, `triggerl_r_btn` = both triggers) press
+  once the axis stayed past 30000 for 250 ms and release below 24000; the
+  loop ticks every 25 ms for that. **A trigger is only ever its derived
+  button**: SC labels the axis token like the button and ships no default
+  on it, so the trigger axis is never emitted.
 - `guid.rs` — SDL joystick GUID -> SC `options/@Product` GUID (byte-swap
   vendor/product); `sdl_guid_vendor_product`.
 - `hid.rs` — HID report descriptor -> SC axis name per SDL axis index
@@ -171,11 +183,16 @@ presentational components:
   `scdata-changed`.
 - `bindings.rs` — `BindingIndex` (token -> bound actions, all device kinds,
   defaults per kind with a per-kind "touched" rule), `button_token` /
-  `hat_token` (+1 offset), `instance_for_guid`, `resolve_bindings`,
+  `hat_token` (+1 offset), `instance_for_guid` (the saved `<options>` slot,
+  used by the clash analysis and the Bindings List only), `resolve_bindings`,
   `analyze_clash` (saved `<options>` vs. `Game.log` order — the only order
-  source), `plan_resort` / `resort_commands`.
+  source), `plan_resort` / `resort_commands`, `without_excluded` (by
+  hardware id).
 - `gamelog.rs` — parse `Connected joystickN: <Product {GUID}>` and
-  `Connected xinputN: <name>` (the latter only says SC saw a gamepad).
+  `Connected xinputN: <name>` (the latter only says SC saw a gamepad);
+  `instance_for_guid` = the rank the game gave a device, which is what the
+  Monitor resolves against (`resolve_input`): without a usable log no
+  joystick input resolves, keyboard and pad still do.
 - `xmltext.rs` — helpers for the textual editors: `mask_markup` (a copy of
   the text with comments, CDATA and processing instructions blanked, same
   byte offsets — every search runs on the mask, every edit on the
@@ -205,8 +222,11 @@ presentational components:
 - `config.rs` — JSON in the app config dir: the SC environments
   (`ENVIRONMENTS` = LIVE / HOTFIX / PTU / EPTU, each a base path + optional
   `global.ini` override; Windows default paths), the active one
-  (`Config::base_path()` / `global_ini_override()`), the ignore list, the
-  image-map choice per device, the auto-backup and debug-logging switches.
+  (`Config::base_path()` / `global_ini_override()`), the exclusion list
+  (`excluded_devices`, hardware ids: a joystick's SC Product GUID,
+  `keyboard`, `gamepad` — any device may go, the user may just not care
+  about it; on the wire still `ignored_devices`), the image-map choice per
+  device, the auto-backup and debug-logging switches.
   `load` fills missing environments with defaults; no migration of older
   shapes.
 - `imagemap.rs` — one folder per image-map (`imagemap.json` + image) under
@@ -246,9 +266,11 @@ presentational components:
   `localectl` / `vconsole.conf` on Linux, `GetKeyboardLayoutNameW` on Windows.
 - `lib.rs` — Tauri commands, state wiring (`AppData`: config, game data +
   load status, the bindings file + its load error, binding index, Game.log
-  snapshot; `get_load_status` hands the last load outcome to a frontend
-  that mounts after the first load already finished), thread spawns, the
-  Wayland DMABUF workaround, logging setup.
+  snapshot, the last logged clash summary; `get_load_status` hands the last
+  load outcome to a frontend that mounts after the first load already
+  finished), `system_info` (app version, OS, toolkit versions for the
+  Device Info dumps), thread spawns, the Wayland DMABUF workaround, logging
+  setup.
 
 ## Logging
 
@@ -261,7 +283,10 @@ webview console, uncaught errors and unhandled rejections are forwarded by
 `src/logging.ts` via the plugin's `log` command with the plain `webview`
 target (the JS package would tag a source location the level filter cannot
 match); the plugin's `log` command bypasses the level cap, so `logging.ts`
-drops webview debug records itself (`setDebugLogging`).
+drops webview debug records itself (`setDebugLogging`). `main.ts` sets
+`app.config.errorHandler` so a component error names its component. Every
+error toast (`notify`) and every failed startup / refresh step logs; a
+silent `catch` is a bug.
 
 Severities: ERROR = a feature is broken (config not saved, SC data failed,
 input thread died, panic); WARN = degraded but running (bindings not loaded,
@@ -366,7 +391,15 @@ The game data cache lives per version under `~/.cache/com.w00zla.bindsight/
 - **Device identity is GUID, never name**: SDL's name (evdev) differs from
   SC's (HID product string).
 - **SDL order is not SC order** (Windows: reversed, Linux: unrelated). `jsN`
-  comes from `Game.log` only; never derive it from SDL's enumeration.
+  comes from `Game.log` only; never derive it from SDL's enumeration, and
+  never from the saved `<options>` slot either — that is what the file
+  says, the log is what the game does. The Monitor, the deck and the
+  Bindings List's column names follow the log; without one the joysticks
+  show "no joystick order" and resolve nothing.
+- **Joystick modifiers do not exist in SC** (no `modifier+jsN_` token in
+  the data or a real file); keyboard and gamepad combos do (`kb1_lalt+x`,
+  `gp1_shoulderl+thumbl_left`, `gp1_shoulderl+thumblx`), always with a real
+  button as the modifier — derived pad buttons are never modifiers.
 - **+1 button offset**: SC `js_button1` == SDL button 0 (verified under Wine).
 - **Windows RawInput pads need `SDL_JOYSTICK_THREAD=1`** (`input::init_sdl`):
   SDL's RawInput driver (e.g. an Xbox pad over Bluetooth, SDL GUID ending
