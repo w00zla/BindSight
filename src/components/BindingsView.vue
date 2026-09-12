@@ -19,6 +19,7 @@ import type {
   BackupSummary,
   BindingProfileSummary,
   BoundAction,
+  ClashReport,
   DeviceKind,
   DeviceSel,
   DiffKind,
@@ -39,6 +40,8 @@ import type {
 const props = defineProps<{
   bindings: ResolvedBinding[];
   actionMaps: ActionMap[];
+  // The device-order report: names the joystick the game ranks at each jsN.
+  clash: ClashReport | null;
   hasCurrent: boolean;
   keyInput: JoyInput | null;
   // SC's label for an input token; echoes the token when there is none.
@@ -709,26 +712,47 @@ async function loadInfo() {
 }
 
 // One column per device the file knows: the keyboard and the gamepad (SC
-// has exactly one of each), then every joystick slot named in <options>.
+// has exactly one of each), then every joystick slot named in <options> or
+// carrying a binding (the shipped defaults sit on js1 whether or not the
+// file names a device there). A joystick column is named after the device
+// the game ranks at that jsN (its own order), never after the saved
+// <options> entry, which may be stale; a device saved under another slot
+// (the order clash) or not at all says so, as does a missing order.
 interface DeviceCol {
   key: string;
   kind: DeviceKind;
   instance: number;
   label: string;
+  // The order problem with this slot, shown in the warn colour.
+  note?: string;
 }
 
-const deviceCols = computed<DeviceCol[]>(() => [
-  { key: "kb1", kind: "keyboard", instance: 1, label: "kb1 · Keyboard/Mouse" },
-  { key: "gp1", kind: "gamepad", instance: 1, label: "gp1 · Gamepad" },
-  ...[...(info.value?.joysticks ?? [])]
-    .sort((a, b) => a.instance - b.instance)
-    .map((j) => ({
-      key: `js${j.instance}`,
-      kind: "joystick" as DeviceKind,
-      instance: j.instance,
-      label: `js${j.instance} · ${j.product_name}`,
-    })),
-]);
+const deviceCols = computed<DeviceCol[]>(() => {
+  const ranked = new Map((props.clash?.connected ?? []).map((s) => [s.effective_instance, s]));
+  const instances = new Set((info.value?.joysticks ?? []).map((j) => j.instance));
+  for (const b of props.bindings) {
+    if (b.device_kind === "joystick") instances.add(b.instance);
+  }
+  const joystick = (n: number): DeviceCol => {
+    const slot = ranked.get(n);
+    const col: DeviceCol = { key: `js${n}`, kind: "joystick", instance: n, label: `js${n}` };
+    if (props.clash?.log_error) {
+      col.label += " ·";
+      col.note = "no joystick order";
+    }
+    else if (slot) {
+      col.label += ` · ${slot.name ?? "?"}`;
+      if (slot.stored_instance === null) col.note = "(not saved)";
+      else if (slot.stored_instance !== n) col.note = `(saved js${slot.stored_instance})`;
+    }
+    return col;
+  };
+  return [
+    { key: "kb1", kind: "keyboard", instance: 1, label: "kb1 · Keyboard/Mouse" },
+    { key: "gp1", kind: "gamepad", instance: 1, label: "gp1 · Gamepad" },
+    ...[...instances].sort((a, b) => a - b).map(joystick),
+  ];
+});
 
 // Columns the user switched off (remembered; a device new to the file
 // starts visible).
@@ -758,6 +782,7 @@ const listColumns = computed<ColumnSpec[]>(() => [
   ...visibleCols.value.map((d, i, all) => ({
     key: d.key,
     label: d.label.toUpperCase(),
+    note: d.note?.toUpperCase(),
     width: i === all.length - 1 ? null : 200,
     sortable: false,
     icon: d.kind === "keyboard" ? "keyboard" : d.kind === "gamepad" ? "gamepad" : "devices",
@@ -1412,7 +1437,7 @@ async function compareWith(key: string) {
             type="button"
             class="chip mono"
             :class="{ active: !hiddenCols.includes(c.key) }"
-            :title="c.label"
+            :title="c.note ? `${c.label} ${c.note}` : c.label"
             @click="toggleCol(c.key)"
           >
             <Icon :name="kindIcon(c.kind)" :size="14" />

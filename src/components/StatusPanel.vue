@@ -20,10 +20,11 @@ function onConfirmApply(value: string) {
   if (value === "rewrite") emit("apply");
 }
 
+// Without the game's own device order no joystick input resolves to a
+// binding; the file detail belongs in the tooltip, not the tile.
 const logErrorTitle = computed(() => {
   const le = props.report?.log_error;
-  if (!le) return "";
-  if (le.kind === "no_joystick_lines") return "The game listed no joystick at its last start";
+  if (!le || le.kind === "no_joystick_lines") return "";
   return le.kind === "not_found" ? `${le.path}: ${le.reason}` : le.path;
 });
 
@@ -72,9 +73,12 @@ const hasIssue = computed(
         <div class="error mono">{{ loadError }}</div>
       </div>
 
-      <div v-if="report?.log_error" class="tile issue" :title="logErrorTitle">
-        <Icon name="warning" :size="16" />
-        <span>No joystick order found</span>
+      <div v-if="report?.log_error" class="tile issue detail" :title="logErrorTitle">
+        <div class="row">
+          <Icon name="warning" :size="16" />
+          <span class="name">Joystick order issue</span>
+        </div>
+        <div class="note">Unable to parse 'Game.log', some features deactivated!</div>
       </div>
 
       <div v-for="m in report?.missing ?? []" :key="m.stored_instance" class="tile issue">
@@ -243,6 +247,11 @@ const hasIssue = computed(
   font-size: 12px;
   color: var(--text);
   overflow-wrap: anywhere;
+}
+
+.note {
+  font-size: 12px;
+  color: var(--text-2);
 }
 
 .row {

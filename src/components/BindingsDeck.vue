@@ -17,7 +17,10 @@ const props = defineProps<{
   categoryLabel: (actionmap: string) => string;
   // SC's device name for a binding: js1, js2, kb1, gp1.
   deviceLabel: (b: ResolvedBinding) => string;
-  isClash: (token: string) => boolean;
+  // Tooltip for a binding caught in the device-order clash, undefined otherwise.
+  clashOf: (token: string) => string | undefined;
+  // The game's device order is unknown: no joystick binding is listed.
+  noOrder: boolean;
   isMissing: (b: ResolvedBinding) => boolean;
   // The binding just clicked, lit like a short press for a moment.
   isFlashed: (b: ResolvedBinding) => boolean;
@@ -154,7 +157,7 @@ function rowTitle(b: ResolvedBinding): string | undefined {
 }
 
 function deviceTitle(b: ResolvedBinding): string | undefined {
-  return props.isClash(b.token) ? "misassigned" : undefined;
+  return props.clashOf(b.token);
 }
 </script>
 
@@ -196,6 +199,10 @@ function deviceTitle(b: ResolvedBinding): string | undefined {
           {{ d.label }}
         </button>
       </div>
+      <span v-if="noOrder" class="no-order">
+        <Icon name="warning" :size="14" />
+        no joystick order
+      </span>
       <div class="divider" />
       <div class="search">
         <Icon name="search" :size="14" />
@@ -219,7 +226,7 @@ function deviceTitle(b: ResolvedBinding): string | undefined {
             <div class="row group-row" :class="{ live: liveOn && g.token === currentToken }" @click="toggleBucket(g.token)">
               <span class="input-cell">
                 <Icon :name="isOpen(g) ? 'chevron-down' : 'chevron-right'" :size="14" class="chevron" />
-                <span class="mono cell-device" :class="{ clash: isClash(g.token) }" :title="isClash(g.token) ? 'misassigned' : undefined">
+                <span class="mono cell-device" :class="{ clash: !!clashOf(g.token) }" :title="clashOf(g.token)">
                   {{ g.device }}
                 </span>
                 <span class="cell-input" :class="{ mono: !labelOf(g.token) }" :title="g.token"
@@ -255,7 +262,7 @@ function deviceTitle(b: ResolvedBinding): string | undefined {
             @click="emit('flash', b)"
           >
             <span class="input-cell">
-              <span class="mono cell-device" :class="{ clash: isClash(b.token) }" :title="deviceTitle(b)">
+              <span class="mono cell-device" :class="{ clash: !!deviceTitle(b) }" :title="deviceTitle(b)">
                 {{ deviceLabel(b) }}
               </span>
               <span class="cell-input" :class="{ mono: !labelOf(b.token) }" :title="b.token"
@@ -345,6 +352,16 @@ function deviceTitle(b: ResolvedBinding): string | undefined {
 .chips {
   display: flex;
   gap: 4px;
+}
+
+.no-order {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--warn);
+  white-space: nowrap;
 }
 
 .chip {

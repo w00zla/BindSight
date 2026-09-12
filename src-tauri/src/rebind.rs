@@ -97,10 +97,14 @@ pub fn validate(change: &RebindChange) -> Result<(), String> {
                     return Err(format!("invalid blank input {input:?}"));
                 }
             }
-            // A bound token has no spaces and well-formed `+` parts.
+            // A bound token has no spaces and well-formed `+` parts; a
+            // joystick token has no `+` at all (SC has no joystick modifiers).
             Some(_) => {
                 if input.contains(' ') || input.split('+').any(str::is_empty) {
                     return Err(format!("invalid input {input:?}"));
+                }
+                if change.kind == DeviceKind::Joystick && input.contains('+') {
+                    return Err(format!("invalid joystick input {input:?}"));
                 }
             }
         }
@@ -527,7 +531,6 @@ mod tests {
         let ok = |kind, input| validate(&change("spaceship_general", "v_eject", kind, input)).unwrap();
         ok(DeviceKind::Joystick, "js1_button5");
         ok(DeviceKind::Joystick, "js12_rotz");
-        ok(DeviceKind::Joystick, "lctrl+js1_button1");
         ok(DeviceKind::Joystick, "js2_ ");
         ok(DeviceKind::Joystick, "");
         ok(DeviceKind::Keyboard, "kb1_lalt+x");
@@ -545,6 +548,8 @@ mod tests {
         bad(DeviceKind::Joystick, "js1_+button5"); // empty combo part
         bad(DeviceKind::Joystick, "+js1_button5");
         bad(DeviceKind::Joystick, "js1_button5+");
+        bad(DeviceKind::Joystick, "lctrl+js1_button1"); // SC has no joystick modifiers
+        bad(DeviceKind::Joystick, "js1_button1+js1_button2");
         bad(DeviceKind::Joystick, "lctrl+js1_ "); // blank with a modifier
         bad(DeviceKind::Joystick, "js1_\t"); // blank with a tab
         bad(DeviceKind::Joystick, "js1_büton");

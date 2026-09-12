@@ -9,6 +9,9 @@ const props = defineProps<{
   device: DeviceInfo;
   slot: SlotStatus | null;
   unseen: boolean;
+  // The game's device order is unknown, so the joystick has no jsN: a
+  // warning takes the slot chip's place, the rest of the tile is as usual.
+  noOrder: boolean;
   bindingCount: number;
   // Taken off the image stage by the user.
   hidden: boolean;
@@ -58,6 +61,7 @@ const state = computed(() => {
       <template v-if="device.kind === 'joystick'">
         <span v-if="slot?.clash" class="chip clash-chip mono">js{{ slot.stored_instance }} → js{{ slot.effective_instance }}</span>
         <span v-else-if="slot" class="chip mono">js{{ slot.effective_instance }}</span>
+        <span v-else-if="noOrder" class="no-order" title="no joystick order"><Icon name="warning" :size="16" /></span>
       </template>
       <span v-else-if="kindChip" class="chip mono">{{ kindChip }}</span>
     </div>
@@ -136,6 +140,12 @@ const state = computed(() => {
 
 .clash-chip {
   background: rgba(242, 179, 76, 0.15);
+  color: var(--warn);
+}
+
+.no-order {
+  flex-shrink: 0;
+  display: flex;
   color: var(--warn);
 }
 

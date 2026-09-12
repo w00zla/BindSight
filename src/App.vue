@@ -29,6 +29,7 @@ import type {
   Environment,
   ImageMapView,
   JoyInput,
+  LiveState,
   LoadStatus,
   LoggedInput,
   Mode,
@@ -417,10 +418,13 @@ function deviceOf(sdlGuid: string): DeviceInfo | undefined {
 
 // The connected device a binding belongs to: joysticks by GUID, keyboard and
 // gamepad by kind (SC has exactly one of each).
+// A joystick binding sits on the device SC ranks at its jsN (the game's own
+// order, never the saved <options> slot); without that order, on none.
 function deviceForBinding(b: ResolvedBinding): DeviceInfo | undefined {
   if (b.device_kind === "keyboard") return devices.value.find((d) => d.kind === "keyboard");
   if (b.device_kind === "gamepad") return devices.value.find((d) => d.kind === "gamepad" && d.gamepad_slot !== null);
-  return devices.value.find((d) => !!b.device_guid && sameHardware(d.hardware_id, b.device_guid));
+  const guid = slotByInstance.value.get(b.instance)?.sc_product_guid;
+  return guid ? devices.value.find((d) => sameHardware(d.hardware_id, guid)) : undefined;
 }
 
 // Where a flashed binding lights up: the device and its input's key, plus
@@ -551,7 +555,8 @@ function bindingCountFor(d: DeviceInfo): number {
   if (d.kind === "gamepad") {
     return d.gamepad_slot === null ? 0 : bindings.value.filter((b) => b.device_kind === "gamepad").length;
   }
-  return bindings.value.filter((b) => sameHardware(b.device_guid, d.sc_product_guid)).length;
+  const n = slotFor(d.sc_product_guid)?.effective_instance;
+  return n === undefined ? 0 : bindings.value.filter((b) => b.device_kind === "joystick" && b.instance === n).length;
 }
 
 // SC did not list this device at its last start. The keyboard is always there;
@@ -574,6 +579,15 @@ const slotByGuid = computed<Map<string, SlotStatus>>(() => {
 function slotFor(guid: string | null): SlotStatus | null {
   return guid ? slotByGuid.value.get(guid) ?? null : null;
 }
+
+// Connected-slot status by the jsN SC assigns.
+const slotByInstance = computed<Map<number, SlotStatus>>(
+  () => new Map((clash.value?.connected ?? []).map((s) => [s.effective_instance, s])),
+);
+
+// The game's device order is unknown (no usable log): no joystick has a jsN,
+// so none of its input resolves. The keyboard and the pad are unaffected.
+const noOrder = computed(() => !!clash.value?.log_error);
 
 // GUIDs SC did not list at its last start (device-order log source only).
 const unseenGuids = computed<Set<string>>(
@@ -650,23 +664,14 @@ async function switchEnv(slug: string) {
   }
 }
 
-// Instances whose bindings still land on the right device (the device SC now
-// assigns that jsN is the one saved under it). Any other instance is misdirected.
-const healthyInstances = computed<Set<number>>(() => {
-  const s = new Set<number>();
-  for (const slot of clash.value?.connected ?? []) {
-    if (slot.stored_instance !== null && slot.stored_instance === slot.effective_instance) {
-      s.add(slot.effective_instance);
-    }
-  }
-  return s;
-});
-
-// Is this binding's slot misdirected by the current device-order clash?
-function bindingClash(token: string): boolean {
-  if (!clash.value?.has_clash) return false;
-  const n = Number(instanceOf(token));
-  return Number.isFinite(n) && !healthyInstances.value.has(n);
+// The device-order clash, seen from a binding: the joystick its jsN lands on
+// (SC's order) is saved under another slot in the file, or not at all. The
+// text names that slot for the deck's tooltip; undefined = no clash here.
+function bindingClash(token: string): string | undefined {
+  if (!clash.value?.has_clash) return undefined;
+  const slot = slotByInstance.value.get(Number(instanceOf(token)));
+  if (!slot || slot.stored_instance === slot.effective_instance) return undefined;
+  return slot.stored_instance === null ? "joystick not saved" : `joystick saved as js${slot.stored_instance}`;
 }
 
 async function loadClash() {
@@ -784,12 +789,13 @@ function rebindToken(p: JoyInput): string | null {
   return `${prefix}_${[...others].reverse().join("+")}+${p.name}`;
 }
 
-// The SC token an input event stands for, with the jsN from actionmaps.xml
-// (like the Last Input card); null when SC cannot bind it (device not in the
-// profile, pad without a slot, unknown axis name, hat diagonal or centre).
+// The SC token an input event stands for, with the jsN from the game's own
+// device order (like the Last Input card); null when SC cannot bind it (no
+// order, device not listed, pad without a slot, unknown axis name, hat
+// diagonal or centre).
 function eventToken(p: JoyInput): string | null {
   const d = deviceOf(p.guid);
-  const js = () => slotFor(d?.sc_product_guid ?? null)?.stored_instance ?? null;
+  const js = () => slotFor(d?.sc_product_guid ?? null)?.effective_instance ?? null;
   switch (p.kind) {
     case "key":
       return `kb1_${p.name}`;
@@ -981,12 +987,14 @@ function sdlInputName(p: JoyInput): string {
 }
 
 // Live card colour: yellow when SC doesn't see the device (unseen or excluded
-// — any SC token is meaningless then), blue when the input has SC bindings,
-// grey otherwise. The keyboard is always there for SC.
-function liveState(): "unseen" | "bound" | "none" {
+// — any SC token is meaningless then) or has no device order at all, blue
+// when the input has SC bindings, grey otherwise. The keyboard is always
+// there for SC.
+function liveState(): LiveState {
   const c = currentInput.value;
   if (!c) return "none";
   if (c.kind === "joystick" && (isExcluded(c.sc_guid) || isUnseen(c.sc_guid))) return "unseen";
+  if (c.kind === "joystick" && noOrder.value) return "noorder";
   if (c.kind === "gamepad" && (isExcluded(c.sc_guid) || clash.value?.gamepad_seen === false)) return "unseen";
   return c.actions.length ? "bound" : "none";
 }
@@ -1116,6 +1124,7 @@ onUnmounted(() => {
           :device="d"
           :slot="slotFor(d.sc_product_guid)"
           :unseen="deviceUnseen(d)"
+          :noOrder="d.kind === 'joystick' && noOrder"
           :bindingCount="bindingCountFor(d)"
           :hidden="isStageHidden(d)"
           @toggleMap="toggleStageHidden(d)"
@@ -1162,7 +1171,8 @@ onUnmounted(() => {
           :tokenLabel="tokenLabel"
           :categoryLabel="actionmapLabel"
           :deviceLabel="deviceLabel"
-          :isClash="bindingClash"
+          :clashOf="bindingClash"
+          :noOrder="noOrder"
           :isMissing="missingInMap"
           :isFlashed="isFlashed"
           @flash="flashBinding"
@@ -1175,6 +1185,7 @@ onUnmounted(() => {
       ref="bindingsView"
       :bindings="bindings"
       :actionMaps="actionMaps"
+      :clash="clash"
       :hasCurrent="currentLoaded"
       :keyInput="keyInput"
       :tokenLabel="tokenLabel"

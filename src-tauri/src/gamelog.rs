@@ -116,6 +116,15 @@ pub enum GameLogError {
     NoJoystickLines,
 }
 
+/// The `jsN` SC gave the device with this Product GUID at its last start,
+/// or `None` if the log does not list it. Case-insensitive on the GUID.
+pub fn instance_for_guid(log: &LogEnumeration, sc_product_guid: &str) -> Option<u32> {
+    log.joysticks
+        .iter()
+        .find(|j| j.product_guid.as_deref().is_some_and(|g| g.eq_ignore_ascii_case(sc_product_guid)))
+        .map(|j| j.instance)
+}
+
 /// Read and parse a `Game.log`.
 pub fn read(path: &Path) -> Result<LogEnumeration, GameLogError> {
     let display = path.display().to_string();
@@ -151,6 +160,14 @@ mod tests {
         assert_eq!(e.joysticks[1].product_guid.as_deref(), Some("{0201231D-0000-0000-0000-504944564944}"));
         assert_eq!(e.timestamp.as_deref(), Some("2026-09-08T21:06:00.789Z"));
         assert!(e.gamepads.is_empty());
+    }
+
+    #[test]
+    fn instance_for_guid_follows_the_log_order() {
+        let log = parse(LOG).unwrap();
+        assert_eq!(instance_for_guid(&log, "{0200231d-0000-0000-0000-504944564944}"), Some(1));
+        assert_eq!(instance_for_guid(&log, "{0201231D-0000-0000-0000-504944564944}"), Some(2));
+        assert_eq!(instance_for_guid(&log, "{0E213434-0000-0000-0000-504944564944}"), None);
     }
 
     #[test]

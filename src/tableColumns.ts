@@ -17,6 +17,8 @@ export interface ColumnSpec {
   sortable?: boolean;
   // Icon in front of the label (an Icon name).
   icon?: string;
+  // Warning text after the label, in the warn colour.
+  note?: string;
 }
 
 const MIN_WIDTH = 40;

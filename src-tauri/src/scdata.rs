@@ -414,19 +414,18 @@ pub(crate) fn split_product(product: &str) -> (String, Option<String>) {
 }
 
 /// Whether a raw rebind input targets a joystick at all — a real token
-/// (`js1_button6`, `lctrl+js1_x`) or a blank one (`js2_ `) that explicitly
-/// unbinds the shipped default. Unlike [`parse_js_binding`], blank counts.
+/// (`js1_button6`) or a blank one (`js2_ `) that explicitly unbinds the
+/// shipped default. Unlike [`parse_js_binding`], blank counts. SC has no
+/// modifiers on joystick inputs, so the token starts with the prefix.
 pub fn is_joystick_rebind(input: &str) -> bool {
-    input.rsplit('+').next().is_some_and(|main| main.trim_start().starts_with("js"))
+    input.trim_start().starts_with("js")
 }
 
 /// Parse a raw rebind input into its joystick `(instance, token)`, or `None`
-/// if it is not a bound joystick input. Handles a modifier prefix
-/// (`lctrl+js1_button1`) by taking the part after the last `+`, and treats a
-/// whitespace-only token (`js2_ `) as unbound.
+/// if it is not a bound joystick input. A whitespace-only token (`js2_ `)
+/// is unbound.
 pub fn parse_js_binding(input: &str) -> Option<(u32, String)> {
-    let main = input.rsplit('+').next()?;
-    let rest = main.strip_prefix("js")?;
+    let rest = input.strip_prefix("js")?;
     let (num, token) = rest.split_once('_')?;
     let instance: u32 = num.parse().ok()?;
     let token = token.trim();
@@ -479,8 +478,7 @@ pub fn parse_rebind(input: &str) -> Option<RebindTarget> {
         return None;
     }
     // Blank joystick rebinds still name their instance (`js2_ `).
-    let main = input.rsplit('+').next()?;
-    let (num, token) = main.trim_start().strip_prefix("js")?.split_once('_')?;
+    let (num, token) = trimmed.strip_prefix("js")?.split_once('_')?;
     let instance: u32 = num.parse().ok()?;
     let token = token.trim();
     Some(RebindTarget { kind: DeviceKind::Joystick, instance, token: (!token.is_empty()).then(|| token.to_string()) })
@@ -651,11 +649,12 @@ mod tests {
     fn classifies_rebinds_by_device_kind() {
         let target = |input: &str| parse_rebind(input).unwrap();
 
-        // Joystick: modifier in front of the prefix, instance from the token.
-        let js = target("lctrl+js2_button9");
+        // Joystick: instance from the token; SC puts no modifier in front.
+        let js = target("js2_button9");
         assert_eq!((js.kind, js.instance), (DeviceKind::Joystick, 2));
         assert_eq!(js.token.as_deref(), Some("button9"));
         assert_eq!(js.full_token().as_deref(), Some("js2_button9"));
+        assert!(parse_rebind("lctrl+js2_button9").is_none());
 
         // Keyboard/gamepad: single prefix, modifiers stay inside the token.
         let kb = target("kb1_lalt+x");
@@ -695,7 +694,7 @@ mod tests {
     fn parses_js_bindings() {
         assert_eq!(parse_js_binding("js1_button9"), Some((1, "button9".to_string())));
         assert_eq!(parse_js_binding("js2_hat1_up"), Some((2, "hat1_up".to_string())));
-        assert_eq!(parse_js_binding("lctrl+js1_button1"), Some((1, "button1".to_string())));
+        assert_eq!(parse_js_binding("lctrl+js1_button1"), None); // SC has no joystick modifiers
         assert_eq!(parse_js_binding("js2_ "), None); // device-tagged but unbound
         assert_eq!(parse_js_binding("kb1_insert"), None); // not a joystick
         assert_eq!(parse_js_binding(" "), None);
@@ -704,7 +703,7 @@ mod tests {
     #[test]
     fn detects_joystick_rebinds_including_blank_ones() {
         assert!(is_joystick_rebind("js1_button6"));
-        assert!(is_joystick_rebind("lctrl+js1_x"));
+        assert!(!is_joystick_rebind("lctrl+js1_x")); // SC has no joystick modifiers
         assert!(is_joystick_rebind("js2_ ")); // blank = deliberately unbound
         assert!(!is_joystick_rebind("kb1_insert"));
         assert!(!is_joystick_rebind(" "));

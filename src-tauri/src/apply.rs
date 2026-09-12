@@ -41,9 +41,8 @@ fn target_of(d: &DeviceSel) -> u32 {
     }
 }
 
-/// `(actionmap, action) -> rebind` for the rebinds of one device in a file.
-/// Matched by what the input targets, so a joystick rebind with a modifier
-/// in front (`lctrl+js1_button1`) counts for js1 like a plain one.
+/// `(actionmap, action) -> rebind` for the rebinds of one device in a file,
+/// matched by what the input targets.
 fn rebinds_of(file: &ActionMapsFile, kind: DeviceKind, instance: u32) -> BTreeMap<(&str, &str), &Rebind> {
     file.rebinds
         .iter()
@@ -172,21 +171,6 @@ mod tests {
                 "seat/eject=js1_button1 Some([(\"activationMode\", \"hold\")])",
             ]
         );
-    }
-
-    #[test]
-    fn plan_sees_joystick_rebinds_with_a_modifier_in_front() {
-        let live = file(&[("seat", "eject", "lctrl+js1_button1")]);
-        let source = file(&[("seat", "lights", "lctrl+js1_button3")]);
-        // The modifier stays in front, the slot rename hits the `js1_` part.
-        let plan = plan_apply(&live, &source, &[DeviceSel { kind: DeviceKind::Joystick, instance: 1, target: Some(2) }]);
-        let as_text: Vec<String> = plan.iter().map(|c| format!("{}/{}={}", c.actionmap, c.action, c.input)).collect();
-        assert_eq!(as_text, vec!["seat/lights=lctrl+js2_button3"]);
-        // Live js1's modifier rebind is js1's, so applying a source without
-        // it onto js1 removes it.
-        let plan = plan_apply(&live, &file(&[]), &[sel(DeviceKind::Joystick, 1)]);
-        let as_text: Vec<String> = plan.iter().map(|c| format!("{}/{}={}", c.actionmap, c.action, c.input)).collect();
-        assert_eq!(as_text, vec!["seat/eject="]);
     }
 
     fn sel(kind: DeviceKind, instance: u32) -> DeviceSel {

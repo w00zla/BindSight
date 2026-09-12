@@ -232,6 +232,10 @@ export interface ClashReport {
   resort_commands: string[];
 }
 
+// Last Input card colour: "unseen" (SC does not see the device), "noorder"
+// (a joystick while the game's device order is unknown), "bound", "none".
+export type LiveState = "unseen" | "noorder" | "bound" | "none";
+
 // `sdl` is the SDL-side input name, shown when SC has no token for the input;
 // `sc_guid` lets the tile tell whether SC sees the device at all.
 export interface CurrentInput {

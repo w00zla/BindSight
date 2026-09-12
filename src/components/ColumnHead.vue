@@ -34,6 +34,7 @@ function gripTarget(i: number): { key: string; fromLeft: boolean } | null {
     >
       <Icon v-if="c.icon" :name="c.icon as IconName" :size="13" class="col-icon" />
       <span class="txt">{{ c.label }}</span>
+      <span v-if="c.note" class="txt note">{{ c.note }}</span>
       <Icon v-if="sort.key === c.key" :name="sort.dir === 'asc' ? 'chevron-up' : 'chevron-down'" :size="12" />
       <span
         v-if="gripTarget(i)"
@@ -73,6 +74,12 @@ function gripTarget(i: number): { key: string; fromLeft: boolean } | null {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The warning stays whole; the label gives way. */
+.note {
+  flex-shrink: 0;
+  color: var(--warn);
+}
+
 
 /* Sits in the 12px column gap, right of the cell. */
 .grip {

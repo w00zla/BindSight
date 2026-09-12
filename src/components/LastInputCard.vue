@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import Icon from "./Icon.vue";
-import type { CurrentInput } from "../types";
+import type { CurrentInput, LiveState } from "../types";
 
 const props = defineProps<{
   input: CurrentInput | null;
-  state: "unseen" | "bound" | "none";
+  state: LiveState;
   // Extra distinction the plain state does not carry: "excluded" (user marked
   // it) vs "not seen by game" (SC's device order never listed it) both show as "unseen".
   excluded: boolean;
@@ -36,6 +36,7 @@ const bigLabel = computed(() => {
     <div v-if="input" class="row2">
       <span>{{ input.device }}</span>
       <span v-if="state === 'unseen'" class="chip">{{ excluded ? "excluded" : "not seen by game" }}</span>
+      <span v-else-if="state === 'noorder'" class="chip">no joystick order</span>
     </div>
     <div v-if="input?.actions.length" class="actions">
       <div v-for="(a, i) in input.actions" :key="i" class="action-row">

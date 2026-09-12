@@ -409,9 +409,12 @@ struct InputResolution {
 }
 
 /// Resolve a live input to its SC token and bound action(s). `kind` is
-/// "button", "hat" or "axis"; `direction` is required for hats. Empty for
-/// unknown devices, unbound inputs, or axes whose SC name is unknown (no
-/// usable HID descriptor — see `DeviceInfo::axes_error`).
+/// "button", "hat" or "axis"; `direction` is required for hats. The `jsN`
+/// is the device's rank in SC's own enumeration (`Game.log`, the only order
+/// source — the saved `<options>` slot may be stale), so without a usable
+/// log no joystick input resolves. Empty for unknown or unlisted devices,
+/// unbound inputs, or axes whose SC name is unknown (no usable HID
+/// descriptor — see `DeviceInfo::axes_error`).
 #[tauri::command]
 fn resolve_input(
     guid: String,
@@ -422,13 +425,13 @@ fn resolve_input(
     data: State<Mutex<AppData>>,
 ) -> InputResolution {
     let data = data.lock().unwrap();
-    let Some(profile) = &data.bindings_file else {
+    if data.bindings_file.is_none() {
         return InputResolution::default();
-    };
+    }
     let Some(sc_guid) = guid::sdl_guid_to_sc_product(&guid) else {
         return InputResolution::default();
     };
-    let Some(instance) = bindings::instance_for_guid(profile, &sc_guid) else {
+    let Some(instance) = data.game_log.as_ref().ok().and_then(|log| gamelog::instance_for_guid(log, &sc_guid)) else {
         return InputResolution::default();
     };
     let axis_name = || {
