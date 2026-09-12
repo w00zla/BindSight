@@ -663,6 +663,18 @@ fn spawn_sc_load(app: AppHandle) {
         let status = reload_bindings(&mut data);
         drop(data);
         let _ = app.emit("scdata-changed", &status);
+        start_input(&app);
+    });
+}
+
+/// Start the input thread once, after the first game-data load has ended
+/// (whatever its outcome): devices are not enumerated and no input is
+/// reported while the game files are still being read.
+fn start_input(app: &AppHandle) {
+    static INPUT_STARTED: std::sync::Once = std::sync::Once::new();
+    INPUT_STARTED.call_once(|| {
+        let devices = app.state::<input::DeviceList>().inner().clone();
+        input::spawn(app.clone(), devices);
     });
 }
 
@@ -767,11 +779,12 @@ pub fn run() {
                 index: bindings::BindingIndex::default(),
                 bindings_error: None,
             }));
-            spawn_sc_load(app.handle().clone());
-
+            // The device list exists from the start (commands read it), but
+            // the input thread only starts once the first game-data load is
+            // through (`spawn_sc_load` -> `start_input`).
             let devices: input::DeviceList = Arc::new(Mutex::new(Vec::new()));
-            app.manage(devices.clone());
-            input::spawn(app.handle().clone(), devices);
+            app.manage(devices);
+            spawn_sc_load(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
