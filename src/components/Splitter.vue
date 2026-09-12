@@ -23,7 +23,9 @@ function start(e: PointerEvent) {
 </script>
 
 <template>
-  <div class="splitter" :class="direction" @pointerdown="start" @dblclick="emit('reset')" />
+  <!-- `dir-*`, not the bare direction: a parent's scoped `.row` / `.col`
+       table rule would otherwise land on this root element -->
+  <div class="splitter" :class="`dir-${direction}`" @pointerdown="start" @dblclick="emit('reset')" />
 </template>
 
 <style scoped>
@@ -35,11 +37,11 @@ function start(e: PointerEvent) {
   touch-action: none;
 }
 
-.splitter.col {
+.splitter.dir-col {
   cursor: col-resize;
 }
 
-.splitter.row {
+.splitter.dir-row {
   cursor: row-resize;
 }
 
@@ -49,12 +51,12 @@ function start(e: PointerEvent) {
   background: var(--border);
 }
 
-.splitter.col::before {
+.splitter.dir-col::before {
   width: 2px;
   height: 40px;
 }
 
-.splitter.row::before {
+.splitter.dir-row::before {
   width: 40px;
   height: 2px;
 }

@@ -330,10 +330,12 @@ export interface DiffReport {
   same: number;
 }
 
-// One device to take over when applying a profile or backup (apply.rs).
+// One device to take over when applying a profile or backup (apply.rs); a
+// joystick's bindings can land on another slot (`target`).
 export interface DeviceSel {
   kind: DeviceKind;
   instance: number;
+  target?: number;
 }
 
 // One device with a chosen image-map, shown on the image stage.

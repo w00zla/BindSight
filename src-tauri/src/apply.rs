@@ -18,15 +18,27 @@ use crate::rebind::{self, RebindChange};
 use crate::scdata::{parse_actionmaps, ActionMapsFile, DeviceKind};
 use crate::{backups, config, diff, AppData, LoadStatus};
 
-/// One device to take over: `kb1`, `gp1` or `jsN`.
+/// One device to take over: `kb1`, `gp1` or `jsN`. A joystick's bindings
+/// can land on another slot (`target`): the source's `js1_` rebinds are
+/// written as `js2_` — the resort that goes with an apply when the sticks
+/// are enumerated differently here.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DeviceSel {
     pub kind: DeviceKind,
     pub instance: u32,
+    #[serde(default)]
+    pub target: Option<u32>,
 }
 
-fn prefix(d: &DeviceSel) -> String {
-    format!("{}{}_", d.kind.token_prefix(), d.instance)
+fn prefix(kind: DeviceKind, instance: u32) -> String {
+    format!("{}{}_", kind.token_prefix(), instance)
+}
+
+fn target_of(d: &DeviceSel) -> u32 {
+    match (d.kind, d.target) {
+        (DeviceKind::Joystick, Some(t)) => t,
+        _ => d.instance,
+    }
 }
 
 /// `(actionmap, action) -> input` for the rebinds of one device in a file.
@@ -44,16 +56,21 @@ fn rebinds_of<'a>(file: &'a ActionMapsFile, prefix: &str) -> BTreeMap<(&'a str, 
 pub fn plan_apply(live: &ActionMapsFile, source: &ActionMapsFile, devices: &[DeviceSel]) -> Vec<RebindChange> {
     let mut out = Vec::new();
     for d in devices {
-        let p = prefix(d);
-        let from = rebinds_of(source, &p);
-        let now = rebinds_of(live, &p);
-        for (&(actionmap, action), &input) in &from {
-            if now.get(&(actionmap, action)) != Some(&input) {
+        let from_prefix = prefix(d.kind, d.instance);
+        let to_prefix = prefix(d.kind, target_of(d));
+        // The source's rebinds, renamed onto the target slot.
+        let from: BTreeMap<(&str, &str), String> = rebinds_of(source, &from_prefix)
+            .into_iter()
+            .map(|(k, input)| (k, format!("{to_prefix}{}", &input[from_prefix.len()..])))
+            .collect();
+        let now = rebinds_of(live, &to_prefix);
+        for (&(actionmap, action), input) in &from {
+            if now.get(&(actionmap, action)).copied() != Some(input.as_str()) {
                 out.push(RebindChange {
                     actionmap: actionmap.into(),
                     action: action.into(),
                     kind: d.kind,
-                    input: input.into(),
+                    input: input.clone(),
                 });
             }
         }
@@ -125,7 +142,18 @@ mod tests {
     }
 
     fn sel(kind: DeviceKind, instance: u32) -> DeviceSel {
-        DeviceSel { kind, instance }
+        DeviceSel { kind, instance, target: None }
+    }
+
+    #[test]
+    fn a_joystick_can_land_on_another_slot() {
+        let live = file(&[("seat", "eject", "js2_button1"), ("seat", "menu", "js2_button4"), ("seat", "boost", "js1_button2")]);
+        let source = file(&[("seat", "eject", "js1_button9"), ("seat", "lights", "js1_button3")]);
+        // Source js1 -> live js2: eject and lights get js2_ tokens, js2's menu
+        // goes, js1's boost is not touched.
+        let plan = plan_apply(&live, &source, &[DeviceSel { kind: DeviceKind::Joystick, instance: 1, target: Some(2) }]);
+        let as_text: Vec<String> = plan.iter().map(|c| format!("{}/{}={}", c.actionmap, c.action, c.input)).collect();
+        assert_eq!(as_text, vec!["seat/eject=js2_button9", "seat/lights=js2_button3", "seat/menu="]);
     }
 
     #[test]

@@ -5,6 +5,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
 import ColumnHead from "./ColumnHead.vue";
+import Dropdown from "./Dropdown.vue";
 import Splitter from "./Splitter.vue";
 import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
 import ConfirmDialog, { type ConfirmButton, type ConfirmIcon } from "./ConfirmDialog.vue";
@@ -324,7 +325,40 @@ interface ApplyDevice {
   label: string;
 }
 
-const applyDialog = ref<{ devices: ApplyDevice[]; on: Set<string> } | null>(null);
+// `targets`: the live slot a source joystick's bindings land on (the
+// resort that goes with an apply), by device key; unset = the same slot.
+const applyDialog = ref<{ devices: ApplyDevice[]; on: Set<string>; targets: Record<string, number> } | null>(null);
+
+// The live file's joystick slots a source joystick can land on: its own
+// slot plus every slot the live file names, ascending.
+function slotOptions(instance: number): { value: string; label: string }[] {
+  const slots = new Set<number>([instance, ...(info.value?.joysticks ?? []).map((j) => j.instance)]);
+  return [...slots].sort((a, b) => a - b).map((n) => ({ value: String(n), label: `js${n}` }));
+}
+
+// The live slot a source joystick lands on; unset = its own.
+function targetOf(d: ApplyDevice): number {
+  return applyDialog.value?.targets[d.key] ?? d.sel.instance;
+}
+
+function setTarget(key: string, value: string) {
+  const d = applyDialog.value;
+  if (!d) return;
+  applyDialog.value = { ...d, targets: { ...d.targets, [key]: Number(value) } };
+}
+
+// Ticked joysticks that would land on the same slot: marked, and Apply
+// stays off until the user sorts it out.
+const slotClashes = computed<Set<string>>(() => {
+  const d = applyDialog.value;
+  const out = new Set<string>();
+  if (!d) return out;
+  const sticks = d.devices.filter((x) => x.sel.kind === "joystick" && d.on.has(x.key));
+  for (const a of sticks) {
+    if (sticks.some((b) => b !== a && targetOf(b) === targetOf(a))) out.add(a.key);
+  }
+  return out;
+});
 
 function applyDeviceList(): ApplyDevice[] {
   const instances = new Set<number>();
@@ -332,20 +366,24 @@ function applyDeviceList(): ApplyDevice[] {
     if (r.device_kind === "joystick" && r.instance !== null) instances.add(r.instance);
   }
   for (const j of info.value?.joysticks ?? []) instances.add(j.instance);
-  const nameOf = (n: number) => info.value?.joysticks.find((j) => j.instance === n)?.product_name;
+  // A joystick row is the source's slot; the device it lands on is the
+  // live file's, named at the target slot (`slotName`).
   return [
     { key: "kb1", sel: { kind: "keyboard", instance: 1 }, label: "Keyboard/Mouse" },
     { key: "gp1", sel: { kind: "gamepad", instance: 1 }, label: "Gamepad" },
-    ...[...instances]
-      .sort((a, b) => a - b)
-      .map((n) => ({ key: `js${n}`, sel: { kind: "joystick" as DeviceKind, instance: n }, label: nameOf(n) ?? "" })),
+    ...[...instances].sort((a, b) => a - b).map((n) => ({ key: `js${n}`, sel: { kind: "joystick" as DeviceKind, instance: n }, label: "" })),
   ];
+}
+
+// The live file's device on a joystick slot, or nothing when it names none.
+function slotName(n: number): string {
+  return info.value?.joysticks.find((j) => j.instance === n)?.product_name ?? "";
 }
 
 function openApply() {
   if (bKey.value === CURRENT) return;
   const devices = applyDeviceList();
-  applyDialog.value = { devices, on: new Set(devices.map((d) => d.key)) };
+  applyDialog.value = { devices, on: new Set(devices.map((d) => d.key)), targets: {} };
 }
 
 function toggleApplyDevice(key: string) {
@@ -357,7 +395,7 @@ function toggleApplyDevice(key: string) {
 }
 
 const applyButtons = computed<ConfirmButton[]>(() => [
-  { label: "Apply", kind: "primary", value: "apply", disabled: !applyDialog.value?.on.size },
+  { label: "Apply", kind: "primary", value: "apply", disabled: !applyDialog.value?.on.size || slotClashes.value.size > 0 },
   { label: "Cancel", kind: "outline", value: "cancel" },
 ]);
 
@@ -368,10 +406,16 @@ async function onApplyChoose(value: string) {
   applyDialog.value = null;
   if (!d || value !== "apply") return;
   const source = sourceFor(bKey.value);
-  const devices = d.devices.filter((x) => d.on.has(x.key)).map((x) => x.sel);
+  const devices = d.devices
+    .filter((x) => d.on.has(x.key))
+    .map((x) => {
+      const target = d.targets[x.key];
+      return target !== undefined && target !== x.sel.instance ? { ...x.sel, target } : x.sel;
+    });
+  const resorted = devices.some((x) => x.target !== undefined);
   busy.value = true;
   try {
-    if (source.kind === "backup" && devices.length === d.devices.length) {
+    if (source.kind === "backup" && devices.length === d.devices.length && !resorted) {
       const s = await invoke<LoadStatus>("restore_backup", { id: source.id });
       emit("restored", s);
     } else {
@@ -1550,18 +1594,51 @@ async function compareWith(key: string) {
     <!-- apply a profile / backup: which devices' bindings to take over -->
     <ConfirmDialog
       v-if="applyDialog"
-      :title="`Apply ${nameFor(bKey)}?`"
-      subtitle="Replaces the game's bindings of the ticked devices"
+      :title="`Apply ${nameFor(bKey)}`"
       icon="check"
       :buttons="applyButtons"
+      :width="640"
       @choose="onApplyChoose"
     >
-      <div class="apply-devices">
-        <label v-for="d in applyDialog.devices" :key="d.key" class="check">
-          <input type="checkbox" :checked="applyDialog.on.has(d.key)" @change="toggleApplyDevice(d.key)" />
-          <span class="mono">{{ d.key }}</span>
-          <span class="check-name">{{ d.label }}</span>
-        </label>
+      <!-- one row per device: take it over or not, and for a joystick the
+           live slot its bindings land on (a swap keeps the slots unique) -->
+      <div class="apply-table">
+        <div class="apply-head">
+          <span />
+          <span>Source</span>
+          <span>Apply to</span>
+        </div>
+        <div
+          v-for="d in applyDialog.devices"
+          :key="d.key"
+          class="apply-row"
+          :class="{ off: !applyDialog.on.has(d.key), clash: slotClashes.has(d.key) }"
+        >
+          <label class="check apply-check">
+            <input type="checkbox" :checked="applyDialog.on.has(d.key)" @change="toggleApplyDevice(d.key)" />
+          </label>
+          <span class="apply-device">
+            <Icon :name="kindIcon(d.sel.kind)" :size="14" />
+            <span class="mono">{{ d.key }}</span>
+          </span>
+          <span class="apply-slot">
+            <template v-if="d.sel.kind === 'joystick'">
+              <Dropdown
+                variant="mono"
+                :modelValue="String(targetOf(d))"
+                :options="slotOptions(d.sel.instance)"
+                title="Slot to apply to"
+                @update:modelValue="setTarget(d.key, $event)"
+              />
+              <span class="check-name">{{ slotName(targetOf(d)) }}</span>
+              <Icon v-if="slotClashes.has(d.key)" name="warning" :size="14" class="clash-mark" />
+            </template>
+            <template v-else>
+              <span class="mono dim">{{ d.key }}</span>
+              <span class="check-name">{{ d.label }}</span>
+            </template>
+          </span>
+        </div>
       </div>
     </ConfirmDialog>
 
@@ -1661,10 +1738,87 @@ async function compareWith(key: string) {
 }
 
 /* Own checkbox look (mirrors SettingsDialog): WebKitGTK would paint GTK's. */
-.apply-devices {
+/* Device · Apply · To slot, one line per device. */
+.apply-table {
   display: flex;
   flex-direction: column;
+  margin-bottom: 16px;
+}
+
+.apply-head,
+.apply-row {
+  display: grid;
+  grid-template-columns: 24px 110px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 8px 4px;
+}
+
+.apply-head {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  border-bottom: 1px solid var(--border-dim);
+}
+
+.apply-check {
+  justify-content: center;
+}
+
+.apply-row + .apply-row {
+  border-top: 1px solid var(--border-dim);
+}
+
+.apply-row:last-child {
+  border-bottom: 1px solid var(--border-dim);
+}
+
+.apply-row.off .apply-device,
+.apply-row.off .apply-slot {
+  opacity: 0.45;
+}
+
+.apply-device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 14px;
+}
+
+.apply-device .check-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apply-slot {
+  display: flex;
+  align-items: center;
   gap: 10px;
+  min-width: 0;
+}
+
+.apply-slot .check-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Two sticks on one slot: the user sorts it out, Apply waits. */
+.apply-row.clash .apply-slot {
+  color: var(--warn);
+}
+
+.apply-row.clash .apply-slot .check-name {
+  color: var(--warn);
+}
+
+.clash-mark {
+  flex-shrink: 0;
+  color: var(--warn);
 }
 
 .check {
