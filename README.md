@@ -1,24 +1,33 @@
 # BindSight
 
-Star Citizen joystick binding visualizer. Answers "what does each button do,
-and where does each action live?" by joining SC's own config with live
-joystick input.
+Star Citizen binding visualizer and mapper. Answers "what does each button
+do, and where does each action live?" by joining SC's own config with live
+input from your joysticks, gamepad, keyboard and mouse.
 
-- **Monitor**: press a button, move an axis, flip a hat — see the bound
-  action(s), their category and the SC input token. Optional image-maps light
-  up the control on a picture of your device. Below it, every joystick binding
-  of your profile resolved to a label, sortable and filterable per device,
-  including the shipped defaults you never rebound.
-- **Bindings**: SC's action list, your exported binding profiles
-  (import/export), backups of `actionmaps.xml` with restore, and a Compare
-  view that diffs any two of them per input.
+- **Monitor**: press a key or button, move an axis, flip a hat — see the
+  bound action(s), their category and the SC input token. Image-maps light
+  up the control on a picture of your device (bundled: US / DE keyboards,
+  full and TKL, Xbox and PlayStation pads; joystick maps you draw yourself).
+  Below it, every binding of your connected devices resolved to a label,
+  sortable and filterable per device, including the shipped defaults you
+  never rebound. Joysticks get their `jsN` from the order the game itself
+  logged, never from a guess.
+- **Bindings**: the game's keybinding screen as a table, one column per
+  device, editable without starting the game — Save writes `actionmaps.xml`
+  after a verified backup. Binding profiles (save the live file as one,
+  import / export), backups with restore, Apply of a profile or backup per
+  device, and a Compare view that diffs a profile or backup against the
+  current bindings per input.
 - **Device order**: detects the `jsN` shift SC applies when devices enumerate
   in a different order (from `Game.log`) and fixes it — via
   `pp_resortdevices` console commands or by rewriting `actionmaps.xml`.
-- **Devices**: an editor for image-maps (rectangles, ellipses, polygons and
-  arrow/rotation symbols per input), with zip export/import, plus Device
-  Info: every fact about your devices and a live input-event log, each
-  savable as text.
+- **Devices**: an editor for image-maps (rectangles, ellipses, polygons,
+  arcs, wedges, arrow / rotation symbols and images per input, own colours),
+  with zip export / import, plus Device Info: every fact about your devices
+  and a live input-event log, each savable as text.
+- **Game-file safety**: every write to a live game file takes a byte-exact
+  verified backup first (unless you switch that off), every rewrite is
+  re-parsed before it touches the disk, and writes are atomic.
 
 Game data (action list, labels, input token names) is pulled out of your own
 install's `Data.p4k` at runtime with the bundled [StarBreaker](https://github.com/diogotr7/StarBreaker)

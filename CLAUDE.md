@@ -1,7 +1,8 @@
 # BindSight — Claude project guide
 
-Star Citizen joystick binding visualizer. Answers "what does each button do, and
-where does each action live?" by joining SC's config with live joystick input.
+Star Citizen binding visualizer and mapper. Answers "what does each button
+do, and where does each action live?" by joining SC's config with live input
+from joysticks, gamepads, keyboard and mouse.
 Secondary: the tools the game lacks — editing bindings without starting it,
 binding profiles, backups, applying a profile or backup per device, comparing
 two binding sets, and fixing the joystick order.
