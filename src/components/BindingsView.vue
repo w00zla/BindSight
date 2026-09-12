@@ -1652,7 +1652,7 @@ async function compareWith(key: string) {
       :subtitle="rebind.category"
       icon="target"
       :buttons="rebindButtons"
-      :width="680"
+      :width="760"
       captureKeys
       @choose="onRebindChoose"
     >
