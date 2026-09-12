@@ -390,12 +390,25 @@ pub fn analyze_clash(
     // part in the order, and must not turn up as "unseen" either.
     let devices: Vec<&DeviceInfo> = devices.iter().filter(|d| d.kind == DeviceKind::Joystick).collect();
 
+    // A log with only `xinput` lines says SC saw no joystick at all: no
+    // order to hold the saved slots against, so none of them is "missing".
+    if log.joysticks.is_empty() {
+        return ClashReport {
+            log_error: Some(GameLogError::NoJoystickLines),
+            unseen: devices
+                .iter()
+                .map(|d| UnseenDevice { name: d.sc_name.clone(), sc_product_guid: d.sc_product_guid.clone() })
+                .collect(),
+            log_timestamp: log.timestamp.clone(),
+            gamepad_seen: !log.gamepads.is_empty(),
+            ..Default::default()
+        };
+    }
+
     let mut connected = Vec::with_capacity(log.joysticks.len());
-    let mut has_clash = false;
     for j in &log.joysticks {
         let stored_instance = j.product_guid.as_deref().and_then(|g| instance_for_guid(profile, g));
         let clash = matches!(stored_instance, Some(i) if i != j.instance);
-        has_clash |= clash;
         connected.push(SlotStatus {
             effective_instance: j.instance,
             stored_instance,
@@ -420,7 +433,6 @@ pub fn analyze_clash(
             sc_product_guid: js.product_guid.clone(),
         })
         .collect();
-    has_clash |= !missing.is_empty();
 
     let unseen = devices
         .iter()
@@ -430,6 +442,10 @@ pub fn analyze_clash(
 
     let resort = plan_resort(&connected, &missing);
     let resort_commands = resort_commands(&resort);
+    // A clash is what a resort would fix: a saved slot on the wrong device,
+    // or a missing device whose slot shifts the others. A missing device on
+    // the highest slot moves nothing — it is listed, not a clash.
+    let has_clash = !resort.is_empty();
 
     ClashReport {
         connected,
@@ -685,6 +701,36 @@ mod tests {
         assert!(report.connected[0].connected_now);
         assert!(!report.connected[1].connected_now);
         assert!(report.unseen.is_empty());
+    }
+
+    #[test]
+    fn a_missing_device_on_the_highest_slot_is_no_clash() {
+        // R on js1 as SC says; L saved on js2 but unplugged: nothing shifts.
+        let xml = r#"<ActionMaps>
+          <options type="joystick" instance="1" Product=" VKB R {0200231D-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="2" Product=" VKB L {0201231D-0000-0000-0000-504944564944}"/>
+        </ActionMaps>"#;
+        let profile = parse_actionmaps(xml).unwrap();
+        let log = LogEnumeration { joysticks: linux_log().joysticks.into_iter().take(1).collect(), gamepads: Vec::new(), timestamp: None };
+        let report = analyze_clash(&profile, &[dev(VKB_R, "R")], Ok(&log));
+        assert_eq!(report.missing.len(), 1);
+        assert!(report.resort.is_empty());
+        assert!(!report.has_clash);
+    }
+
+    #[test]
+    fn a_pad_only_game_log_is_no_joystick_order() {
+        let xml = r#"<ActionMaps>
+          <options type="joystick" instance="1" Product=" VKB R {0200231D-0000-0000-0000-504944564944}"/>
+        </ActionMaps>"#;
+        let profile = parse_actionmaps(xml).unwrap();
+        let log = LogEnumeration { joysticks: Vec::new(), gamepads: vec!["Gamepad".into()], timestamp: None };
+        let report = analyze_clash(&profile, &[dev(VKB_R, "R")], Ok(&log));
+        assert_eq!(report.log_error, Some(GameLogError::NoJoystickLines));
+        assert!(report.missing.is_empty());
+        assert!(!report.has_clash);
+        assert!(report.gamepad_seen);
+        assert_eq!(report.unseen.len(), 1);
     }
 
     #[test]

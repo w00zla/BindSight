@@ -205,7 +205,9 @@ export interface UnseenDevice {
 // Why Game.log could not be used, so the GUI can say exactly what is wrong.
 export type GameLogError =
   | { kind: "not_found"; path: string; reason: string }
-  | { kind: "no_device_lines"; path: string };
+  | { kind: "no_device_lines"; path: string }
+  // The game listed a gamepad but no joystick at its last start.
+  | { kind: "no_joystick_lines" };
 
 // One resort step: the bindings saved under js{from} belong on js{to}.
 export interface ResortMove {

@@ -23,6 +23,7 @@ function onConfirmApply(value: string) {
 const logErrorTitle = computed(() => {
   const le = props.report?.log_error;
   if (!le) return "";
+  if (le.kind === "no_joystick_lines") return "The game listed no joystick at its last start";
   return le.kind === "not_found" ? `${le.path}: ${le.reason}` : le.path;
 });
 

@@ -111,6 +111,9 @@ pub enum GameLogError {
     /// `Connected xinputN` line — SC saw no input device at its last start, or
     /// the log format changed with a patch.
     NoDeviceLines { path: String },
+    /// The file lists a gamepad but no joystick: SC saw none at its last
+    /// start, so there is no joystick order (raised by the clash analysis).
+    NoJoystickLines,
 }
 
 /// Read and parse a `Game.log`.
