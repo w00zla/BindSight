@@ -190,9 +190,9 @@ fn apply_resort(
 
     let version = data.sc.version.as_ref().map(|v| v.label.as_str());
     let root = backups::backups_root(&app)?;
-    let backup = gamefile::replace_live_file(&root, &path, &rewritten, "before order fix", version, &data.sc.data.actions)?;
+    let backup = gamefile::replace_live_file(&root, &path, &rewritten, "before order fix", data.config.auto_backup, version, &data.sc.data.actions)?;
     let moves: Vec<String> = report.resort.iter().map(|m| format!("js{}->js{}", m.from, m.to)).collect();
-    info!("resort applied to {}: {} (backup {backup})", path.display(), moves.join(" "));
+    info!("resort applied to {}: {} ({})", path.display(), moves.join(" "), gamefile::backup_label(&backup));
 
     Ok(reload_bindings(&mut data))
 }
@@ -218,12 +218,12 @@ fn save_rebinds(
 
     let version = data.sc.version.as_ref().map(|v| v.label.as_str());
     let root = backups::backups_root(&app)?;
-    let backup = gamefile::replace_live_file(&root, &path, &rewritten, "before rebind", version, &data.sc.data.actions)?;
+    let backup = gamefile::replace_live_file(&root, &path, &rewritten, "before rebind", data.config.auto_backup, version, &data.sc.data.actions)?;
     let summary: Vec<String> = changes
         .iter()
         .map(|c| format!("{}/{}={}", c.actionmap, c.action, c.input.trim()))
         .collect();
-    info!("rebinds written to {}: {} (backup {backup})", path.display(), summary.join(" "));
+    info!("rebinds written to {}: {} ({})", path.display(), summary.join(" "), gamefile::backup_label(&backup));
 
     Ok(reload_bindings(&mut data))
 }

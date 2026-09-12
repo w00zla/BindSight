@@ -6,8 +6,10 @@
 //! replace the target by rename; the result is read back and compared.
 //! [`replace_live_file`] adds the rest of the contract: the new text must
 //! parse as an `actionmaps.xml`, a backup of the current file is taken and
-//! verified byte for byte, and only then the atomic write runs. Nothing here
-//! is gated by a setting — a live-file write without a backup does not exist.
+//! verified byte for byte, and only then the atomic write runs. The backup
+//! is skipped only when the user switched auto-backups off in Settings —
+//! their explicit choice, made against a warning (the one exception to the
+//! game-file safety rule); the parse check and the atomic write still run.
 
 use std::fs;
 use std::io::Write;
@@ -59,28 +61,40 @@ fn temp_path(path: &Path) -> PathBuf {
 /// Replace the live `actionmaps.xml` at `path` with `new_xml`, the guarded
 /// way: `new_xml` must parse, the current file is backed up under
 /// `backups_root` (reason `reason`, verified byte for byte by
-/// [`backups::create`]), then the atomic write runs. Returns the backup's id.
-/// A file that does not exist yet cannot be replaced (there is nothing to
-/// back up) — the game writes it first.
+/// [`backups::create`]) unless `auto_backup` is off, then the atomic write
+/// runs. Returns the backup's id, `None` when none was made. A file that
+/// does not exist yet cannot be replaced (there is nothing to back up) — the
+/// game writes it first.
 pub fn replace_live_file(
     backups_root: &Path,
     path: &Path,
     new_xml: &str,
     reason: &str,
+    auto_backup: bool,
     game_version: Option<&str>,
     actions: &[scdata::ActionMap],
-) -> Result<String, String> {
+) -> Result<Option<String>, String> {
     if !path.is_file() {
         return Err(format!("{}: not found", path.display()));
     }
     scdata::parse_actionmaps(new_xml).map_err(|e| format!("refusing to write: new content is not readable: {e}"))?;
-    let backup = backups::create(backups_root, path, reason, game_version, actions)?;
+    let backup = if auto_backup {
+        Some(backups::create(backups_root, path, reason, game_version, actions)?.id)
+    } else {
+        warn!("{}: writing without a backup (auto-backups off)", path.display());
+        None
+    };
     if let Err(e) = write_atomic(path, new_xml.as_bytes()) {
-        warn!("write of {} failed after backup {}: {e}", path.display(), backup.id);
+        warn!("write of {} failed ({}): {e}", path.display(), backup_label(&backup));
         return Err(e);
     }
-    info!("{} replaced (backup {})", path.display(), backup.id);
-    Ok(backup.id)
+    info!("{} replaced ({})", path.display(), backup_label(&backup));
+    Ok(backup)
+}
+
+/// `backup <id>` or `no backup`, for log lines.
+pub fn backup_label(backup: &Option<String>) -> String {
+    backup.as_ref().map_or_else(|| "no backup".to_string(), |id| format!("backup {id}"))
 }
 
 #[cfg(test)]
@@ -145,10 +159,25 @@ mod tests {
         let root = t.path("backups");
         fs::write(&live, XML).unwrap();
         let new_xml = XML.replace("js1_button1", "js1_button2");
-        let id = replace_live_file(&root, &live, &new_xml, "test", Some("4.10"), &[]).unwrap();
+        let id = replace_live_file(&root, &live, &new_xml, "test", true, Some("4.10"), &[]).unwrap().unwrap();
         assert_eq!(fs::read_to_string(&live).unwrap(), new_xml);
         // The backup holds the old bytes, exactly.
         assert_eq!(fs::read_to_string(root.join(&id).join("actionmaps.xml")).unwrap(), XML);
+        assert!(leftovers(&t.0).is_empty());
+    }
+
+    #[test]
+    fn replace_live_file_without_auto_backup_still_checks_and_writes_atomically() {
+        let t = Tmp::new();
+        let live = t.path("actionmaps.xml");
+        let root = t.path("backups");
+        fs::write(&live, XML).unwrap();
+        let new_xml = XML.replace("js1_button1", "js1_button2");
+        assert_eq!(replace_live_file(&root, &live, &new_xml, "test", false, None, &[]).unwrap(), None);
+        assert_eq!(fs::read_to_string(&live).unwrap(), new_xml);
+        assert!(!root.exists(), "no backup folder was made");
+        assert!(replace_live_file(&root, &live, "<ActionMaps><oops", "test", false, None, &[]).is_err());
+        assert_eq!(fs::read_to_string(&live).unwrap(), new_xml);
         assert!(leftovers(&t.0).is_empty());
     }
 
@@ -158,7 +187,7 @@ mod tests {
         let live = t.path("actionmaps.xml");
         let root = t.path("backups");
         fs::write(&live, XML).unwrap();
-        let err = replace_live_file(&root, &live, "<ActionMaps><oops", "test", None, &[]).unwrap_err();
+        let err = replace_live_file(&root, &live, "<ActionMaps><oops", "test", true, None, &[]).unwrap_err();
         assert!(err.contains("refusing to write"), "{err}");
         assert_eq!(fs::read_to_string(&live).unwrap(), XML);
         assert!(!root.exists(), "no backup for a refused write");
@@ -168,7 +197,7 @@ mod tests {
     fn replace_live_file_needs_an_existing_file() {
         let t = Tmp::new();
         let live = t.path("actionmaps.xml");
-        let err = replace_live_file(&t.path("backups"), &live, XML, "test", None, &[]).unwrap_err();
+        let err = replace_live_file(&t.path("backups"), &live, XML, "test", true, None, &[]).unwrap_err();
         assert!(err.contains("not found"));
         assert!(!live.exists());
     }

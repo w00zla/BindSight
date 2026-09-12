@@ -34,7 +34,9 @@ folder), whose structure and processing can change with any game patch.
 any time. Concretely:
 
 - **A verified backup before every write** to a live game file; restore is
-  byte-exact. Never write without one.
+  byte-exact. Never write without one — except when the user switched
+  auto-backups off in Settings, their explicit choice made against a
+  warning dialog.
 - **Watertight sanitizing** of every user input that reaches a file, a path
   or an XML attribute (names, tokens, ids, paths: no traversal, nothing
   that needs escaping).
@@ -181,7 +183,8 @@ presentational components:
 - `gamefile.rs` — the one road every live-file write takes:
   `write_atomic` (temp file next to the target, `sync_all`, rename, read-back
   compare) and `replace_live_file` (new text must parse, verified backup
-  first, then the atomic write; not gated by any setting). Used by
+  first unless the user switched auto-backups off, then the atomic
+  write). Used by
   `save_rebinds`, `apply_resort`, `apply.rs`, `backups.rs` (copy + restore),
   `binding_profiles.rs` (save / export) and `write_text_file`.
 - `resort.rs` — textual `actionmaps.xml` rewrite applying a resort (joystick
@@ -231,7 +234,9 @@ presentational components:
   every write to the live file (rebind, apply, order fix, restore); a
   backup counts only once its copy compares byte for byte with the source,
   a restore refuses a backup that no longer parses. `Config::auto_backup`
-  no longer gates anything.
+  (default on) gates the backups before a write and before a restore —
+  the one exception to the safety rule, the user's explicit choice: the
+  Settings checkbox asks with a warning before it goes off.
 - `diff.rs` — compares the joystick bindings of two sources (live file,
   binding profile, or backup) by SC token: the `(actionmap, action)` set per
   token in A vs B (label-only differences are not changes); added / removed /

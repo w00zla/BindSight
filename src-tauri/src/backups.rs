@@ -1,10 +1,11 @@
 //! Backups of the live `actionmaps.xml`: one folder per backup under
 //! `<app_data_dir>/backups/<id>/`, holding a copy of the file (`actionmaps.xml`)
 //! plus `meta.json` (when it was made, why, and for which game version). Taken
-//! manually (Bindings mode) and, always, before every write to the live file
-//! (`gamefile::replace_live_file`: rebind, apply, order fix) and before a
-//! restore (so a restore is itself undoable). A backup is verified byte for
-//! byte against its source before it counts as made.
+//! manually (Bindings mode) and, while `Config::auto_backup` is on (the
+//! default; switching it off is warned against), before every write to the
+//! live file (`gamefile::replace_live_file`: rebind, apply, order fix) and
+//! before a restore (so a restore is itself undoable). A backup is verified
+//! byte for byte against its source before it counts as made.
 //!
 //! The pure logic works on `&Path` roots so it is testable without an
 //! `AppHandle`; the `#[tauri::command]` wrappers only resolve the root.
@@ -210,15 +211,16 @@ pub fn delete(root: &Path, id: &str) -> Result<(), String> {
 
 /// Restore backup `id` over the live `actionmaps`, byte for byte: the backup
 /// must still parse as an `actionmaps.xml` (a broken file is never written
-/// over a working one), a safety backup of the current file is made first
-/// (reason `"before restore"`) unless `actionmaps` doesn't exist yet, then
-/// the backup's bytes replace it atomically. Never touches the backup
-/// itself. Returns the safety backup's summary, or `None` when nothing
-/// existed to back up.
+/// over a working one), with `auto_backup` a safety backup of the current
+/// file is made first (reason `"before restore"`) unless `actionmaps`
+/// doesn't exist yet, then the backup's bytes replace it atomically. Never
+/// touches the backup itself. Returns the safety backup's summary, or
+/// `None` when none was made.
 pub fn restore(
     root: &Path,
     id: &str,
     actionmaps: &Path,
+    auto_backup: bool,
     game_version: Option<&str>,
     actions: &[scdata::ActionMap],
 ) -> Result<Option<BackupSummary>, String> {
@@ -226,7 +228,7 @@ pub fn restore(
     let bytes = fs::read(&backup_path).map_err(|e| format!("{}: {e}", backup_path.display()))?;
     scdata::parse_actionmaps(&String::from_utf8_lossy(&bytes))
         .map_err(|e| format!("backup {id} is not a readable bindings file, not restored: {e}"))?;
-    let safety = if actionmaps.is_file() {
+    let safety = if auto_backup && actionmaps.is_file() {
         Some(create(root, actionmaps, "before restore", game_version, actions)?)
     } else {
         None
@@ -283,8 +285,9 @@ pub(crate) fn restore_backup(id: String, app: AppHandle, data: State<Mutex<AppDa
     let mut data = data.lock().unwrap();
     let path = config::actionmaps_path(data.config.base_path());
     let version = data.sc.version.as_ref().map(|v| v.label.as_str());
-    restore(&root, &id, &path, version, &data.sc.data.actions)?;
-    info!("backup {id} restored to {}", path.display());
+    let safety = restore(&root, &id, &path, data.config.auto_backup, version, &data.sc.data.actions)?;
+    let label = gamefile::backup_label(&safety.map(|s| s.id));
+    info!("backup {id} restored to {} ({label})", path.display());
     Ok(crate::reload_bindings(&mut data))
 }
 
@@ -504,7 +507,7 @@ mod tests {
         let backup = create(&root, &am, "manual", None, &sample_actions()).unwrap();
         fs::write(&am, actionmaps_xml()).unwrap(); // live file changes after the backup
 
-        let safety = restore(&root, &backup.id, &am, Some("4.10.0-hotfix.12572603"), &sample_actions()).unwrap();
+        let safety = restore(&root, &backup.id, &am, true, Some("4.10.0-hotfix.12572603"), &sample_actions()).unwrap();
         let safety = safety.expect("a safety backup is made when the live file exists");
         assert_eq!(safety.reason, "before restore");
         assert_eq!(safety.game_version.as_deref(), Some("4.10.0-hotfix.12572603"));
@@ -529,9 +532,25 @@ mod tests {
         let backup = create(&root, &t.path("source.xml"), "manual", None, &sample_actions()).unwrap();
 
         assert!(!am.is_file());
-        let safety = restore(&root, &backup.id, &am, None, &sample_actions()).unwrap();
+        let safety = restore(&root, &backup.id, &am, true, None, &sample_actions()).unwrap();
         assert!(safety.is_none());
         assert_eq!(fs::read_to_string(&am).unwrap(), actionmaps_xml());
+    }
+
+    #[test]
+    fn restore_without_auto_backup_makes_no_safety_backup() {
+        let t = Tmp::new();
+        let root = t.path("backups");
+        let am = t.path("live/actionmaps.xml");
+        fs::create_dir_all(am.parent().unwrap()).unwrap();
+        fs::write(&am, OLD_XML).unwrap();
+        let backup = create(&root, &am, "manual", None, &sample_actions()).unwrap();
+        fs::write(&am, actionmaps_xml()).unwrap();
+
+        let safety = restore(&root, &backup.id, &am, false, None, &sample_actions()).unwrap();
+        assert!(safety.is_none());
+        assert_eq!(fs::read_to_string(&am).unwrap(), OLD_XML);
+        assert_eq!(list(&root, &sample_actions()).len(), 1, "only the restored backup exists");
     }
 
     #[test]
@@ -545,7 +564,7 @@ mod tests {
         // The backup gets damaged on disk after it was made.
         fs::write(root.join(&backup.id).join(XML_FILE), "<ActionMaps><broken").unwrap();
 
-        let err = restore(&root, &backup.id, &am, None, &sample_actions()).unwrap_err();
+        let err = restore(&root, &backup.id, &am, true, None, &sample_actions()).unwrap_err();
         assert!(err.contains("not restored"), "{err}");
         assert_eq!(fs::read_to_string(&am).unwrap(), actionmaps_xml(), "live file untouched");
         assert_eq!(list(&root, &sample_actions()).len(), 0, "no safety backup, and the damaged one no longer lists");

@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
 import Dropdown from "./Dropdown.vue";
+import ConfirmDialog from "./ConfirmDialog.vue";
 import { ENVIRONMENTS, type DeviceInfo, type Environment } from "../types";
 import { deviceName } from "../devices";
 
@@ -40,6 +41,23 @@ const envs = ref<Record<string, Environment>>(
 );
 const excluded = ref<string[]>([...props.excluded]);
 const autoBackup = ref(props.autoBackup);
+// Switching auto-backups off is the one exception to the game-file safety
+// rule: the user's explicit choice, made against a warning.
+const confirmNoBackup = ref(false);
+function onAutoBackupChange(e: Event) {
+  const on = (e.target as HTMLInputElement).checked;
+  if (on) {
+    autoBackup.value = true;
+    return;
+  }
+  // Keep the box ticked until the warning is answered.
+  (e.target as HTMLInputElement).checked = true;
+  confirmNoBackup.value = true;
+}
+function onNoBackupChoose(value: string) {
+  confirmNoBackup.value = false;
+  if (value === "disable") autoBackup.value = false;
+}
 const debugLogging = ref(props.debugLogging);
 const withGuid = computed(() => props.devices.filter((d): d is DeviceInfo & { sc_product_guid: string } => !!d.sc_product_guid));
 const isExcluded = (guid: string) => excluded.value.some((g) => g.toLowerCase() === guid.toLowerCase());
@@ -153,7 +171,7 @@ async function browseIni(slug: string) {
         <section>
           <div class="panel-title">Backups</div>
           <div class="row between">
-            <label class="check"><input v-model="autoBackup" type="checkbox" /> Enable auto-backups</label>
+            <label class="check"><input :checked="autoBackup" type="checkbox" @change="onAutoBackupChange" /> Enable auto-backups</label>
             <button type="button" class="btn outline" @click="openBackupsDir">Open Backup Folder</button>
           </div>
         </section>
@@ -175,6 +193,18 @@ async function browseIni(slug: string) {
         </button>
       </div>
     </div>
+    <ConfirmDialog
+      v-if="confirmNoBackup"
+      title="Disable auto-backups?"
+      icon="warning"
+      :buttons="[
+        { label: 'Disable', kind: 'danger', value: 'disable' },
+        { label: 'Keep Backups', kind: 'primary', value: 'keep' },
+      ]"
+      @choose="onNoBackupChoose"
+    >
+      <p class="dialog-text">Every change to the game's bindings is backed up first so it can be undone. Without backups a change cannot be taken back.</p>
+    </ConfirmDialog>
   </div>
 </template>
 
@@ -268,6 +298,13 @@ async function browseIni(slug: string) {
 .input:disabled {
   opacity: 0.4;
 }
+/* The warning under the auto-backup question: regular text, not a note. */
+.dialog-text {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+}
+
 .check {
   white-space: nowrap;
 }

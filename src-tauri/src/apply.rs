@@ -131,8 +131,8 @@ pub(crate) fn apply_bindings(
     let rewritten = rebind::apply_rebinds(&xml, &changes)?;
 
     let version = data.sc.version.as_ref().map(|v| v.label.as_str());
-    let backup = gamefile::replace_live_file(&backups_root, &path, &rewritten, "before apply", version, &data.sc.data.actions)?;
-    info!("applied {:?} to {}: {} change(s) (backup {backup})", source, path.display(), changes.len());
+    let backup = gamefile::replace_live_file(&backups_root, &path, &rewritten, "before apply", data.config.auto_backup, version, &data.sc.data.actions)?;
+    info!("applied {:?} to {}: {} change(s) ({})", source, path.display(), changes.len(), gamefile::backup_label(&backup));
     Ok(crate::reload_bindings(&mut data))
 }
 
