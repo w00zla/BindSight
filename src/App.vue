@@ -142,7 +142,6 @@ function endStartup() {
 // Set while a base-path change is being loaded, so its result gets a toast.
 let awaitingPathLoad = false;
 // SC Product GUIDs the user marked "SC doesn't see this device" (persisted per OS).
-const excludedDevices = ref<string[]>([]);
 const error = ref<string | null>(null);
 // The live actionmaps.xml is parsed (from the last LoadStatus).
 const currentLoaded = ref(false);
@@ -190,11 +189,12 @@ function imgSrc(id: string, file: string): string {
   return mapImages.value[`${id}/${file}`] ?? "";
 }
 
-// Devices the stage shows at all: a further pad has no slot, so it has no
-// bindings and no tile, and the user can hide any device by hand.
+// Devices the stage shows at all: a further pad has no slot and a joystick
+// the game does not see has no jsN, so neither has bindings or a tile; the
+// user can hide any other device by hand.
 function onStage(d: DeviceInfo): boolean {
   if (d.kind === "gamepad" && d.gamepad_slot === null) return false;
-  if (isExcludedDevice(d)) return false;
+  if (deviceUnseen(d)) return false;
   return !isStageHidden(d);
 }
 
@@ -292,7 +292,7 @@ function resetInputCard() {
   saveLayout();
 }
 
-// Connected, not excluded devices without an image-map (placeholder tiles).
+// Connected devices on the stage without an image-map (placeholder tiles).
 const stagePlaceholders = computed<DeviceInfo[]>(() =>
   orderedDevices.value.filter(
     (d) => onStage(d) && !mapViews.value.some((v) => v.device.index === d.index),
@@ -441,7 +441,7 @@ function deviceOfEvent(p: JoyInput): DeviceInfo | undefined {
 // order, never the saved <options> slot); without that order, on none.
 function deviceForBinding(b: ResolvedBinding): DeviceInfo | undefined {
   const d = deviceForKind(b);
-  return d && !isExcludedDevice(d) ? d : undefined;
+  return d && !deviceUnseen(d) ? d : undefined;
 }
 
 function deviceForKind(b: ResolvedBinding): DeviceInfo | undefined {
@@ -649,43 +649,27 @@ function isUnseen(guid: string | null): boolean {
   return !!guid && unseenGuids.value.has(guid);
 }
 
-// The exclusion list holds hardware ids: the SC Product GUID of a joystick,
-// `keyboard`, `gamepad` (every pad is that one device to SC).
-function isExcluded(hardwareId: string | null): boolean {
-  return !!hardwareId && excludedDevices.value.some((g) => g.toLowerCase() === hardwareId.toLowerCase());
-}
-
-function isExcludedDevice(d: DeviceInfo): boolean {
-  return isExcluded(d.hardware_id);
-}
-
-// The hardware id behind a Last Input card entry.
-function hardwareIdOf(c: CurrentInput): string | null {
-  return c.kind === "keyboard" ? "keyboard" : c.kind === "gamepad" ? "gamepad" : c.sc_guid;
-}
-
 // Display order everywhere a device list is shown: the keyboard, the slotted
-// pad, the joysticks SC sees, then everything SC does not (unseen, excluded,
-// pads without a slot) — SDL order within a group.
+// pad, the joysticks SC sees, then everything SC does not (unseen, pads
+// without a slot) — SDL order within a group.
 function deviceRank(d: DeviceInfo): number {
   if (d.kind === "keyboard") return 0;
   if (d.kind === "gamepad" && d.gamepad_slot === null) return 3;
-  if (deviceUnseen(d) || isExcludedDevice(d)) return 3;
+  if (deviceUnseen(d)) return 3;
   return d.kind === "gamepad" ? 1 : 2;
 }
 const orderedDevices = computed<DeviceInfo[]>(() =>
   [...devices.value].sort((a, b) => deviceRank(a) - deviceRank(b) || a.index - b.index),
 );
-// The Monitor's device rail: excluded devices stay out of it (Settings and
-// the Devices mode still list them).
+// The Monitor's device rail: a joystick the game does not see stays out of
+// it (only the Device List says so).
 const monitorDevices = computed<DeviceInfo[]>(() =>
-  orderedDevices.value.filter((d) => !isExcludedDevice(d)),
+  orderedDevices.value.filter((d) => !deviceUnseen(d)),
 );
-// Settings dialog Save: apply the exclusions and the environments; the
+// Settings dialog Save: apply the environments and the switches; the
 // backend reloads when the active environment changed.
 async function applySettings(s: {
   environments: Record<string, Environment>;
-  excluded: string[];
   autoBackup: boolean;
   debugLogging: boolean;
 }) {
@@ -696,7 +680,6 @@ async function applySettings(s: {
   if (envChanged && !(await bindingsSettled())) return;
   showSettings.value = false;
   try {
-    excludedDevices.value = await invoke<string[]>("set_excluded_devices", { guids: s.excluded });
     await invoke("set_auto_backup", { enabled: s.autoBackup });
     autoBackup.value = s.autoBackup;
     await invoke("set_debug_logging", { enabled: s.debugLogging });
@@ -755,15 +738,10 @@ async function loadClash(announce = false) {
   }
 }
 
-// Hot-plug toasts, one per device; excluded devices are the user's "I do not
-// care", so they stay silent.
+// Hot-plug toasts, one per device.
 function announceDevices(change: DevicesChanged) {
-  for (const d of change.added) {
-    if (!isExcludedDevice(d)) notify(`${deviceName(d)} connected`, "ok");
-  }
-  for (const d of change.removed) {
-    if (!isExcludedDevice(d)) notify(`${deviceName(d)} disconnected`, "hint");
-  }
+  for (const d of change.added) notify(`${deviceName(d)} connected`, "ok");
+  for (const d of change.removed) notify(`${deviceName(d)} disconnected`, "hint");
 }
 
 // The game log was read: at start-up / after an environment change quietly,
@@ -928,8 +906,12 @@ function onInput(p: JoyInput) {
   if (p.kind === "key") keyInput.value = p;
   if (mode.value !== "monitor") return;
   trackActive(p);
-  // A pad without a slot is not gp1 — SC has no bindings for it.
-  if ((p.kind === "padbutton" || p.kind === "padaxis") && deviceOfEvent(p)?.gamepad_slot === null) return;
+  // A pad without a slot is not gp1 — SC has no bindings for it. A joystick
+  // the game does not see has no jsN: nothing to show, only the Device List
+  // (and the app log) tell that SDL lists it and the game does not.
+  const source = deviceOfEvent(p);
+  if ((p.kind === "padbutton" || p.kind === "padaxis") && source?.gamepad_slot === null) return;
+  if (source && deviceUnseen(source)) return;
   switch (p.kind) {
     case "button":
     case "padbutton":
@@ -1094,15 +1076,13 @@ function sdlInputName(p: JoyInput): string {
   }
 }
 
-// Live card colour: yellow when SC doesn't see the device (unseen or excluded
-// — any SC token is meaningless then) or has no device order at all, blue
-// when the input has SC bindings, grey otherwise. The keyboard is always
-// there for SC.
+// Live card colour: yellow when there is no device order at all (a joystick
+// the game does not see never reaches the card, see `onInput`), blue when
+// the input has SC bindings, grey otherwise. The keyboard is always there
+// for SC.
 function liveState(): LiveState {
   const c = currentInput.value;
   if (!c) return "none";
-  if (isExcluded(hardwareIdOf(c))) return "unseen";
-  if (c.kind === "joystick" && isUnseen(c.sc_guid)) return "unseen";
   if (c.kind === "joystick" && noOrder.value) return "noorder";
   return c.actions.length ? "bound" : "none";
 }
@@ -1195,7 +1175,6 @@ onMounted(async () => {
     const cfg = await invoke<Config>("get_config");
     environments.value = cfg.environments;
     activeEnv.value = cfg.active_env;
-    excludedDevices.value = cfg.ignored_devices;
     autoBackup.value = cfg.auto_backup;
     debugLogging.value = cfg.debug_logging;
     setDebugLogging(cfg.debug_logging);
@@ -1253,8 +1232,6 @@ onUnmounted(() => {
     <SettingsDialog
       v-if="showSettings"
       :environments="environments"
-      :devices="orderedDevices"
-      :excluded="excludedDevices"
       :autoBackup="autoBackup"
       :debugLogging="debugLogging"
       @close="showSettings = false"
@@ -1276,7 +1253,6 @@ onUnmounted(() => {
           :key="d.index"
           :device="d"
           :slot="slotFor(d.sc_product_guid)"
-          :unseen="deviceUnseen(d)"
           :noOrder="d.kind === 'joystick' && noOrder"
           :bindingCount="bindingCountFor(d)"
           :hidden="isStageHidden(d)"
@@ -1312,7 +1288,6 @@ onUnmounted(() => {
         <LastInputCard
           :input="currentInput"
           :state="liveState()"
-          :excluded="!!currentInput && isExcluded(hardwareIdOf(currentInput))"
           :tokenLabel="tokenLabel"
           :categoryLabel="actionmapLabel"
         />
@@ -1357,7 +1332,7 @@ onUnmounted(() => {
       :keyInput="keyInput"
       :chosenMapId="chosenMapId"
       :tokenLabel="tokenLabel"
-      :isExcluded="isExcludedDevice"
+      :isUnseen="deviceUnseen"
       :clash="clash"
       :systemLine="systemLine"
       @choose="setMapChoice"

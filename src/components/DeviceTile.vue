@@ -8,7 +8,6 @@ import { KEY_COUNT, MOUSE_INPUTS } from "../keyboard";
 const props = defineProps<{
   device: DeviceInfo;
   slot: SlotStatus | null;
-  unseen: boolean;
   // The game's device order is unknown, so the joystick has no jsN: a
   // warning takes the slot chip's place, the rest of the tile is as usual.
   noOrder: boolean;
@@ -18,9 +17,10 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ toggleMap: [] }>();
 
-// A further pad holds no SC slot: it cannot carry bindings.
+// A further pad holds no SC slot: it cannot carry bindings. (A joystick the
+// game does not see never reaches the rail.)
 const noSlot = computed(() => props.device.kind === "gamepad" && props.device.gamepad_slot === null);
-const dimmed = computed(() => props.unseen || noSlot.value);
+const dimmed = noSlot;
 
 // Device kind icon at the start of the tile.
 const kindIcon = computed(() => deviceIcon(props.device));
@@ -45,7 +45,6 @@ const name = computed(() => deviceName(props.device));
 const state = computed(() => {
   const d = props.device;
   if (noSlot.value) return "no slot";
-  if (props.unseen) return "not seen by game";
   const counts =
     d.kind === "keyboard" ? [`${KEY_COUNT} keys`, `${MOUSE_INPUTS.length} btns`] : [`${d.num_buttons} btns`, `${d.num_axes} axes`, `${d.num_hats} hats`];
   return [`${props.bindingCount} bindings`, ...counts].join(" · ");

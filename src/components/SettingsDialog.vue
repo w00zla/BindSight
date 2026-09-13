@@ -1,17 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
-import Dropdown from "./Dropdown.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
-import { ENVIRONMENTS, type DeviceInfo, type Environment } from "../types";
-import { deviceName } from "../devices";
+import { ENVIRONMENTS, type Environment } from "../types";
 
 const props = defineProps<{
   environments: Record<string, Environment>;
-  devices: DeviceInfo[];
-  excluded: string[];
   autoBackup: boolean;
   debugLogging: boolean;
 }>();
@@ -25,7 +21,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 const emit = defineEmits<{
   close: [];
   save: [
-    settings: { environments: Record<string, Environment>; excluded: string[]; autoBackup: boolean; debugLogging: boolean },
+    settings: { environments: Record<string, Environment>; autoBackup: boolean; debugLogging: boolean },
   ];
   notify: [message: string, type: "ok" | "error"];
 }>();
@@ -39,7 +35,6 @@ const envs = ref<Record<string, Environment>>(
     ]),
   ),
 );
-const excluded = ref<string[]>([...props.excluded]);
 const autoBackup = ref(props.autoBackup);
 // Switching auto-backups off is the one exception to the game-file safety
 // rule: the user's explicit choice, made against a warning.
@@ -59,32 +54,6 @@ function onNoBackupChoose(value: string) {
   if (value === "disable") autoBackup.value = false;
 }
 const debugLogging = ref(props.debugLogging);
-// Exclusion is by hardware id (a joystick's SC Product GUID, `gamepad`):
-// joysticks and the pad can go, the keyboard (with the mouse) never — SC
-// always has it. Several pads are one entry.
-const withId = computed(() => {
-  const seen = new Set<string>();
-  return props.devices.filter((d): d is DeviceInfo & { hardware_id: string } => {
-    if (!d.hardware_id || d.kind === "keyboard" || seen.has(d.hardware_id.toLowerCase())) return false;
-    seen.add(d.hardware_id.toLowerCase());
-    return true;
-  });
-});
-const isExcluded = (id: string) => excluded.value.some((g) => g.toLowerCase() === id.toLowerCase());
-const addable = computed(() => withId.value.filter((d) => !isExcluded(d.hardware_id)));
-
-function nameFor(id: string): string {
-  const d = withId.value.find((x) => x.hardware_id.toLowerCase() === id.toLowerCase());
-  return d ? deviceName(d) : id;
-}
-
-function remove(id: string) {
-  excluded.value = excluded.value.filter((g) => g.toLowerCase() !== id.toLowerCase());
-}
-
-function add(id: string) {
-  if (id && !isExcluded(id)) excluded.value = [...excluded.value, id];
-}
 
 // Immediate, not part of Save: opens the folder in the file manager.
 async function openLogDir() {
@@ -159,26 +128,6 @@ async function browseIni(slug: string) {
         </section>
 
         <section>
-          <div class="panel-title">Excluded Devices</div>
-          <div class="chips">
-            <span v-for="g in excluded" :key="g" class="chip">
-              {{ nameFor(g) }}
-              <button type="button" class="icon-btn small" title="Remove" @click="remove(g)">
-                <Icon name="close" :size="12" />
-              </button>
-            </span>
-            <Dropdown
-              v-if="addable.length"
-              variant="dashed"
-              modelValue=""
-              placeholder="Add device"
-              :options="addable.map((d) => ({ value: d.hardware_id, label: deviceName(d) }))"
-              @update:modelValue="add"
-            />
-          </div>
-        </section>
-
-        <section>
           <div class="panel-title">Backups</div>
           <div class="row between">
             <label class="check"><input :checked="autoBackup" type="checkbox" @change="onAutoBackupChange" /> Enable auto-backups</label>
@@ -197,7 +146,7 @@ async function browseIni(slug: string) {
 
       <div class="foot">
         <button type="button" class="btn outline" @click="emit('close')">Cancel</button>
-        <button type="button" class="btn primary" @click="emit('save', { environments: envs, excluded, autoBackup, debugLogging })">
+        <button type="button" class="btn primary" @click="emit('save', { environments: envs, autoBackup, debugLogging })">
           <Icon name="save" :size="14" />
           Save
         </button>

@@ -6,9 +6,6 @@ import type { CurrentInput, LiveState } from "../types";
 const props = defineProps<{
   input: CurrentInput | null;
   state: LiveState;
-  // Extra distinction the plain state does not carry: "excluded" (user marked
-  // it) vs "not seen by game" (SC's device order never listed it) both show as "unseen".
-  excluded: boolean;
   tokenLabel: (token: string) => string;
   categoryLabel: (actionmap: string) => string;
 }>();
@@ -35,8 +32,7 @@ const bigLabel = computed(() => {
     </div>
     <div v-if="input" class="row2">
       <span>{{ input.device }}</span>
-      <span v-if="state === 'unseen'" class="chip">{{ excluded ? "excluded" : "not seen by game" }}</span>
-      <span v-else-if="state === 'noorder'" class="chip">no joystick order</span>
+      <span v-if="state === 'noorder'" class="chip">no joystick order</span>
     </div>
     <div v-if="input?.actions.length" class="actions">
       <div v-for="(a, i) in input.actions" :key="i" class="action-row">

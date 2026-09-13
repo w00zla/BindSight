@@ -41,6 +41,7 @@ export interface DeviceInfo {
   sdl_vendor: number;
   sdl_product: number;
   sdl_product_version: number;
+  sdl_serial: string | null;
   sdl_type: string;
   sdl_path: string | null;
   power_level: string;
@@ -119,9 +120,6 @@ export interface Environment {
 export interface Config {
   environments: Record<string, Environment>;
   active_env: string;
-  // Wire name kept as `ignored_devices` (Rust serde rename on the renamed
-  // `excluded_devices` field) so existing config.json files still apply.
-  ignored_devices: string[];
   imagemap_choices: Record<string, string>;
   // Back up actionmaps.xml before BindSight overwrites it.
   auto_backup: boolean;
@@ -263,7 +261,7 @@ export interface ClashReport {
 
 // Last Input card colour: "unseen" (SC does not see the device), "noorder"
 // (a joystick while the game's device order is unknown), "bound", "none".
-export type LiveState = "unseen" | "noorder" | "bound" | "none";
+export type LiveState = "noorder" | "bound" | "none";
 
 // `sdl` is the SDL-side input name, shown when SC has no token for the input;
 // `sc_guid` lets the tile tell whether SC sees the device at all.

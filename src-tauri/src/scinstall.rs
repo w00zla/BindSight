@@ -405,7 +405,9 @@ mod tests {
             validate_install(&base),
             Err(format!("Missing '{}', '{}'", manifest.display(), actionmaps.display()))
         );
-        assert!(!validate_install(&base).unwrap_err().contains("default/actionmaps"), "no foreign separators");
+        // The other OS's separator must not sneak in (a hard-coded `/` would on Windows).
+        let foreign = if cfg!(windows) { "default/actionmaps" } else { "default\\actionmaps" };
+        assert!(!validate_install(&base).unwrap_err().contains(foreign), "no foreign separators");
 
         std::fs::write(dir.join("build_manifest.id"), b"").unwrap();
         std::fs::write(dir.join("user/client/0/Profiles/default/actionmaps.xml"), b"").unwrap();

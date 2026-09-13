@@ -194,24 +194,40 @@ presentational components:
   `analyze_clash` (saved `<options>` vs. SC's joystick order, a
   `DeviceOrder`; an empty order is an order, every saved slot then
   "missing"; `ClashReport::logged_order` = the game's logged order when it
-  ranks differently from the live one), `plan_resort` / `resort_commands`,
-  `without_excluded` (by hardware id).
+  ranks differently from the live one), `plan_resort` / `resort_commands`.
+  A joystick SDL lists that the order lacks is `unseen`: the GUI drops it
+  from Monitor, deck and image-map list without a word — only the Device
+  List ("seen by game") and the clash line in the app log name it.
 - `order.rs` — `DeviceOrder` (joysticks in SC's order + timestamp), the one
   type every order source yields: `instance_for_guid` is what the Monitor
   resolves against (`resolve_input`; without an order no joystick input
   resolves, keyboard and pad still do), `same_ranking` the log-vs-live
   check. `order::live()` is the platform switch: DirectInput on Windows,
-  `None` on Linux until Wine's enumeration is replicated — a Linux live
-  source plugs in there and nowhere else.
+  the Wine replication (`wineorder.rs`) on Linux; `Game.log` is never the
+  source, only the second opinion.
 - `dinput.rs` — Windows: DirectInput 8 `EnumDevices(DI8DEVCLASS_GAMECTRL,
   DIEDFL_ATTACHEDONLY)` via `windows-sys` with hand-rolled COM vtables
   (windows-sys ships none). The rank is `jsN`, `guidProduct` is byte for
   byte SC's `options/@Product` GUID; XInput devices (path carrying `ig_`,
   lower-case) are skipped. `DIPROP_GUIDANDPATH` is the pointer value 12,
   not a GUID in memory. `to_order` is the pure part with tests.
+- `wineorder.rs` — Linux: Wine's DirectInput enumeration replicated. Wine
+  answers `EnumDevices` from the registry, and wineserver keeps subkeys
+  sorted, so the order is the alphabetical order of the HID interface keys
+  `HID#VID_xxxx&PID_yyyy[&MI_nn]#<version>&<serial>&0&<index>&<gp>`: by
+  (vendor, product), identical devices by winebus's `index` (creation
+  order = udev enumeration, sorted by sysfs path). Visibility as winebus
+  decides it: HID usage joystick / gamepad only; one backend per device —
+  hidraw for `hidraw_preferred` vendors (all VKB / VPC, some TM / Fanatec /
+  Simucube, DualShock / DualSense), which must open read-write, SDL for the
+  rest; an SDL device that SDL maps as a controller (unless wheel / flight
+  stick) or has exactly 6 axes and 14+ buttons is a gamepad (`&IG_00`, SC's
+  `xinput`, no slot). `rank` is the pure part with tests, `enumerate` reads
+  hidapi + sysfs. Not replicated: registry overrides, the evdev backend,
+  multi-collection devices (`&ColNN`).
 - `gamelog.rs` — parse `Connected joystickN: <Product {GUID}>` into a
-  `DeviceOrder` (gamepad lines are not read: no slot). The order source on
-  Linux; on Windows the second opinion — the game keeps the order it
+  `DeviceOrder` (gamepad lines are not read: no slot). The second opinion
+  on both platforms, never the source — the game keeps the order it
   started with, so a live order that ranks differently means "restart the
   game" (Status panel tile).
 - `xmltext.rs` — helpers for the textual editors: `mask_markup` (a copy of
@@ -243,12 +259,9 @@ presentational components:
 - `config.rs` — JSON in the app config dir: the SC environments
   (`ENVIRONMENTS` = LIVE / HOTFIX / PTU / EPTU, each a base path + optional
   `global.ini` override; Windows default paths), the active one
-  (`Config::base_path()` / `global_ini_override()`), the exclusion list
-  (`excluded_devices`, hardware ids: a joystick's SC Product GUID,
-  `gamepad` — joysticks and the pad may go, the user may just not care
-  about them; the keyboard never, `config::excludable` drops it; on the
-  wire still `ignored_devices`), the image-map choice per
-  device, the auto-backup and debug-logging switches.
+  (`Config::base_path()` / `global_ini_override()`), the image-map choice
+  per device, the auto-backup and debug-logging switches. An older file's
+  `ignored_devices` (the Exclude feature of 0.10 – 0.12) is ignored.
   `load` fills missing environments with defaults; no migration of older
   shapes.
 - `imagemap.rs` — one folder per image-map (`imagemap.json` + image) under
@@ -396,6 +409,7 @@ cargo run --example log_joystick_events         # live event log
 cargo run --example hid_names                   # HID product strings
 cargo run --example hid_axes [-- --hex]         # HID axis usages + SC axes
 cargo run --example dinput_order                # SC's joystick order (Windows)
+cargo run --example wine_order                  # SC's joystick order under Wine (Linux)
 cargo run --example pad_events                  # pad mapping + controller-level events
 scripts/fetch-starbreaker.sh                    # sidecar binaries (once)
 ```
@@ -439,7 +453,9 @@ The game data cache lives per version under `~/.cache/com.w00zla.bindsight/
   DirectInput backend prepends every device to its list (the start
   enumeration comes out reversed, a hot-plug lands on index 0); on Linux the
   two are unrelated. `jsN` therefore comes from `order.rs` only — DirectInput
-  live on Windows, `Game.log` on Linux — never from SDL's enumeration, and
+  live on Windows, Wine's registry key order replicated on Linux
+  (`wineorder.rs`, verified 2026-09-13 against the prefix's `system.reg`,
+  sysfs and `Game.log`) — never from SDL's enumeration, and
   never from the saved `<options>` slot either (that is what the file says,
   the order is what the game does). The Monitor, the deck and the Bindings
   List's column names follow it; without an order the joysticks show "no

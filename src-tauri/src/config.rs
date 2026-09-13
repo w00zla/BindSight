@@ -59,15 +59,6 @@ pub struct Config {
     /// Slug of the environment the app reads.
     #[serde(default = "default_active_env")]
     pub active_env: String,
-    /// SC Product GUIDs of connected devices the user declared invisible to SC
-    /// ("SC doesn't see this device"), e.g. a keyboard that Wine hides from the
-    /// game. Lives in the per-OS config dir, so the list is naturally
-    /// platform-specific — the same device can be visible on Windows and
-    /// hidden under Wine. Older config files without the field still load.
-    /// Wire name kept as `ignored_devices` (serde rename) so existing
-    /// config.json files keep applying their exclusion list.
-    #[serde(default, rename = "ignored_devices")]
-    pub excluded_devices: Vec<String>,
     /// Which image-map to show per device: lowercase SC Product GUID -> image-map
     /// id. Only needed when several image-maps exist for one device.
     #[serde(default)]
@@ -90,7 +81,6 @@ impl Default for Config {
         Self {
             environments: default_environments(),
             active_env: default_active_env(),
-            excluded_devices: Vec::new(),
             imagemap_choices: HashMap::new(),
             auto_backup: default_auto_backup(),
             debug_logging: false,
@@ -109,7 +99,6 @@ impl Config {
         if !ENVIRONMENTS.contains(&self.active_env.as_str()) {
             self.active_env = default_active_env();
         }
-        self.excluded_devices = excludable(self.excluded_devices);
         self
     }
 
@@ -138,12 +127,6 @@ fn config_file(app: &AppHandle) -> Option<PathBuf> {
 }
 
 /// Load the config, or the default if none is stored / it cannot be read.
-/// The exclusion list without what can never be excluded: the keyboard
-/// (with the mouse) — SC always has it. Older configs may still carry it.
-pub fn excludable(list: Vec<String>) -> Vec<String> {
-    list.into_iter().filter(|g| !g.eq_ignore_ascii_case("keyboard")).collect()
-}
-
 pub fn load(app: &AppHandle) -> Config {
     config_file(app)
         .and_then(|path| std::fs::read_to_string(path).ok())
@@ -210,11 +193,12 @@ mod tests {
     }
 
     #[test]
-    fn the_keyboard_is_never_excluded() {
-        let json = r#"{"ignored_devices":["KEYBOARD","gamepad","{0201231D-0000-0000-0000-504944564944}"]}"#;
+    fn an_old_exclusion_list_is_ignored() {
+        // The Exclude feature (0.10 - 0.12) stored `ignored_devices`; a config
+        // written back then still loads.
+        let json = r#"{"ignored_devices":["gamepad","{0201231D-0000-0000-0000-504944564944}"],"active_env":"PTU"}"#;
         let c = serde_json::from_str::<Config>(json).unwrap().normalize();
-        assert_eq!(c.excluded_devices, vec!["gamepad", "{0201231D-0000-0000-0000-504944564944}"]);
-        assert_eq!(excludable(vec!["keyboard".into()]), Vec::<String>::new());
+        assert_eq!(c.active_env, "PTU");
     }
 
     #[test]
@@ -224,7 +208,6 @@ mod tests {
         assert_eq!(c.environments.len(), ENVIRONMENTS.len());
         assert_eq!(c.base_path(), "/sc/PTU");
         assert_eq!(c.global_ini_override(), Some(PathBuf::from("/x/global.ini")));
-        assert!(c.excluded_devices.is_empty());
         // Auto-backups are on unless switched off explicitly; debug logging is
         // off unless switched on.
         assert!(c.auto_backup);

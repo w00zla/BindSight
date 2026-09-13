@@ -147,6 +147,8 @@ pub struct DeviceInfo {
     pub sdl_vendor: u16,
     pub sdl_product: u16,
     pub sdl_product_version: u16,
+    /// `SDL_JoystickGetSerial`, `None` when SDL knows none.
+    pub sdl_serial: Option<String>,
     /// SDL's device type guess (`flight_stick`, `throttle`, `unknown`, …).
     pub sdl_type: String,
     /// The OS device path SDL opened (evdev node / DirectInput path).
@@ -463,14 +465,19 @@ fn device_info(stick: &Joystick, index: u32, hid: &HidTable, pad: Option<(&GameC
     let hid_descriptor = descriptor.ok().map(|d| d.iter().map(|b| format!("{b:02x}")).collect());
     // Index-based SDL queries the safe wrapper does not expose.
     let i = index as std::os::raw::c_int;
-    let (sdl_vendor, sdl_product, sdl_product_version, sdl_type, sdl_path) = unsafe {
+    let (sdl_vendor, sdl_product, sdl_product_version, sdl_type, sdl_path, sdl_serial) = unsafe {
         let path = sdl2::sys::SDL_JoystickPathForIndex(i);
+        let cstr = |p: *const std::os::raw::c_char| (!p.is_null()).then(|| std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned());
+        // The serial needs the open handle, which the safe wrapper hides.
+        let raw = sdl2::sys::SDL_JoystickFromInstanceID(stick.instance_id() as i32);
+        let serial = if raw.is_null() { None } else { cstr(sdl2::sys::SDL_JoystickGetSerial(raw)) };
         (
             sdl2::sys::SDL_JoystickGetDeviceVendor(i),
             sdl2::sys::SDL_JoystickGetDeviceProduct(i),
             sdl2::sys::SDL_JoystickGetDeviceProductVersion(i),
             sdl_type_name(sdl2::sys::SDL_JoystickGetDeviceType(i)).to_string(),
-            (!path.is_null()).then(|| std::ffi::CStr::from_ptr(path).to_string_lossy().into_owned()),
+            cstr(path),
+            serial,
         )
     };
     let sc_product_guid = sdl_guid_to_sc_product(&sdl_guid);
@@ -500,6 +507,7 @@ fn device_info(stick: &Joystick, index: u32, hid: &HidTable, pad: Option<(&GameC
         sdl_vendor,
         sdl_product,
         sdl_product_version,
+        sdl_serial,
         sdl_type,
         sdl_path,
         power_level: stick
@@ -1039,7 +1047,7 @@ mod tests {
         assert_eq!(kb.hardware_id.as_deref(), Some("keyboard"));
         assert_eq!(kb.sdl_guid, "keyboard");
         assert_eq!(kb.sc_name.as_deref(), Some("Keyboard/Mouse"));
-        assert_eq!(kb.sc_product_guid, None); // cannot be excluded, has no GUID
+        assert_eq!(kb.sc_product_guid, None); // has no GUID
         assert_eq!(kb.gamepad_slot, None);
         assert_eq!((kb.num_buttons, kb.num_axes, kb.num_hats), (0, 0, 0));
         assert!(kb.axes.is_empty() && kb.hid_interfaces.is_empty());

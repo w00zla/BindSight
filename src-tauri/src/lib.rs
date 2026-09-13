@@ -26,6 +26,7 @@ pub mod rebind;
 pub mod resort;
 pub mod scdata;
 pub mod scinstall;
+pub mod wineorder;
 pub mod xmltext;
 
 /// Game data of the configured install (action master list + token labels),
@@ -78,13 +79,15 @@ pub(crate) struct AppData {
     bindings_file: Option<scdata::ActionMapsFile>,
     index: bindings::BindingIndex,
     /// SC's joystick order — the one thing every `jsN` comes from: the
-    /// platform's live source (`order::live`, stamped when it changed), else
-    /// the `Game.log` order below. Errors say why there is none.
+    /// platform's live source (`order::live`, stamped when it changed).
+    /// Errors say why there is none.
     device_order: Result<order::DeviceOrder, String>,
-    /// `Game.log` as of the last read: what the game started with. The order
-    /// source where there is no live one, the second opinion otherwise
-    /// (`ClashReport::logged_order`).
+    /// `Game.log` as of the last read: what the game started with — the
+    /// second opinion (`ClashReport::logged_order`), never the source.
     game_log: Result<order::DeviceOrder, String>,
+    /// The SDL device list (the same `Arc` the input thread maintains), for
+    /// the live order source — taken briefly, never while it is slow.
+    devices: input::DeviceList,
     /// Why the last `reload_bindings` left `bindings_file` empty, for
     /// `get_load_status`.
     bindings_error: Option<String>,
@@ -152,10 +155,9 @@ pub(crate) fn current_bindings(data: &AppData) -> Vec<bindings::ResolvedBinding>
 }
 
 /// The clash report for the loaded actionmaps.xml against SC's joystick order
-/// (see [`AppData::device_order`]; `live` is `order::live()`, taken by the
+/// (see [`AppData::device_order`]; `live` is [`live_order`], taken by the
 /// caller *before* the lock — DirectInput can take a while — so a hot-plug
-/// is in). Devices the user declared invisible to SC count as unplugged.
-/// `logged_order` carries the game's logged order when it differs.
+/// is in). `logged_order` carries the game's logged order when it differs.
 fn clash_report(
     data: &mut AppData,
     devices: &input::DeviceList,
@@ -167,26 +169,31 @@ fn clash_report(
     refresh_device_order(data, live);
     let profile = data.bindings_file.as_ref().expect("checked above");
     let devices = devices.lock().map(|d| d.clone()).unwrap_or_default();
-    let devices = bindings::without_excluded(&devices, &data.config.excluded_devices);
     let mut report = bindings::analyze_clash(profile, &devices, data.device_order.as_ref().map_err(Clone::clone));
     // "Game devices update": when the game last listed its joysticks.
     report.log_timestamp = data.game_log.as_ref().ok().and_then(|l| l.timestamp.clone());
     // The game keeps the order it started with: a live order ranking the
-    // devices differently means "restart the game". Where the log is the
-    // order source the two are the same and nothing is flagged.
+    // devices differently means "restart the game".
     if let (Ok(live), Ok(logged)) = (&data.device_order, &data.game_log) {
         if !live.same_ranking(logged) {
             report.logged_order = Some(logged.clone());
         }
     }
     // The report is recomputed on every Refresh, hot-plug and write; only a
-    // changed outcome is worth a line.
+    // changed outcome is worth a line. The unseen devices are named: SDL
+    // lists them, the game's enumeration does not (the GUI says so only in
+    // the Device List).
+    let unseen: Vec<String> = report
+        .unseen
+        .iter()
+        .map(|u| format!("{} {}", u.name.as_deref().unwrap_or("?"), u.sc_product_guid.as_deref().unwrap_or("?")))
+        .collect();
     let summary = format!(
-        "clash: has_clash={} connected={} missing={} unseen={} log_differs={} resort=[{}]",
+        "clash: has_clash={} connected={} missing={} unseen=[{}] log_differs={} resort=[{}]",
         report.has_clash,
         report.connected.len(),
         report.missing.len(),
-        report.unseen.len(),
+        unseen.join(", "),
         report.logged_order.is_some(),
         report.resort_commands.join(" | ")
     );
@@ -205,7 +212,7 @@ fn get_clash_report(
     devices: State<input::DeviceList>,
     data: State<Mutex<AppData>>,
 ) -> bindings::ClashReport {
-    let live = order::live();
+    let live = live_order(&devices);
     clash_report(&mut data.lock().unwrap(), devices.inner(), live)
 }
 
@@ -222,7 +229,7 @@ fn apply_resort(
     devices: State<input::DeviceList>,
     data: State<Mutex<AppData>>,
 ) -> Result<LoadStatus, String> {
-    let live = order::live();
+    let live = live_order(&devices);
     let mut data = data.lock().unwrap();
     let report = clash_report(&mut data, devices.inner(), live);
     // GUI messages: the Status panel already names the order problem.
@@ -322,23 +329,6 @@ fn get_current_bindings_info(data: State<Mutex<AppData>>) -> Option<CurrentBindi
 #[tauri::command]
 fn reload(data: State<Mutex<AppData>>) -> LoadStatus {
     reload_bindings(&mut data.lock().unwrap())
-}
-
-/// Persist which connected devices the user declared invisible to SC (by SC
-/// Product GUID). Returns the stored list.
-#[tauri::command]
-fn set_excluded_devices(
-    guids: Vec<String>,
-    app: AppHandle,
-    data: State<Mutex<AppData>>,
-) -> Vec<String> {
-    let mut data = data.lock().unwrap();
-    data.config.excluded_devices = config::excludable(guids);
-    info!("excluded devices set: {:?}", data.config.excluded_devices);
-    if let Err(e) = config::save(&app, &data.config) {
-        error!("failed to save config: {e}");
-    }
-    data.config.excluded_devices.clone()
 }
 
 /// Persist whether BindSight backs up `actionmaps.xml` before overwriting it
@@ -592,7 +582,8 @@ pub(crate) fn reload_bindings(data: &mut AppData) -> LoadStatus {
     }
     // Game.log is the watch thread's business (read outside the lock); the
     // order is re-taken here so a reload never shows a stale one.
-    refresh_device_order(data, order::live());
+    let live = live_order(&data.devices);
+    refresh_device_order(data, live);
     status
 }
 
@@ -621,14 +612,22 @@ fn log_order(source: &str, result: &Result<order::DeviceOrder, String>) {
     }
 }
 
-/// Re-take SC's joystick order: `live` is `order::live()` (taken by the
+/// The platform's live joystick order for the devices currently listed
+/// (`order::live`), to be taken before the `AppData` lock wherever possible:
+/// DirectInput can take a while, the Wine replication reads sysfs.
+fn live_order(devices: &input::DeviceList) -> Option<Result<order::DeviceOrder, String>> {
+    let snapshot = devices.lock().map(|d| d.clone()).unwrap_or_default();
+    order::live(&snapshot)
+}
+
+/// Re-take SC's joystick order: `live` is [`live_order`] (taken by the
 /// caller, ideally before the lock) — only a changed outcome replaces the
 /// snapshot (stamped with the time of the change) and is logged, so a
-/// hot-plug of a device without a slot leaves it alone. Without a live
-/// source the `Game.log` order as last read is it.
+/// hot-plug of a device without a slot leaves it alone. A platform without
+/// a live source (none built today) has no order.
 fn refresh_device_order(data: &mut AppData, live: Option<Result<order::DeviceOrder, String>>) {
     let Some(fresh) = live else {
-        data.device_order = data.game_log.clone();
+        data.device_order = Err("no joystick order source on this platform".into());
         return;
     };
     let same = match (&fresh, &data.device_order) {
@@ -700,7 +699,7 @@ fn spawn_game_log_watch(app: AppHandle) {
                 continue;
             }
             watch.done();
-            let live = order::live();
+            let live = live_order(&app.state::<input::DeviceList>());
             let mut data = state.lock().unwrap();
             if result != data.game_log {
                 info!("Game.log {}", if started { "replaced, re-read" } else { "read" });
@@ -889,12 +888,11 @@ fn log_startup(app: &AppHandle, config: &config::Config) {
         );
     }
     info!(
-        "config: active_env={} auto_backup={} debug_logging={} environments={:?} excluded_devices={:?} imagemap_choices={:?}",
+        "config: active_env={} auto_backup={} debug_logging={} environments={:?} imagemap_choices={:?}",
         config.active_env,
         config.auto_backup,
         config.debug_logging,
         config.environments,
-        config.excluded_devices,
         config.imagemap_choices
     );
 }
@@ -937,11 +935,16 @@ pub fn run() {
             let config = config::load(app.handle());
             apply_log_level(config.debug_logging);
             log_startup(app.handle(), &config);
+            // The device list exists from the start (commands read it), but
+            // the input thread only starts once the first game-data load is
+            // through (`spawn_sc_load` -> `start_input`).
+            let devices: input::DeviceList = Arc::new(Mutex::new(Vec::new()));
             // The bindings file and Game.log are read once the game data is
             // in (`spawn_sc_load` -> `reload_bindings`).
             app.manage(Mutex::new(AppData {
                 device_order: Err("not read yet".into()),
                 game_log: Err("not read yet".into()),
+                devices: devices.clone(),
                 config,
                 sc: ScState::default(),
                 bindings_file: None,
@@ -949,10 +952,6 @@ pub fn run() {
                 bindings_error: None,
                 last_clash_log: String::new(),
             }));
-            // The device list exists from the start (commands read it), but
-            // the input thread only starts once the first game-data load is
-            // through (`spawn_sc_load` -> `start_input`).
-            let devices: input::DeviceList = Arc::new(Mutex::new(Vec::new()));
             app.manage(devices);
             spawn_sc_load(app.handle().clone());
             spawn_game_log_watch(app.handle().clone());
@@ -973,7 +972,6 @@ pub fn run() {
             apply_resort,
             save_rebinds,
             get_current_bindings_info,
-            set_excluded_devices,
             set_environments,
             set_active_env,
             resolve_input,

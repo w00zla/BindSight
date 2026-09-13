@@ -51,9 +51,10 @@ const props = defineProps<{
   chosenMapId: (d: DeviceInfo) => string | null;
   // SC's label for an input token; echoes the token when there is none.
   tokenLabel: (token: string | null) => string;
-  // The user excluded the device in Settings: it is left out of the
-  // image-map list (its maps show under "unused"), Device Info still has it.
-  isExcluded: (d: DeviceInfo) => boolean;
+  // The game does not see the device (SDL lists it, the game's enumeration
+  // does not): it is left out of the image-map list (its maps show under
+  // "unused"), Device Info still has it and says so.
+  isUnseen: (d: DeviceInfo) => boolean;
   // The device-order report: which jsN the game gives each joystick.
   clash: ClashReport | null;
   // App version, OS, toolkit versions and keyboard layout, the head of every dump.
@@ -136,8 +137,8 @@ function readPaint() {
 // image-maps" on, a hardware id no connected device has. Exactly one is set.
 const selectedGuid = ref("");
 const selectedUnusedHw = ref("");
-// The devices the image-map list offers: the connected ones minus the excluded.
-const listed = computed(() => props.devices.filter((d) => !props.isExcluded(d)));
+// The devices the image-map list offers: the connected ones the game sees.
+const listed = computed(() => props.devices.filter((d) => !props.isUnseen(d)));
 const device = computed(() => listed.value.find((d) => d.sdl_guid === selectedGuid.value) ?? null);
 // Hardware id the listed image-maps belong to.
 const selectedHw = computed(() => device.value?.hardware_id ?? (selectedUnusedHw.value || null));
@@ -1689,14 +1690,13 @@ function deviceRows(d: DeviceInfo): [string, string][] {
       ["sdl name", d.sdl_name],
       ["hardware id", d.hardware_id ?? "—"],
       ["game slot", "kb1"],
-      ["excluded", props.isExcluded(d) ? "yes" : "no"],
       ["io", `${KEY_COUNT} keys · mouse ${MOUSE_INPUTS.join(" ")}`],
     ];
   }
   return [
     ["kind", d.kind === "gamepad" ? `gamepad · slot ${d.gamepad_slot ?? "—"} · ${d.controller_name ?? "—"}` : d.kind],
     ["game slot", d.kind === "gamepad" ? (d.gamepad_slot !== null ? `gp${d.gamepad_slot}` : "none (a further pad)") : gameSlotText(d)],
-    ["excluded", props.isExcluded(d) ? "yes" : "no"],
+    ["seen by game", props.isUnseen(d) ? "no (SDL lists it, the game's enumeration does not)" : "yes"],
     ["game name", d.sc_name ?? "— (no HID product string)"],
     ["sdl name", d.sdl_name],
     ["sdl guid", d.sdl_guid],

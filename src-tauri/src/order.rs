@@ -9,28 +9,35 @@
 //!
 //! - **Windows**: DirectInput itself, live (`dinput.rs`) — the same call SC
 //!   makes, so the rank and the `guidProduct` SC writes match byte for byte.
-//! - **Linux**: `Game.log` (`gamelog.rs`), where SC lists what it enumerated
-//!   at its last start. SC runs under Wine there and Wine's DirectInput order
-//!   is unverified, so the log is the ground truth.
+//! - **Linux**: Wine's DirectInput enumeration replicated (`wineorder.rs`):
+//!   the key order of the HID device interfaces winebus registers, from the
+//!   devices SDL and hidapi list.
 //!
-//! On Windows the log is still read as the second opinion: the game keeps the
-//! order it started with until it restarts, so a live order that differs from
-//! the logged one means "restart the game".
+//! `Game.log` (`gamelog.rs`) is never the source, only the second opinion:
+//! the game keeps the order it started with until it restarts, so a live
+//! order that differs from the logged one means "restart the game".
 
 use serde::Serialize;
 
+use crate::input::DeviceInfo;
 use crate::scdata::JoystickDevice;
 
-/// This platform's live order source, if it has one: DirectInput on Windows.
-/// `None` where the log is the only source (Linux, until Wine's enumeration
-/// is replicated — that goes here, nothing else changes).
-pub fn live() -> Option<Result<DeviceOrder, String>> {
+/// This platform's live order source for the devices currently listed
+/// (`devices` is the SDL list; DirectInput ignores it): `None` only on a
+/// platform without one.
+pub fn live(devices: &[DeviceInfo]) -> Option<Result<DeviceOrder, String>> {
     #[cfg(windows)]
     {
+        let _ = devices;
         Some(crate::dinput::enumerate())
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     {
+        Some(crate::wineorder::enumerate(devices))
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = devices;
         None
     }
 }
