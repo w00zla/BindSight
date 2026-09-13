@@ -95,7 +95,10 @@ presentational components:
   per device the file names, categories collapsible, "Set binding" button
   / double-click = rebind dialog editing one input at a time, pending
   rebinds kept until Save / Discard in the action tile above it, which
-  also holds Save Profile / Create Backup) or Compare (a profile or backup
+  also holds Reorder (swap two joystick slots the game ranks now: Apply to
+  config = the order fix's rewrite via `apply_reorder`, or the
+  `pp_resortdevices` line in the shared `ConsoleCommandDialog`; one swap at
+  a time) and Save Profile / Create Backup) or Compare (a profile or backup
   picked on the left, always against Current, every token as a row, the
   diff chips filter; its action tile: Open Folder | Apply (dialog picking
   the devices to take over) / Delete). Left column and the profiles panel
@@ -310,11 +313,13 @@ presentational components:
   an environment change `Adopt` the file (one full read); a *new* file
   (shorter, other creation time, appeared / vanished — NTFS name tunneling
   keeps the creation time on a quick recreate) is read incrementally
-  (`Tail`: only the bytes appended since the last read) until the order is
-  in or 90 s pass; a changed outcome replaces the log snapshot (and the
-  order source, where the log is it) and emits `gamelog-changed`
-  (`{started}`: true for a new file — the frontend toasts and announces a
-  clash flip only then). Writes to a running log are ignored on purpose.
+  (`Tail`: only the bytes appended since the last read) for the whole 90 s
+  window — the joystick lines land one by one, 200 ms apart, a read may
+  fall between them, so the first line found is not the order yet; every
+  changed outcome replaces the log snapshot (and the order source, where
+  the log is it) and emits `gamelog-changed` (`{started}`: true for the
+  first outcome of a new file — the frontend toasts and announces a clash
+  flip only then). Writes to a running log are ignored on purpose.
 - `kblayout.rs` — `keyboard_layout` command: xkb code (`de`, `us`, …) via
   `localectl` / `vconsole.conf` on Linux, `GetKeyboardLayoutNameW` on Windows.
 - `lib.rs` — Tauri commands, state wiring (`AppData`: config, game data +
@@ -380,8 +385,10 @@ All of it lives in the Devices mode's Device Info view instead.
   `axis:N`, no axis sign); keyboard and gamepad use SC's own names
   (`key:lshift`, `key:oem_102`, `pad:a`, `pad:thumblx`, `pad:triggerl_btn`).
   Geometry kinds: `rect` (+ `radius`, a fraction of the shorter side),
-  `ellipse`, `polygon`, `symbol` (`arrow`, `arrow2`, `rotate`: a 100x100
-  path stretched into a `w` x `h` box, rotatable), `arc` (outer `r`, `inner`
+  `ellipse`, `polygon`, `symbol` (`arrow`, `arrow2`, `rotate`, `curve`: a
+  100x100 path stretched into a `w` x `h` box, rotatable; the two ring
+  symbols take an optional `angle` of sweep, `imagemap.ts::arcArrowPath`),
+  `arc` (outer `r`, `inner`
   as a fraction of it, `angle` of sweep from `rotation`), `wedge` (`r`,
   `angle`, `rotation`), `image` (its own file in the map folder, no
   colours, box like a symbol) and `path` (own SVG path data in the 100x100
@@ -498,6 +505,14 @@ The game data cache lives per version under `~/.cache/com.w00zla.bindsight/
   keyboard device (`kb1_mouse1`, `kb1_mwheel_up`), captured only while a
   Record button is armed (rebind dialog, image-map editor); `maxis_*` is
   labeled but not recordable.
+- **Recording: the release decides** (`devices.ts::recordEdge`, rebind
+  dialog and image-map editor): every press replaces the candidate, the
+  release of that input takes it. A dual-stage trigger pulled through
+  records stage 2 (stage 1 fires first and stays held on a VKB by default;
+  the game's own screen binds on the first press and can only ever take
+  stage 1). Combos take the modifiers held at the press. An axis is the
+  candidate past half travel (`AXIS_RECORD`) and taken back at the centre;
+  `AXIS_PRESS` (near full travel) only lights rows.
 - **Keyboard capture needs the BindSight window focused** (webview keydown;
   SDL2 delivers key events only to its own window). It runs in every mode
   and `preventDefault`s every mapped key (deliberate: a rebind flow must own

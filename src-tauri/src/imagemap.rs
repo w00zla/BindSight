@@ -82,7 +82,8 @@ pub enum Geometry {
         points: Vec<[f64; 2]>,
     },
     Symbol {
-        /// `arrow`, `arrow2` or `rotate`.
+        /// `arrow`, `arrow2`, `rotate` (ring, two heads) or `curve` (ring,
+        /// one head).
         symbol: String,
         /// Center.
         x: f64,
@@ -92,6 +93,9 @@ pub enum Geometry {
         h: f64,
         #[serde(default)]
         rotation: f64,
+        /// Sweep of the ring symbols in degrees; unset = their default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        angle: Option<f64>,
     },
     /// A ring segment: `angle` degrees of sweep, starting at `rotation`.
     Arc {
@@ -889,9 +893,15 @@ mod tests {
     fn geometry_json_uses_kind_tag() {
         let json = r#"{"kind":"symbol","symbol":"arrow","x":0.3,"y":0.3,"w":0.05,"h":0.02,"rotation":90}"#;
         let g: Geometry = serde_json::from_str(json).unwrap();
-        assert!(matches!(g, Geometry::Symbol { rotation, h, .. } if rotation == 90.0 && h == 0.02));
+        assert!(matches!(g, Geometry::Symbol { rotation, h, angle: None, .. } if rotation == 90.0 && h == 0.02));
         let back = serde_json::to_value(&g).unwrap();
         assert_eq!(back["kind"], "symbol");
+        // No angle written unless set; a set one round-trips.
+        assert!(back.get("angle").is_none());
+        let ring: Geometry =
+            serde_json::from_str(r#"{"kind":"symbol","symbol":"curve","x":0.5,"y":0.5,"w":0.1,"h":0.1,"angle":120}"#).unwrap();
+        assert!(matches!(ring, Geometry::Symbol { angle: Some(a), .. } if a == 120.0));
+        assert_eq!(serde_json::to_value(&ring).unwrap()["angle"], 120.0);
         // Polygon has no rotation; rect rotation and radius default.
         let r: Geometry = serde_json::from_str(r#"{"kind":"rect","x":0,"y":0,"w":1,"h":1}"#).unwrap();
         assert!(matches!(r, Geometry::Rect { rotation, radius, .. } if rotation == 0.0 && radius == 0.0));

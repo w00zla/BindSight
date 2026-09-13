@@ -122,7 +122,6 @@ const currentHeld = computed(() => {
   return !!c && activeInputs.value[c.guid]?.[c.key] !== undefined;
 });
 // The last captured key event, handed to the editor (only the webview sees keys).
-const keyInput = ref<JoyInput | null>(null);
 const clash = ref<ClashReport | null>(null);
 // The install's version and game-data load state (updated via `scdata-changed`).
 const scStatus = ref<ScStatus | null>(null);
@@ -401,13 +400,12 @@ function clearActive(guid: string, drop: (key: string) => boolean) {
   activeInputs.value = { ...activeInputs.value, [guid]: next };
 }
 
-// A binding clicked in the list flashes for a moment — its row and its
-// input on the image-map image, like a short press — then it is over.
-const FLASH_MS = 1200;
+// A binding clicked in the list stays selected — its row and its input on
+// the image-map image — until the next live input takes over; the Last
+// Input card shows it meanwhile, as if its input had arrived.
 const flash = ref<{ b: ResolvedBinding; target: PinTarget | null } | null>(null);
-let flashTimer: number | null = null;
 
-// The lit inputs of a device: everything active plus a flashing binding's.
+// The lit inputs of a device: everything active plus a selected binding's.
 function activeFor(guid: string): Set<string> {
   const s = new Set(Object.keys(activeInputs.value[guid] ?? {}));
   const t = flash.value?.target;
@@ -496,12 +494,23 @@ function isFlashed(b: ResolvedBinding): boolean {
 function flashBinding(b: ResolvedBinding) {
   const r = resolvePin(b);
   if ("reason" in r && !missingInMap(b)) notify(r.reason, "hint");
-  flash.value = { b, target: "reason" in r ? null : r };
-  if (flashTimer) clearTimeout(flashTimer);
-  flashTimer = window.setTimeout(() => {
-    flash.value = null;
-    flashTimer = null;
-  }, FLASH_MS);
+  const target = "reason" in r ? null : r;
+  flash.value = { b, target };
+  const d = deviceForBinding(b);
+  const key = d ? inputKeyForToken(b.token, d) : null;
+  currentKey.value = target ? { guid: target.guid, key: target.key } : null;
+  currentInput.value = {
+    device: d ? deviceName(d) : (b.device ?? "—"),
+    kind: b.device_kind,
+    sc_guid: b.device_guid,
+    token: b.token,
+    // The image-map key reads like `sdlInputName` does ("button 2").
+    sdl: key ? key.split(":").join(" ") : "",
+    actions: connectedBindings.value
+      .filter((x) => x.token === b.token)
+      .map((x) => ({ actionmap: x.actionmap, action: x.action, label: x.label, is_default: x.is_default, device_kind: x.device_kind })),
+    in_imagemap: target ? true : d && key ? inMap(d.sdl_guid, key) : null,
+  };
 }
 
 // Buttons and keys stay lit while held, hats until centered, axes pulse.
@@ -806,7 +815,7 @@ interface InputResolution {
 async function showBinding(p: JoyInput) {
   const key = inputKey(p);
   if (!key) return;
-  // A new live input takes over from a flashing binding.
+  // A new live input takes over from a selected binding.
   flash.value = null;
   try {
     if (p.kind === "button" || p.kind === "axis" || p.kind === "hat") {
@@ -903,7 +912,13 @@ function onInput(p: JoyInput) {
   events.value.unshift({ ...p, id: ++eventSeq, at: Date.now(), token: eventToken(p) });
   if (events.value.length > MAX_EVENTS) events.value.pop();
   trackHeld(p);
-  if (p.kind === "key") keyInput.value = p;
+  // Keys exist only in the webview (the backend never sees them): handed to
+  // the views by direct call, not a prop — a prop would collapse a press and
+  // its release arriving in one tick (the wheel) into the release alone.
+  if (p.kind === "key") {
+    editor.value?.takeInput(p);
+    bindingsView.value?.takeInput(p);
+  }
   if (mode.value !== "monitor") return;
   trackActive(p);
   // A pad without a slot is not gp1 — SC has no bindings for it. A joystick
@@ -1327,13 +1342,13 @@ onUnmounted(() => {
       :actionMaps="actionMaps"
       :clash="clash"
       :hasCurrent="currentLoaded"
-      :keyInput="keyInput"
       :tokenLabel="tokenLabel"
       :inputToken="rebindToken"
       @notify="notify"
       @restored="onRestored"
       @applied="onApplied"
       @saved="onSaved"
+      @copy="copyResortCommands"
     />
 
     <ImageMapEditor
@@ -1341,7 +1356,6 @@ onUnmounted(() => {
       ref="editor"
       :devices="orderedDevices"
       :events="events"
-      :keyInput="keyInput"
       :chosenMapId="chosenMapId"
       :tokenLabel="tokenLabel"
       :isUnseen="deviceUnseen"

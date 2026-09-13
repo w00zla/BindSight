@@ -11,8 +11,9 @@
 //! shorter file is a new one.
 //!
 //! Once a new file is seen it is read incrementally ([`Tail`]: only what the
-//! game appended since the last read) until the enumeration is in — the
-//! caller ends the window with [`Watch::done`] — or [`SETTLE`] passes.
+//! game appended since the last read) for the whole [`SETTLE`] window: the
+//! joystick lines land one by one, so the first one found is not the
+//! enumeration yet.
 //!
 //! The pure state machine lives here (testable without a file system); the
 //! polling thread that drives it is `lib.rs::spawn_game_log_watch`.
@@ -99,11 +100,6 @@ impl Watch {
             Some(_) => Step::Read { settled: false, new_file },
         }
     }
-
-    /// The enumeration is in: stop reading until the next new file.
-    pub fn done(&mut self) {
-        self.settle_until = None;
-    }
 }
 
 /// The text of the file being settled, read incrementally: each [`Tail::read`]
@@ -184,18 +180,6 @@ mod tests {
     }
 
     #[test]
-    fn done_ends_the_window_early() {
-        let p = Path::new("Game.log");
-        let t0 = Instant::now();
-        let mut w = watch_at(p, st(1, 100_000), t0);
-        assert_eq!(w.poll(p, st(1, 300), t0 + POLL), NEW);
-        w.done();
-        assert_eq!(w.poll(p, st(1, 900), t0 + 2 * POLL), Step::Idle);
-        // The next replacement opens a new window.
-        assert_eq!(w.poll(p, st(1, 10), t0 + 3 * POLL), NEW);
-    }
-
-    #[test]
     fn other_creation_time_is_a_new_file() {
         let p = Path::new("Game.log");
         let t0 = Instant::now();
@@ -272,5 +256,35 @@ mod tests {
 
         std::fs::remove_file(&path).unwrap();
         assert!(tail.read(&path).is_err());
+    }
+
+    /// The game logs its joysticks one line at a time (200 ms apart on a
+    /// two-stick setup): a read landing between them sees one joystick, the
+    /// next read the second — the outcome must keep being re-derived from
+    /// the whole tail while the window is open.
+    #[test]
+    fn joystick_lines_arriving_in_separate_reads_add_up() {
+        use std::io::Write;
+        let path = std::env::temp_dir().join(format!("bindsight-tail-{}.log", uuid::Uuid::new_v4()));
+        std::fs::write(
+            &path,
+            "<2026-09-13T22:59:18.272Z> - Connected joystick0:  VKBsim Gladiator EVO  R    {0200231D-0000-0000-0000-504944564944}\n",
+        )
+        .unwrap();
+        let mut tail = Tail::default();
+        tail.read(&path).unwrap();
+        let one = crate::gamelog::parse(&tail.text).unwrap();
+        assert_eq!(one.joysticks.len(), 1);
+
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        f.write_all(b"<2026-09-13T22:59:18.479Z> - Connected joystick1:  VKBsim Gladiator EVO  L    {0201231D-0000-0000-0000-504944564944}\n")
+            .unwrap();
+        drop(f);
+        tail.read(&path).unwrap();
+        let two = crate::gamelog::parse(&tail.text).unwrap();
+        assert_eq!(two.joysticks.len(), 2);
+        assert_eq!(two.joysticks[1].instance, 2);
+        assert_ne!(one, two);
+        std::fs::remove_file(&path).unwrap();
     }
 }

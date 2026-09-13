@@ -5,11 +5,12 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
 import ColumnHead from "./ColumnHead.vue";
-import Dropdown from "./Dropdown.vue";
 import Splitter from "./Splitter.vue";
 import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
 import ConfirmDialog, { type ConfirmButton, type ConfirmIcon } from "./ConfirmDialog.vue";
-import { AXIS_PRESS, KIND_RANK, kindIcon } from "../devices";
+import { AXIS_PRESS, KIND_RANK, inputIdentity, kindIcon, recordEdge } from "../devices";
+import Dropdown, { type DropdownOption } from "./Dropdown.vue";
+import ConsoleCommandDialog from "./ConsoleCommandDialog.vue";
 import { persistedRef } from "../persist";
 import { recording } from "../keyboard";
 import { NAME_MAX, sanitizeName, stripNameChars } from "../names";
@@ -34,8 +35,8 @@ import type {
 } from "../types";
 
 // `hasCurrent`: the live actionmaps.xml is loaded (else there is no Current
-// source and no list). `keyInput`: the last captured key (only the webview
-// sees keys). `inputToken`: the full SC token a keyboard / gamepad press
+// source and no list). Keys never reach the backend: App hands them to
+// `takeInput` directly. `inputToken`: the full SC token a keyboard / gamepad press
 // stands for, modifiers included; joystick inputs are resolved by the backend.
 const props = defineProps<{
   bindings: ResolvedBinding[];
@@ -43,7 +44,6 @@ const props = defineProps<{
   // The device-order report: names the joystick the game ranks at each jsN.
   clash: ClashReport | null;
   hasCurrent: boolean;
-  keyInput: JoyInput | null;
   // SC's label for an input token; echoes the token when there is none.
   tokenLabel: (token: string) => string;
   inputToken: (p: JoyInput) => string | null;
@@ -53,7 +53,49 @@ const emit = defineEmits<{
   restored: [status: LoadStatus];
   applied: [status: LoadStatus];
   saved: [status: LoadStatus];
+  copy: [command: string];
 }>();
+
+// --- reorder: swap two joystick slots ----------------------------------------
+
+// The user's own resort, one swap at a time: the two slots picked from the
+// joysticks the game ranks right now, applied either to the file (the order
+// fix's rewrite, `apply_reorder`) or as the console command.
+const reorderOpen = ref(false);
+const reorderA = ref("");
+const reorderB = ref("");
+const reorderCommand = ref<string | null>(null);
+const reorderOptions = computed<DropdownOption[]>(() =>
+  (props.clash?.connected ?? []).map((s) => ({ value: String(s.effective_instance), label: `js${s.effective_instance} · ${s.name ?? "?"}` })),
+);
+const reorderValid = computed(() => !!reorderA.value && !!reorderB.value && reorderA.value !== reorderB.value);
+
+function openReorder() {
+  const o = reorderOptions.value;
+  reorderA.value = o[0]?.value ?? "";
+  reorderB.value = o[1]?.value ?? "";
+  reorderOpen.value = true;
+}
+
+async function onReorderChoose(value: string) {
+  reorderOpen.value = false;
+  if (!reorderValid.value) return;
+  const a = Number(reorderA.value);
+  const b = Number(reorderB.value);
+  if (value === "console") {
+    reorderCommand.value = `pp_resortdevices joystick ${a} ${b}`;
+    return;
+  }
+  if (value !== "config") return;
+  busy.value = true;
+  try {
+    emit("applied", await invoke<LoadStatus>("apply_reorder", { a, b }));
+  } catch (e) {
+    emit("notify", String(e), "error");
+  } finally {
+    busy.value = false;
+  }
+}
 
 // --- layout: the left column's width and the Binding Profiles panel's
 // height, both dragged at a splitter and remembered --------------------------
@@ -1103,10 +1145,10 @@ async function tokenOf(p: JoyInput): Promise<string | null> {
   }
 }
 
-// A press lights its rows in the list and, while the dialog is recording,
-// becomes its change (and ends the recording); a release puts the light
-// out.
+// A press lights its rows in the list, a release puts the light out; while
+// the dialog is recording, the event also feeds the recording.
 async function takeInput(p: JoyInput) {
+  if (rebind.value && recording.value) void recordInput(p);
   const { edge, momentary } = edgeOf(p);
   if (!edge) return;
   const token = await tokenOf(p);
@@ -1116,11 +1158,45 @@ async function takeInput(p: JoyInput) {
     return;
   }
   light(token, momentary);
-  if (rebind.value && recording.value) {
-    setCaptured(token);
-    recording.value = false;
+}
+
+// Recording: every press replaces the candidate (its token taken with the
+// modifiers held at that moment), the release of the candidate's input ends
+// the recording with it — see `recordEdge` in devices.ts (dual-stage
+// triggers, combos). The token lookup is asynchronous, so a release that
+// beats it is remembered and applied once the token is in.
+const candidate = ref<{ id: string; token: string } | null>(null);
+let pendingPress: { id: string; released: boolean } | null = null;
+
+async function recordInput(p: JoyInput) {
+  const edge = recordEdge(p);
+  const id = inputIdentity(p);
+  if (edge === "press") {
+    const pending = { id, released: false };
+    pendingPress = pending;
+    const token = await tokenOf(p);
+    if (!token || pendingPress !== pending || !recording.value) return;
+    candidate.value = { id, token };
+    if (pending.released) takeCandidate();
+  } else if (edge === "release") {
+    if (candidate.value?.id === id) takeCandidate();
+    else if (pendingPress?.id === id) pendingPress.released = true;
   }
 }
+
+function takeCandidate() {
+  if (!candidate.value) return;
+  setCaptured(candidate.value.token);
+  recording.value = false;
+}
+
+// A recording that ends any way drops its candidate.
+watch(recording, (on) => {
+  if (!on) {
+    candidate.value = null;
+    pendingPress = null;
+  }
+});
 
 function onRebindChoose(value: string) {
   const r = rebind.value;
@@ -1208,7 +1284,7 @@ async function requestLeave(): Promise<boolean> {
   return true;
 }
 
-defineExpose({ requestLeave });
+defineExpose({ requestLeave, takeInput });
 
 // --- wiring ----------------------------------------------------------------
 
@@ -1216,12 +1292,6 @@ watch(bKey, runCompare);
 watch(() => props.hasCurrent, ensureKeys);
 // The file changed underneath (reload, restore, resort, save): re-read its facts.
 watch(() => props.bindings, loadInfo);
-watch(
-  () => props.keyInput,
-  (p) => {
-    if (p) takeInput(p);
-  },
-);
 
 let unlisten: UnlistenFn[] = [];
 
@@ -1362,6 +1432,17 @@ async function compareWith(key: string) {
       <div class="tile-btns">
         <span class="mono tile-facts">{{ countSummary }}</span>
         <div class="spacer" />
+        <button
+          type="button"
+          class="btn outline small"
+          :disabled="busy || !hasCurrent || reorderOptions.length < 2"
+          :title="reorderOptions.length < 2 ? 'Needs two joysticks the game sees' : 'Swap two joystick slots'"
+          @click="openReorder"
+        >
+          <Icon name="swap" :size="14" />
+          Reorder Joysticks
+        </button>
+        <div class="tile-divider" />
         <button type="button" class="btn outline small" :disabled="busy || !hasCurrent" @click="openSaveProfile">
           <Icon name="file" :size="14" />
           Save Profile
@@ -1738,10 +1819,40 @@ async function compareWith(key: string) {
           <Icon name="target" :size="15" />
           {{ recording ? "Recording…" : "Record Input" }}
         </button>
+        <span v-if="recording && candidate" class="rec-chip mono">{{ inputText(candidate.token) }}</span>
         <!-- the line is always there, so the dialog does not jump -->
         <span class="rb-hint" :class="{ on: recording }">Esc to cancel</span>
       </div>
     </ConfirmDialog>
+
+    <ConfirmDialog
+      v-if="reorderOpen"
+      title="Reorder joysticks"
+      icon="swap"
+      :buttons="[
+        { label: 'Cancel', kind: 'outline', value: 'cancel', side: 'left' },
+        { label: 'Console command', kind: 'outline', value: 'console', disabled: !reorderValid },
+        { label: 'Apply to config', kind: 'primary', value: 'config', disabled: !reorderValid },
+      ]"
+      @choose="onReorderChoose"
+    >
+      <div class="reorder-row">
+        <span class="reorder-label">Swap</span>
+        <Dropdown v-model="reorderA" class="reorder-pick" variant="small" :options="reorderOptions" />
+      </div>
+      <div class="reorder-row">
+        <span class="reorder-label">with</span>
+        <Dropdown v-model="reorderB" class="reorder-pick" variant="small" :options="reorderOptions" />
+      </div>
+      <p class="reorder-note">If game is running, restart for changes to take effect</p>
+    </ConfirmDialog>
+
+    <ConsoleCommandDialog
+      v-if="reorderCommand"
+      :command="reorderCommand"
+      @close="reorderCommand = null"
+      @copy="emit('copy', $event)"
+    />
   </div>
 </template>
 
@@ -2708,6 +2819,45 @@ async function compareWith(key: string) {
 
 .rb-record .btn {
   padding: 0 22px;
+}
+
+/* The input a recording holds until it is released. */
+.rec-chip {
+  padding: 3px 8px;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* Reorder dialog body (slot content of ConfirmDialog). */
+.reorder-row {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.reorder-row + .reorder-row {
+  margin-top: 8px;
+}
+
+.reorder-label {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* The dropdowns fill the row; "chip" would collide with this file's .chip. */
+.reorder-pick {
+  width: 100%;
+  max-width: none;
+}
+
+.reorder-note {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
 }
 
 .rb-hint {

@@ -242,21 +242,59 @@ fn apply_resort(
     if report.resort.is_empty() {
         return Err("Nothing to fix".into());
     }
+    write_resort(&app, &mut data, &report.resort, "before order fix", "resort")
+}
 
+/// Swap two joystick slots in the live `actionmaps.xml` — the user's own
+/// reorder from the Bindings mode, one swap at a time, the same guarded
+/// rewrite as the order fix (backup "before reorder"). Reloads afterwards.
+#[tauri::command]
+fn apply_reorder(a: u32, b: u32, app: AppHandle, data: State<Mutex<AppData>>) -> Result<LoadStatus, String> {
+    if a == 0 || b == 0 {
+        return Err("Joystick slots start at js1".into());
+    }
+    if a == b {
+        return Err("Choose two different slots".into());
+    }
+    let mut data = data.lock().unwrap();
+    if data.bindings_file.is_none() {
+        return Err("No bindings loaded".into());
+    }
+    let name = |slot: u32| -> Option<String> {
+        data.bindings_file.as_ref()?.joysticks.iter().find(|j| j.instance == slot).map(|j| j.product_name.clone())
+    };
+    let moves = [
+        bindings::ResortMove { from: a, to: b, name: name(a) },
+        bindings::ResortMove { from: b, to: a, name: name(b) },
+    ];
+    write_resort(&app, &mut data, &moves, "before reorder", "reorder")
+}
+
+/// The one write behind the order fix and the reorder: the textual rewrite
+/// (validated and verified in `resort`), then the guarded replacement of
+/// the live file. `what` names the caller in the log.
+fn write_resort(
+    app: &AppHandle,
+    data: &mut AppData,
+    moves: &[bindings::ResortMove],
+    reason: &str,
+    what: &str,
+) -> Result<LoadStatus, String> {
     let path = config::actionmaps_path(data.config.base_path());
     let xml = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let rewritten = resort::rewrite_actionmaps(&xml, &report.resort).map_err(|e| {
-        error!("resort rewrite refused ({} move(s)): {e}", report.resort.len());
+    let rewritten = resort::rewrite_actionmaps(&xml, moves).map_err(|e| {
+        error!("{what} rewrite refused ({} move(s)): {e}", moves.len());
         e
     })?;
 
     let version = data.sc.version.as_ref().map(|v| v.label.as_str());
-    let root = backups::backups_root(&app)?;
-    let backup = gamefile::replace_live_file(&root, &path, &rewritten, "before order fix", data.config.auto_backup, version, &data.sc.data.actions)?;
-    let moves: Vec<String> = report.resort.iter().map(|m| format!("js{}->js{}", m.from, m.to)).collect();
-    info!("resort applied to {}: {} ({})", path.display(), moves.join(" "), gamefile::backup_label(&backup));
+    let root = backups::backups_root(app)?;
+    let backup =
+        gamefile::replace_live_file(&root, &path, &rewritten, reason, data.config.auto_backup, version, &data.sc.data.actions)?;
+    let listed: Vec<String> = moves.iter().map(|m| format!("js{}->js{}", m.from, m.to)).collect();
+    info!("{what} applied to {}: {} ({})", path.display(), listed.join(" "), gamefile::backup_label(&backup));
 
-    Ok(reload_bindings(&mut data))
+    Ok(reload_bindings(data))
 }
 
 /// Write rebinds into the live `actionmaps.xml` — what the in-game keybinding
@@ -651,15 +689,20 @@ fn refresh_device_order(data: &mut AppData, live: Option<Result<order::DeviceOrd
 
 /// Watch SC's `Game.log` for a new file (see [`logwatch`]): the game writes a
 /// fresh log at every start, and its device order with it. A new file is
-/// re-read while it settles; once it carries the order — or the window
-/// passes — a changed outcome replaces the snapshot (and the order source,
-/// where the log is it) and `gamelog-changed` tells the frontend to redo the
-/// clash report. An environment that is invalid or still loading is left
-/// alone (`reload_bindings` reads then).
+/// re-read for the whole settle window — the joystick lines arrive one by
+/// one (200 ms apart on a two-stick setup) and a read may land between
+/// them, so the first line found is not the order yet. Every changed
+/// outcome replaces the snapshot (and the order source, where the log is
+/// it) and `gamelog-changed` tells the frontend to redo the clash report,
+/// `started` only with the first outcome of a new file. An environment
+/// that is invalid or still loading is left alone (`reload_bindings` reads
+/// then).
 fn spawn_game_log_watch(app: AppHandle) {
     std::thread::spawn(move || {
         let mut watch = logwatch::Watch::default();
         let mut tail = logwatch::Tail::default();
+        // Whether the frontend has been told about the current new file.
+        let mut announced = false;
         loop {
             let state = app.state::<Mutex<AppData>>();
             // Only the facts are taken under the lock; every read of the
@@ -687,6 +730,7 @@ fn spawn_game_log_watch(app: AppHandle) {
                 logwatch::Step::Read { settled, new_file } => {
                     if new_file {
                         tail.reset();
+                        announced = false;
                     }
                     (true, settled)
                 }
@@ -695,13 +739,12 @@ fn spawn_game_log_watch(app: AppHandle) {
                 Ok(()) => gamelog::parse(&tail.text).ok_or_else(|| format!("{}: no joystick lines", path.display())),
                 Err(e) => Err(format!("{}: {e}", path.display())),
             };
-            // A new file gets its lines seconds after it appears: keep
-            // reading until they are in, or the window passes.
+            // A new file gets its lines seconds after it appears: an error
+            // before the window passes is not an outcome yet.
             if result.is_err() && !settled {
                 std::thread::sleep(logwatch::POLL);
                 continue;
             }
-            watch.done();
             let live = live_order(&app.state::<input::DeviceList>());
             let mut data = state.lock().unwrap();
             if result != data.game_log {
@@ -710,7 +753,9 @@ fn spawn_game_log_watch(app: AppHandle) {
                 data.game_log = result;
                 refresh_device_order(&mut data, live);
                 drop(data);
-                let _ = app.emit("gamelog-changed", GameLogChanged { started });
+                let first = started && !announced;
+                announced = true;
+                let _ = app.emit("gamelog-changed", GameLogChanged { started: first });
             }
             std::thread::sleep(logwatch::POLL);
         }
@@ -1046,6 +1091,7 @@ pub fn run() {
             reload,
             get_clash_report,
             apply_resort,
+            apply_reorder,
             save_rebinds,
             get_current_bindings_info,
             set_environments,

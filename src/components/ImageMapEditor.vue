@@ -20,7 +20,7 @@ import Splitter from "./Splitter.vue";
 import ColumnHead from "./ColumnHead.vue";
 import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
 import type { ClashReport, DeviceInfo, JoyInput, LoggedInput, ToastType } from "../types";
-import { AXIS_PRESS, deviceIcon, deviceName } from "../devices";
+import { deviceIcon, deviceName, inputIdentity, recordEdge } from "../devices";
 import { KEY_COUNT, MOUSE_INPUTS, recording } from "../keyboard";
 import { persistedRef } from "../persist";
 import { NAME_MAX, sanitizeName, stripNameChars } from "../names";
@@ -29,6 +29,8 @@ import {
   rectRadiusPx,
   symbolPx,
   pathData,
+  symbolAngle,
+  hasAngle,
   inputKey,
   sameHardware,
   shapeImageFiles,
@@ -36,18 +38,15 @@ import {
   type Geometry,
   type ImageMap,
   type RectGeometry,
-  type WedgeGeometry,
   type ImageMapSummary,
   type Shape,
   type SymbolKind,
 } from "../imagemap";
 
-// `keyInput`: the last key captured in the webview — the backend never sees
-// keys, so App hands them over instead of an event.
+// Keys never reach the backend: App hands them to `takeInput` directly.
 const props = defineProps<{
   devices: DeviceInfo[];
   events: LoggedInput[];
-  keyInput: JoyInput | null;
   // The image-map the Monitor shows for a device (the user's pick or the default).
   chosenMapId: (d: DeviceInfo) => string | null;
   // SC's label for an input token; echoes the token when there is none.
@@ -82,6 +81,7 @@ const TOOLS: { tool: Tool; icon: IconName; title: string; divider?: boolean }[] 
   { tool: "wedge", icon: "shape-wedge", title: "Wedge" },
   { tool: "arrow", icon: "shape-arrow", title: "Arrow" },
   { tool: "arrow2", icon: "shape-arrow2", title: "Double arrow" },
+  { tool: "curve", icon: "shape-curve", title: "Curved arrow" },
   { tool: "rotate", icon: "shape-rotate", title: "Rotation" },
   { tool: "image", icon: "shape-image", title: "Image", divider: true },
   { tool: "text", icon: "shape-text", title: "Text", divider: true },
@@ -108,7 +108,7 @@ async function loadFonts() {
     emit("notify", `Fonts unavailable: ${e}`, "error");
   }
 }
-const SYMBOLS: SymbolKind[] = ["arrow", "arrow2", "rotate"];
+const SYMBOLS: SymbolKind[] = ["arrow", "arrow2", "rotate", "curve"];
 
 // A new symbol is 5% of the image width, square on screen; a new image
 // shape 15% of the image width, keeping its own aspect; a new text 4% of
@@ -119,7 +119,13 @@ const DEFAULT_IMAGE_W = 0.15;
 const NEW_ARC = { inner: 0.6, angle: 270, rotation: 135 };
 const NEW_WEDGE = { angle: 90, rotation: 225 };
 const MIN_DRAW_PX = 4;
-const ZOOMS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
+// Zoom 20 % .. 500 %, the slider runs on a log scale so 100 % sits in the
+// middle; Ctrl+wheel steps by 10 percentage points.
+const ZOOM_MIN = 0.2;
+const ZOOM_MAX = 5;
+const ZOOM_LOG_MIN = Math.log2(ZOOM_MIN);
+const ZOOM_LOG_MAX = Math.log2(ZOOM_MAX);
+const ZOOM_WHEEL_STEP = 0.1;
 
 // --- colours ---------------------------------------------------------------
 
@@ -475,6 +481,37 @@ function toggleHidden(id: string) {
   if (!s.delete(id)) s.add(id);
   hidden.value = s;
 }
+
+// The bucket row's buttons act on every shape of its input: hidden when all
+// are, else "hide all"; duplicate copies each (to the recorded input when
+// one is recorded, like Ctrl+D); delete asks once for the lot.
+function bucketHidden(g: Bucket): boolean {
+  return g.rows.length > 0 && g.rows.every((a) => hidden.value.has(a.id));
+}
+
+function toggleBucketHidden(g: Bucket) {
+  const s = new Set(hidden.value);
+  if (bucketHidden(g)) for (const a of g.rows) s.delete(a.id);
+  else for (const a of g.rows) s.add(a.id);
+  hidden.value = s;
+}
+
+function duplicateBucket(g: Bucket) {
+  for (const a of [...g.rows]) duplicateShape(a);
+}
+
+async function deleteBucket(g: Bucket) {
+  const m = map.value;
+  if (!m || locked.value || !editing.value) return;
+  const choice = await ask(`Delete ${g.rows.length} shape(s)?`, "trash", [
+    { label: "Delete", kind: "danger", value: "delete" },
+    { label: "Cancel", kind: "outline", value: "cancel" },
+  ]);
+  if (choice !== "delete") return;
+  const ids = new Set(g.rows.map((a) => a.id));
+  m.shapes = m.shapes.filter((a) => !ids.has(a.id));
+  if (selectedId.value && ids.has(selectedId.value)) selectedId.value = null;
+}
 // Show everything again when anything is hidden, else hide everything.
 function toggleAllHidden() {
   hidden.value = anyHidden.value ? new Set() : new Set(shapes.value.map((a) => a.id));
@@ -558,7 +595,7 @@ async function requestLeave(): Promise<boolean> {
   return true;
 }
 
-defineExpose({ requestLeave });
+defineExpose({ requestLeave, takeInput });
 
 // --- loading ---------------------------------------------------------------
 
@@ -970,31 +1007,37 @@ async function replaceImage() {
 
 let unlisten: UnlistenFn[] = [];
 
-// Record takes the next input of the selected device as the current one
-// (mouse included, see keyboard.ts); an axis counts once it is pressed
-// past AXIS_PRESS, like in the rebind dialog. Escape (a plain key event,
-// never an input) stops a recording, see `onEditorKey`.
+// Record takes an input of the selected device as the current one (mouse
+// included, see keyboard.ts): every press replaces the candidate, the
+// release of the candidate's input ends the recording with it (see
+// `recordEdge` in devices.ts — that is how a dual-stage trigger records
+// its second stage). Escape (a plain key event, never an input) stops a
+// recording, see `onEditorKey`.
+const candidate = ref<{ id: string; key: string } | null>(null);
+const candidateText = computed(() => (candidate.value ? keyName(candidate.value.key) : ""));
+
 function takeInput(ev: JoyInput) {
   if (!recording.value || ev.guid !== selectedGuid.value) return;
-  if ((ev.kind === "axis" || ev.kind === "padaxis") && Math.abs(ev.value) < AXIS_PRESS) return;
-  const key = inputKey(ev);
-  if (!key) return;
-  currentKey.value = key;
-  recording.value = false;
+  const edge = recordEdge(ev);
+  const id = inputIdentity(ev);
+  if (edge === "press") {
+    const key = inputKey(ev);
+    if (key) candidate.value = { id, key };
+  } else if (edge === "release" && candidate.value?.id === id) {
+    currentKey.value = candidate.value.key;
+    recording.value = false;
+  }
 }
 
-// Recording ends with editing.
+// Recording ends with editing; a recording that ends any way drops its
+// candidate.
 watch(editing, (on) => {
   if (!on) recording.value = false;
 });
+watch(recording, (on) => {
+  if (!on) candidate.value = null;
+});
 
-// Keys arrive as a prop (App captures them), joystick and pad events directly.
-watch(
-  () => props.keyInput,
-  (ev) => {
-    if (ev) takeInput(ev);
-  },
-);
 
 onMounted(async () => {
   readPaint();
@@ -1108,6 +1151,28 @@ function moveShape(a: Shape, dxPx: number, dyPx: number) {
   }
 }
 
+// Z-order is the array order (later = on top). Moves the shape one step or
+// all the way; the history records it like any other change.
+type ZMove = "up" | "down" | "top" | "bottom";
+const Z_MOVES: { move: ZMove; icon: IconName; title: string }[] = [
+  { move: "top", icon: "z-top", title: "Bring to front (Home)" },
+  { move: "up", icon: "z-up", title: "Bring forward (PageUp)" },
+  { move: "down", icon: "z-down", title: "Send backward (PageDown)" },
+  { move: "bottom", icon: "z-bottom", title: "Send to back (End)" },
+];
+
+function moveShapeZ(a: Shape, move: ZMove) {
+  const m = map.value;
+  if (!m || locked.value || !editing.value) return;
+  const i = m.shapes.indexOf(a);
+  if (i < 0) return;
+  const last = m.shapes.length - 1;
+  const to = move === "top" ? last : move === "bottom" ? 0 : move === "up" ? Math.min(i + 1, last) : Math.max(i - 1, 0);
+  if (to === i) return;
+  m.shapes.splice(i, 1);
+  m.shapes.splice(to, 0, a);
+}
+
 // A copy of the shape, offset a little, under the recorded input when one
 // is recorded (that is how a shape is cloned to another input), else under
 // the same one; the copy is selected.
@@ -1122,7 +1187,8 @@ function duplicateShape(a: Shape) {
 
 // Keyboard editing: Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y undo and redo; on the
 // selected shape arrows nudge (Shift: 10 px), Delete / Backspace delete,
-// Ctrl+D duplicates; Escape stops a recording, else deselects or drops the
+// Ctrl+D duplicates, PageUp / PageDown / Home / End change the z-order;
+// Escape stops a recording, else deselects or drops the
 // tool. Text fields and open dialogs keep their keys; while recording, the
 // other keys are the input being recorded.
 const NUDGE_PX = 1;
@@ -1175,6 +1241,18 @@ function onEditorKey(e: KeyboardEvent) {
       if (!(e.ctrlKey || e.metaKey)) return;
       duplicateShape(a);
       break;
+    case "PageUp":
+      moveShapeZ(a, "up");
+      break;
+    case "PageDown":
+      moveShapeZ(a, "down");
+      break;
+    case "Home":
+      moveShapeZ(a, "top");
+      break;
+    case "End":
+      moveShapeZ(a, "bottom");
+      break;
     default:
       return;
   }
@@ -1190,7 +1268,12 @@ function shapeIcon(a: Shape): IconName {
 
 function shapeKind(a: Shape): string {
   const g = a.geometry;
-  if (g.kind === "symbol") return g.symbol === "arrow2" ? "double arrow" : g.symbol === "rotate" ? "rotation" : g.symbol;
+  if (g.kind === "symbol") {
+    if (g.symbol === "arrow2") return "double arrow";
+    if (g.symbol === "rotate") return "rotation";
+    if (g.symbol === "curve") return "curved arrow";
+    return g.symbol;
+  }
   if (g.kind === "path") return "text";
   return g.kind;
 }
@@ -1232,6 +1315,20 @@ function onAlphaInput(a: Shape, role: ColourRole, e: Event) {
   setRoleAlpha(a, role, Number((e.target as HTMLInputElement).value));
 }
 
+// The sweep of an arc, a wedge or a ring symbol; null for anything else.
+function shapeAngle(a: Shape): number | null {
+  const g = a.geometry;
+  if (g.kind === "arc" || g.kind === "wedge") return g.angle;
+  if (g.kind === "symbol" && hasAngle(g)) return symbolAngle(g);
+  return null;
+}
+
+function setShapeAngle(a: Shape, v: number) {
+  const g = a.geometry;
+  if (g.kind === "arc" || g.kind === "wedge") g.angle = v;
+  else if (g.kind === "symbol" && hasAngle(g)) g.angle = v;
+}
+
 function onRangeInput(e: Event, apply: (v: number) => void) {
   apply(Number((e.target as HTMLInputElement).value));
 }
@@ -1246,9 +1343,15 @@ function onWheel(e: WheelEvent) {
 }
 
 function zoomStep(dir: number) {
-  const i = ZOOMS.indexOf(zoom.value);
-  const next = Math.min(ZOOMS.length - 1, Math.max(0, (i < 0 ? ZOOMS.indexOf(1) : i) + dir));
-  zoom.value = ZOOMS[next];
+  setZoom(Math.round((zoom.value + ZOOM_WHEEL_STEP * dir) * 100) / 100);
+}
+
+function setZoom(z: number) {
+  zoom.value = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+}
+
+function onZoomSlider(e: Event) {
+  setZoom(2 ** Number((e.target as HTMLInputElement).value));
 }
 
 // --- drawing ---------------------------------------------------------------
@@ -1407,15 +1510,13 @@ function commitPolygon() {
 // Shapes draw in their own lit colours (the tokens by default); the
 // recorded input's shapes at full opacity, the rest faded; the selected one
 // gets a dashed live-coloured outline on top.
+// Every shape in its lit look, whatever is selected or recorded: the
+// transformer box marks the selection, the list the recorded input.
 function colours(a: Shape) {
-  const isCurrent = a.input === currentKey.value;
-  const selected = a.id === selectedId.value;
   return {
-    stroke: selected ? paint.value.live : roleColour(a, "stroke"),
-    strokeWidth: selected ? 3 : 2,
+    stroke: roleColour(a, "stroke"),
+    strokeWidth: 2,
     fill: roleColour(a, "fill"),
-    opacity: isCurrent || selected ? 1 : 0.45,
-    dash: selected ? [6, 3] : undefined,
   };
 }
 
@@ -1540,10 +1641,6 @@ function imageCfg(a: Shape) {
     offsetY: h / 2,
     rotation: s.rotation,
     draggable: canDrag.value,
-    opacity: colours(a).opacity,
-    stroke: a.id === selectedId.value ? paint.value.live : undefined,
-    strokeWidth: 2,
-    dash: [6, 3],
   };
 }
 
@@ -2242,12 +2339,19 @@ function noMaps(d: DeviceInfo): boolean {
           </button>
           <div class="divider" />
           <div class="zoom mono">
-            <button type="button" title="Zoom out" @click="zoomStep(-1)">−</button>
-            <button type="button" class="zoom-val" title="Reset zoom" @click="zoom = 1">
-              {{ Math.round(zoom * 100) }}%
-            </button>
-            <button type="button" title="Zoom in" @click="zoomStep(1)">+</button>
+            <input
+              type="range"
+              class="range zoom-range"
+              :min="ZOOM_LOG_MIN"
+              :max="ZOOM_LOG_MAX"
+              step="0.01"
+              :value="Math.log2(zoom)"
+              title="Zoom"
+              @input="onZoomSlider"
+            />
+            <span class="zoom-val">{{ Math.round(zoom * 100) }}%</span>
           </div>
+          <button type="button" class="zoom-reset mono" :disabled="zoom === 1" title="Reset zoom" @click="zoom = 1">100%</button>
         </div>
 
         <div class="stage-wrap">
@@ -2447,6 +2551,21 @@ function noMaps(d: DeviceInfo): boolean {
                 </div>
               </div>
             </template>
+            <div class="sp-row">
+              <span class="sp-label">Order</span>
+              <div class="sp-line">
+                <button
+                  v-for="z in Z_MOVES"
+                  :key="z.move"
+                  type="button"
+                  class="z-btn"
+                  :title="z.title"
+                  @click="moveShapeZ(selectedShape, z.move)"
+                >
+                  <Icon :name="z.icon" :size="14" />
+                </button>
+              </div>
+            </div>
             <div v-if="selectedShape.geometry.kind === 'rect'" class="sp-row">
               <span class="sp-label">Corners</span>
               <div class="sp-line">
@@ -2461,7 +2580,7 @@ function noMaps(d: DeviceInfo): boolean {
                 <span class="mono sp-val">{{ Math.round(selectedShape.geometry.radius * 100) }}%</span>
               </div>
             </div>
-            <template v-if="selectedShape.geometry.kind === 'arc' || selectedShape.geometry.kind === 'wedge'">
+            <template v-if="shapeAngle(selectedShape) !== null">
               <div class="sp-row">
                 <span class="sp-label">Angle</span>
                 <div class="sp-line">
@@ -2470,10 +2589,10 @@ function noMaps(d: DeviceInfo): boolean {
                     class="range"
                     min="5"
                     max="360"
-                    :value="Math.round(selectedShape.geometry.angle)"
-                    @input="onRangeInput($event, (v) => ((selectedShape!.geometry as ArcGeometry | WedgeGeometry).angle = v))"
+                    :value="Math.round(shapeAngle(selectedShape) ?? 0)"
+                    @input="onRangeInput($event, (v) => setShapeAngle(selectedShape!, v))"
                   />
-                  <span class="mono sp-val">{{ Math.round(selectedShape.geometry.angle) }}°</span>
+                  <span class="mono sp-val">{{ Math.round(shapeAngle(selectedShape) ?? 0) }}°</span>
                 </div>
               </div>
               <div v-if="selectedShape.geometry.kind === 'arc'" class="sp-row">
@@ -2538,6 +2657,7 @@ function noMaps(d: DeviceInfo): boolean {
             <Icon name="target" :size="13" />
             {{ recording ? "Recording…" : "Record Input" }}
           </button>
+          <span v-if="recording && candidateText" class="rec-chip mono">{{ candidateText }}</span>
           <span v-if="recording" class="ic-hint">Esc to cancel</span>
         </div>
         <div class="ic-status" :class="inputStatus.kind">
@@ -2589,7 +2709,24 @@ function noMaps(d: DeviceInfo): boolean {
                 <Icon :name="isOpen(g) ? 'chevron-down' : 'chevron-right'" :size="14" class="chevron" />
                 <span class="cell-input mono" :title="g.key">{{ g.text }}</span>
               </span>
-              <span />
+              <span class="shape-cell">
+                <button
+                  type="button"
+                  class="hbtn"
+                  :title="bucketHidden(g) ? 'Show all' : 'Hide all'"
+                  @click.stop="toggleBucketHidden(g)"
+                >
+                  <Icon :name="bucketHidden(g) ? 'eye-off' : 'eye'" :size="13" />
+                </button>
+                <template v-if="editing">
+                  <button type="button" class="hbtn" title="Duplicate all" @click.stop="duplicateBucket(g)">
+                    <Icon name="clone" :size="13" />
+                  </button>
+                  <button type="button" class="row-del" title="Delete all" @click.stop="deleteBucket(g)">
+                    <Icon name="close" :size="13" />
+                  </button>
+                </template>
+              </span>
             </div>
             <template v-if="isOpen(g)">
               <div
@@ -3128,6 +3265,31 @@ function noMaps(d: DeviceInfo): boolean {
   text-align: center;
 }
 
+.zoom .zoom-range {
+  flex-basis: 140px;
+}
+
+.zoom-reset {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.zoom-reset:hover:not(:disabled) {
+  background: var(--bg-surface-2);
+  color: var(--text);
+}
+
+.zoom-reset:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .stage-box {
   position: relative;
   flex: 1;
@@ -3286,6 +3448,16 @@ function noMaps(d: DeviceInfo): boolean {
 
 .ic-key.on :deep(svg) {
   fill: color-mix(in srgb, var(--live) 25%, transparent);
+}
+
+/* The input a recording holds until it is released. */
+.rec-chip {
+  padding: 3px 8px;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .key {
@@ -3506,6 +3678,24 @@ function noMaps(d: DeviceInfo): boolean {
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+.z-btn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.z-btn:hover {
+  background: var(--bg-surface-3);
+  color: var(--text);
 }
 
 .hex {

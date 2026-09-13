@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref } from "vue";
 import Icon from "./Icon.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
+import ConsoleCommandDialog from "./ConsoleCommandDialog.vue";
 import type { ClashReport, ScStatus } from "../types";
 
 const props = defineProps<{ report: ClashReport | null; loadError: string | null; sc: ScStatus | null }>();
@@ -186,31 +187,7 @@ const hasIssue = computed(
       <p class="dialog-note">If game is running, restart for changes to take effect</p>
     </ConfirmDialog>
 
-    <ConfirmDialog
-      v-if="showConsole"
-      title="Fix via console"
-      icon="terminal"
-      :buttons="[{ label: 'Close', kind: 'outline', value: 'close' }]"
-      @choose="showConsole = false"
-    >
-      <ol class="console-steps">
-        <li>Open the Star Citizen console in-game with <span class="console-key mono">^</span></li>
-        <li>Paste the command and press Enter</li>
-      </ol>
-      <div class="cmd-row">
-        <input
-          class="cmd-input mono"
-          :value="consoleCommand"
-          readonly
-          spellcheck="false"
-          @focus="($event.target as HTMLInputElement).select()"
-        />
-        <button type="button" class="cmd-copy" @click="emit('copy', consoleCommand)">
-          <Icon name="copy" :size="14" />
-          Copy
-        </button>
-      </div>
-    </ConfirmDialog>
+    <ConsoleCommandDialog v-if="showConsole" :command="consoleCommand" @close="showConsole = false" @copy="emit('copy', $event)" />
   </div>
 </template>
 
@@ -420,56 +397,4 @@ const hasIssue = computed(
   color: var(--text-3);
 }
 
-/* Fix via console dialog body (slot content of ConfirmDialog). */
-.console-steps {
-  margin: 0;
-  padding-left: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 14px;
-  color: var(--text);
-}
-
-.console-key {
-  padding: 1px 8px;
-  border-radius: var(--radius-control);
-  border: 1px solid var(--border);
-  background: var(--bg-surface-2);
-}
-
-.cmd-row {
-  display: flex;
-  gap: 8px;
-}
-
-.cmd-input {
-  flex: 1;
-  min-width: 0;
-  height: var(--h-control);
-  box-sizing: border-box;
-  padding: 0 12px;
-  border: none;
-  border-radius: var(--radius-control);
-  background: var(--bg-surface-2);
-  color: var(--text);
-  font-size: 13px;
-  outline: none;
-}
-
-.cmd-copy {
-  height: var(--h-control);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 16px;
-  border: none;
-  border-radius: var(--radius-control);
-  background: var(--accent);
-  color: var(--accent-text);
-  font-family: inherit;
-  font-weight: 600;
-  font-size: 14px;
-  cursor: pointer;
-}
 </style>

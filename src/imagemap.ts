@@ -3,7 +3,7 @@
 
 import type { DeviceInfo, JoyInput } from "./types";
 
-export type SymbolKind = "arrow" | "arrow2" | "rotate";
+export type SymbolKind = "arrow" | "arrow2" | "rotate" | "curve";
 
 // All coordinates normalized 0..1 relative to the image's natural size
 // (x/w -> width, y/h -> height, radii -> width); rotation in degrees,
@@ -24,7 +24,18 @@ export type RectGeometry = {
 };
 export type EllipseGeometry = { kind: "ellipse"; cx: number; cy: number; rx: number; ry: number; rotation: number };
 export type PolygonGeometry = { kind: "polygon"; points: [number, number][] };
-export type SymbolGeometry = { kind: "symbol"; symbol: SymbolKind; x: number; y: number; w: number; h: number; rotation: number };
+// `angle`: the sweep of the ring symbols (`rotate`, `curve`), unset = their
+// default; the straight arrows ignore it.
+export type SymbolGeometry = {
+  kind: "symbol";
+  symbol: SymbolKind;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rotation: number;
+  angle?: number;
+};
 // `r` outer radius, `inner` the inner one as a fraction of it (0..1).
 export type ArcGeometry = { kind: "arc"; cx: number; cy: number; r: number; inner: number; angle: number; rotation: number };
 export type WedgeGeometry = { kind: "wedge"; cx: number; cy: number; r: number; angle: number; rotation: number };
@@ -164,19 +175,60 @@ export function sameHardware(a: string | null | undefined, b: string | null | un
 
 // The path data a symbol or path shape draws (both live in the 100x100 box).
 export function pathData(g: SymbolGeometry | PathGeometry): string {
-  return g.kind === "symbol" ? SYMBOL_PATHS[g.symbol] : g.d;
+  if (g.kind === "path") return g.d;
+  if (g.symbol === "rotate") return arcArrowPath(symbolAngle(g), 2);
+  if (g.symbol === "curve") return arcArrowPath(symbolAngle(g), 1);
+  return SYMBOL_PATHS[g.symbol];
+}
+
+// The sweep a ring symbol draws: its own, else the default (`rotate` a 270°
+// ring, `curve` a half turn).
+export function symbolAngle(g: SymbolGeometry): number {
+  return g.angle ?? (g.symbol === "rotate" ? 270 : 180);
+}
+
+export function hasAngle(g: SymbolGeometry): boolean {
+  return g.symbol === "rotate" || g.symbol === "curve";
 }
 
 // Symbol outlines in a 100x100 box centered at (50,50), as SVG path data.
-// `arrow` points right, `arrow2` both ways; `rotate` is a 270° ring open at
-// the bottom with an arrowhead at each end (SC does not tell the twist
-// directions apart).
-export const SYMBOL_PATHS: Record<SymbolKind, string> = {
+// `arrow` points right, `arrow2` both ways. The ring symbols are built by
+// `arcArrowPath`.
+export const SYMBOL_PATHS: Record<Exclude<SymbolKind, "rotate" | "curve">, string> = {
   arrow: "M5 40 H60 V20 L95 50 L60 80 V60 H5 Z",
   arrow2: "M5 50 L30 25 V40 H70 V25 L95 50 L70 75 V60 H30 V75 Z",
-  rotate:
-    "M16.1 83.9 L37.3 82.5 L38.7 61.3 L33 67 A24 24 0 1 1 67 67 L61.3 61.3 L62.7 82.5 L83.9 83.9 L78.3 78.3 A40 40 0 1 0 21.7 78.3 Z",
 };
+
+// A ring segment with an arrowhead at its clockwise end (`heads` 1) or at
+// both ends (`heads` 2: the rotate symbol, SC does not tell the twist
+// directions apart), in the 100x100 box: `sweep` degrees centered on the
+// top, so the opening sits at the bottom. Ring 24..40 from the center,
+// heads 16..48 with the tip on the ring's middle.
+export function arcArrowPath(sweep: number, heads: 1 | 2): string {
+  const c = 50;
+  const ro = 40;
+  const ri = 24;
+  const ho = 48;
+  const hi = 16;
+  const rm = 32;
+  // Degrees of arc a head takes, so its tip lands on the sweep's end.
+  const hl = 20;
+  const s = Math.min(Math.max(sweep, 2 * hl + 5), 359.99);
+  const a0 = -90 - s / 2;
+  const a1 = -90 + s / 2;
+  const bs = heads === 2 ? a0 + hl : a0;
+  const be = a1 - hl;
+  const pt = (r: number, deg: number): string => {
+    const a = (deg * Math.PI) / 180;
+    return `${(c + r * Math.cos(a)).toFixed(2)} ${(c + r * Math.sin(a)).toFixed(2)}`;
+  };
+  const large = be - bs > 180 ? 1 : 0;
+  let d = `M${pt(ro, bs)} A${ro} ${ro} 0 ${large} 1 ${pt(ro, be)}`;
+  d += ` L${pt(ho, be)} L${pt(rm, a1)} L${pt(hi, be)} L${pt(ri, be)}`;
+  d += ` A${ri} ${ri} 0 ${large} 0 ${pt(ri, bs)}`;
+  if (heads === 2) d += ` L${pt(hi, bs)} L${pt(rm, a0)} L${pt(ho, bs)}`;
+  return `${d} Z`;
+}
 
 // Pixel placement of a symbol, path or image shape in a W x H pixel space:
 // center, per-axis scale (100 path units == w * W px by h * H px) and

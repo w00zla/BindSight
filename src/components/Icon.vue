@@ -43,6 +43,11 @@ export const ICONS = {
   'chevron-up': '<path d="m6 15 6-6 6 6"/>',
   'chevron-right': '<path d="m9 6 6 6-6 6"/>',
   'chevron-left': '<path d="m15 6-6 6 6 6"/>',
+  // Z-order: one step up / down, all the way to the top / bottom.
+  'z-top': '<path d="M5 12h14"/><path d="m8 8 4-4 4 4"/><path d="M12 4v11"/>',
+  'z-up': '<path d="m6 14 6-6 6 6"/>',
+  'z-down': '<path d="m6 10 6 6 6-6"/>',
+  'z-bottom': '<path d="M5 12h14"/><path d="m8 16 4 4 4-4"/><path d="M12 20V9"/>',
   unfold: '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
   // Two collapsed buckets: chevron plus head line, twice.
   group: '<path d="m4 4 3 3-3 3"/><path d="M11 7h10"/><path d="m4 14 3 3-3 3"/><path d="M11 17h10"/>',
@@ -75,6 +80,8 @@ export const ICONS = {
   'shape-arrow': '<path d="M4 12h14M13 6l6 6-6 6"/>',
   'shape-arrow2': '<path d="M4 12h16"/><path d="m8 8-4 4 4 4"/><path d="m16 8 4 4-4 4"/>',
   // A ring open at the bottom with an arrowhead at each end: rotation either way.
+  // A half-turn ring with one arrowhead: the curved arrow symbol.
+  'shape-curve': '<path d="M5 14a8 8 0 0 1 14-5"/><path d="M15 4l4 5-5 3"/>',
   'shape-rotate': '<path d="M6.3 17.7a8 8 0 1 1 11.4 0"/><path d="M3 15l3.3 2.7 3-2.7"/><path d="M21 15l-3.3 2.7-3-2.7"/>',
   'shape-arc': '<path d="M4 16a8 8 0 0 1 16 0"/><path d="M8 16a4 4 0 0 1 8 0"/><path d="M4 16h4M16 16h4"/>',
   'shape-wedge': '<path d="M12 12V3a9 9 0 0 1 9 9z"/>',
