@@ -28,6 +28,7 @@ pub mod rebind;
 pub mod resort;
 pub mod scdata;
 pub mod scinstall;
+pub mod textpath;
 pub mod wineorder;
 pub mod xmltext;
 
@@ -1065,6 +1066,8 @@ pub fn run() {
             imagemap::export_imagemap,
             imagemap::import_imagemap,
             imagemap::set_imagemap_choice,
+            textpath::text_path,
+            textpath::list_fonts,
             binding_profiles::list_binding_profiles,
             binding_profiles::import_binding_profile,
             binding_profiles::export_binding_profile,

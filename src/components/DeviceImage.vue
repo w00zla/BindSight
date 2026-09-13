@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { SYMBOL_PATHS, arcPath, polygonPx, rectRadiusPx, symbolPx, type Shape, type ImageMap } from "../imagemap";
+import { arcPath, pathData, polygonPx, rectRadiusPx, symbolPx, type Shape, type ImageMap } from "../imagemap";
 
 const props = defineProps<{
   map: ImageMap;
@@ -42,7 +42,7 @@ function polyPoints(s: Shape): string {
 }
 
 function symbolTransform(s: Shape): string {
-  if (s.geometry.kind !== "symbol") return "";
+  if (s.geometry.kind !== "symbol" && s.geometry.kind !== "path") return "";
   const p = symbolPx(s.geometry, W.value, H.value);
   return `translate(${p.x} ${p.y}) rotate(${p.rotation}) scale(${p.scaleX} ${p.scaleY}) translate(-50 -50)`;
 }
@@ -83,10 +83,10 @@ function arcD(s: Shape): string {
         />
         <polygon v-else-if="s.geometry.kind === 'polygon'" class="shape" :style="style(s)" :points="polyPoints(s)" />
         <path
-          v-else-if="s.geometry.kind === 'symbol'"
+          v-else-if="s.geometry.kind === 'symbol' || s.geometry.kind === 'path'"
           class="shape"
           :style="style(s)"
-          :d="SYMBOL_PATHS[s.geometry.symbol]"
+          :d="pathData(s.geometry)"
           :transform="symbolTransform(s)"
         />
         <path v-else-if="s.geometry.kind === 'arc' || s.geometry.kind === 'wedge'" class="shape" :style="style(s)" :d="arcD(s)" />

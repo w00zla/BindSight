@@ -9,7 +9,9 @@ export type SymbolKind = "arrow" | "arrow2" | "rotate";
 // (x/w -> width, y/h -> height, radii -> width); rotation in degrees,
 // clockwise, around the shape's own center — for an arc or wedge, where its
 // sweep starts. A symbol is its 100x100 path stretched into a w x h box
-// centered at (x, y); an image shape is its file stretched the same way.
+// centered at (x, y); an image shape is its file stretched the same way, a
+// path shape its own path data (the editor's text tool writes those: glyph
+// outlines, so a map never needs a font).
 export type RectGeometry = {
   kind: "rect";
   x: number;
@@ -27,6 +29,7 @@ export type SymbolGeometry = { kind: "symbol"; symbol: SymbolKind; x: number; y:
 export type ArcGeometry = { kind: "arc"; cx: number; cy: number; r: number; inner: number; angle: number; rotation: number };
 export type WedgeGeometry = { kind: "wedge"; cx: number; cy: number; r: number; angle: number; rotation: number };
 export type ImageGeometry = { kind: "image"; file: string; x: number; y: number; w: number; h: number; rotation: number };
+export type PathGeometry = { kind: "path"; d: string; x: number; y: number; w: number; h: number; rotation: number };
 export type Geometry =
   | RectGeometry
   | EllipseGeometry
@@ -34,7 +37,8 @@ export type Geometry =
   | SymbolGeometry
   | ArcGeometry
   | WedgeGeometry
-  | ImageGeometry;
+  | ImageGeometry
+  | PathGeometry;
 export type GeometryKind = Geometry["kind"];
 
 export interface ImageFile {
@@ -158,6 +162,11 @@ export function sameHardware(a: string | null | undefined, b: string | null | un
   return !!a && !!b && a.toLowerCase() === b.toLowerCase();
 }
 
+// The path data a symbol or path shape draws (both live in the 100x100 box).
+export function pathData(g: SymbolGeometry | PathGeometry): string {
+  return g.kind === "symbol" ? SYMBOL_PATHS[g.symbol] : g.d;
+}
+
 // Symbol outlines in a 100x100 box centered at (50,50), as SVG path data.
 // `arrow` points right, `arrow2` both ways; `rotate` is a 270° ring open at
 // the bottom with an arrowhead at each end (SC does not tell the twist
@@ -169,10 +178,11 @@ export const SYMBOL_PATHS: Record<SymbolKind, string> = {
     "M16.1 83.9 L37.3 82.5 L38.7 61.3 L33 67 A24 24 0 1 1 67 67 L61.3 61.3 L62.7 82.5 L83.9 83.9 L78.3 78.3 A40 40 0 1 0 21.7 78.3 Z",
 };
 
-// Pixel placement of a symbol or image shape in a W x H pixel space: center,
-// per-axis scale (100 path units == w * W px by h * H px) and rotation.
+// Pixel placement of a symbol, path or image shape in a W x H pixel space:
+// center, per-axis scale (100 path units == w * W px by h * H px) and
+// rotation.
 export function symbolPx(
-  s: SymbolGeometry | ImageGeometry,
+  s: SymbolGeometry | ImageGeometry | PathGeometry,
   W: number,
   H: number,
 ): { x: number; y: number; scaleX: number; scaleY: number; rotation: number } {

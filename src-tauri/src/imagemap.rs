@@ -114,6 +114,17 @@ pub enum Geometry {
         #[serde(default)]
         rotation: f64,
     },
+    /// Own SVG path data in a 100x100 box, placed like a symbol (the
+    /// editor's text tool writes these, see `textpath.rs`).
+    Path {
+        d: String,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        #[serde(default)]
+        rotation: f64,
+    },
     /// An image file of its own in the image-map folder, centered at x/y.
     Image {
         file: String,
@@ -271,8 +282,25 @@ pub fn validate(p: &ImageMap) -> Result<(), String> {
                 return Err(format!("invalid image file name {f:?} on shape {:?}", sh.id));
             }
         }
+        if let Geometry::Path { d, .. } = &sh.geometry {
+            if !is_path_data(d) {
+                return Err(format!("invalid path data on shape {:?}", sh.id));
+            }
+        }
     }
     Ok(())
+}
+
+/// The longest path data a shape may carry (a 256-character text in the
+/// UI font stays well below).
+const MAX_PATH_DATA: usize = 512 * 1024;
+
+/// SVG path data: commands, numbers and separators only, nothing that
+/// needs escaping in an attribute.
+fn is_path_data(d: &str) -> bool {
+    !d.trim().is_empty()
+        && d.len() <= MAX_PATH_DATA
+        && d.chars().all(|c| "MmLlHhVvCcSsQqTtAaZz0123456789.,-+eE \n".contains(c))
 }
 
 /// Image files carry one of the extensions the webview can show.
@@ -828,6 +856,33 @@ mod tests {
         for f in p.files() {
             fs::write(dir.join(f), PNG).unwrap();
         }
+    }
+
+    #[test]
+    fn path_shapes_carry_only_path_data() {
+        let mut p = sample("p1", "ok");
+        let path = |d: &str| Shape {
+            id: "s-path".into(),
+            input: "button:0".into(),
+            stroke: None,
+            fill: None,
+            geometry: Geometry::Path { d: d.into(), x: 0.5, y: 0.5, w: 0.1, h: 0.05, rotation: 0.0 },
+        };
+        p.shapes.push(path("M0 0L100 0L100 100Z"));
+        assert!(validate(&p).is_ok());
+        for bad in ["", "   ", "M0 0<script>", "M0 0\"", "M0 0&amp;"] {
+            p.shapes.pop();
+            p.shapes.push(path(bad));
+            assert!(validate(&p).unwrap_err().contains("path data"), "{bad:?} should be rejected");
+        }
+        p.shapes.pop();
+        p.shapes.push(path(&"M0 0L1 1".repeat(MAX_PATH_DATA / 8 + 1)));
+        assert!(validate(&p).is_err());
+        // Round trip keeps the kind tag.
+        let json = r#"{"kind":"path","d":"M0 0L1 1Z","x":0.1,"y":0.2,"w":0.3,"h":0.4}"#;
+        let g: Geometry = serde_json::from_str(json).unwrap();
+        assert!(matches!(&g, Geometry::Path { d, rotation, .. } if d == "M0 0L1 1Z" && *rotation == 0.0));
+        assert_eq!(serde_json::to_value(&g).unwrap()["kind"], "path");
     }
 
     #[test]

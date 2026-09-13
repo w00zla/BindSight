@@ -32,6 +32,8 @@ tauri-plugin-dialog = "2.7.3"
 tauri-plugin-log = "2"
 log = "0.4"
 os_info = { version = "3", default-features = false }
+ttf-parser = "0.25.1"
+fontdb = "0.24.0"
 
 # SDL2 is linked differently per platform. On Windows we build it from source
 # and static-link it, so the app needs no SDL2.dll and no system SDL2 install

@@ -264,6 +264,13 @@ presentational components:
   `ignored_devices` (the Exclude feature of 0.10 – 0.12) is ignored.
   `load` fills missing environments with defaults; no migration of older
   shapes.
+- `textpath.rs` — the text tool's backend: `list_fonts` (the system's
+  font families via `fontdb`, scanned once on first use; the app bundles
+  no font for this on purpose, the map stores outlines only) and
+  `text_path` (text + family + bold -> glyph outlines via `ttf-parser`,
+  advance + `kern`, `\n` stacks lines, normalized into the 100x100 symbol
+  box, plus the line box's `aspect`). At most 256 characters, control
+  characters dropped.
 - `imagemap.rs` — one folder per image-map (`imagemap.json` + image) under
   `<app_data_dir>/imagemaps/`, bundled ones under `resources/imagemaps/`
   (read-only; clone into the user root with a fresh id, import assigns a
@@ -376,8 +383,12 @@ All of it lives in the Devices mode's Device Info view instead.
   `ellipse`, `polygon`, `symbol` (`arrow`, `arrow2`, `rotate`: a 100x100
   path stretched into a `w` x `h` box, rotatable), `arc` (outer `r`, `inner`
   as a fraction of it, `angle` of sweep from `rotation`), `wedge` (`r`,
-  `angle`, `rotation`) and `image` (its own file in the map folder, no
-  colours, box like a symbol). Several shapes per input are fine.
+  `angle`, `rotation`), `image` (its own file in the map folder, no
+  colours, box like a symbol) and `path` (own SVG path data in the 100x100
+  box, box like a symbol; the editor's text tool writes these from any
+  font installed on the editing machine, see `textpath.rs`, so a map never
+  needs a font and a text is not editable afterwards, only replaced).
+  Several shapes per input are fine.
 - **Names** (image-map now, device names later): letters, digits, space,
   `_`, `-` and brackets `()[]{}` only, trimmed, at most 64 characters —
   nothing that needs escaping in a file name or URL. `imagemap::sanitize_name` / `src/names.ts` hold the

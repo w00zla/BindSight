@@ -63,6 +63,8 @@ export const ICONS = {
   'arrow-right': '<path d="M4 12h14M13 6l6 6-6 6"/>',
   eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
   'eye-off': '<path d="M10.6 6.2A9.9 9.9 0 0 1 12 6c6.4 0 10 7 10 7a17 17 0 0 1-3 3.8"/><path d="M6.6 7.6A17 17 0 0 0 2 13s3.6 7 10 7a9.8 9.8 0 0 0 4.5-1.1"/><path d="M9.9 10.9a3 3 0 0 0 4.2 4.2"/><path d="M3 3l18 18"/>',
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
+  redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/>',
   'shape-rect': '<rect x="4" y="5" width="16" height="14" rx="1"/>',
   'shape-ellipse': '<ellipse cx="12" cy="12" rx="8" ry="6"/>',
   'shape-polygon': '<path d="M12 3l8 6-3 10H7L4 9z"/>',
@@ -76,6 +78,8 @@ export const ICONS = {
   'shape-rotate': '<path d="M6.3 17.7a8 8 0 1 1 11.4 0"/><path d="M3 15l3.3 2.7 3-2.7"/><path d="M21 15l-3.3 2.7-3-2.7"/>',
   'shape-arc': '<path d="M4 16a8 8 0 0 1 16 0"/><path d="M8 16a4 4 0 0 1 8 0"/><path d="M4 16h4M16 16h4"/>',
   'shape-wedge': '<path d="M12 12V3a9 9 0 0 1 9 9z"/>',
+  // A capital T: the text tool (its shapes are paths).
+  'shape-text': '<path d="M5 5h14"/><path d="M12 5v14"/>',
   // A picture frame with a hill, no sun: an image shape, not an image-map.
   'shape-image': '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m3 17 5-5 4 4 3-3 6 6"/>',
 } as const

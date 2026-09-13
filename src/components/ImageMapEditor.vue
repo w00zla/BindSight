@@ -14,6 +14,7 @@ import type { Wedge } from "konva/lib/shapes/Wedge";
 import type { Transformer } from "konva/lib/shapes/Transformer";
 import type { VueKonvaRef } from "vue-konva";
 import Icon, { type IconName } from "./Icon.vue";
+import Dropdown, { type DropdownOption } from "./Dropdown.vue";
 import ConfirmDialog, { type ConfirmButton, type ConfirmIcon } from "./ConfirmDialog.vue";
 import Splitter from "./Splitter.vue";
 import ColumnHead from "./ColumnHead.vue";
@@ -25,9 +26,9 @@ import { persistedRef } from "../persist";
 import { NAME_MAX, sanitizeName, stripNameChars } from "../names";
 import { colourAlpha, colourHex, composeColour, cssVar, parseHex, readPalette, rgbaToHex } from "../colour";
 import {
-  SYMBOL_PATHS,
   rectRadiusPx,
   symbolPx,
+  pathData,
   inputKey,
   sameHardware,
   shapeImageFiles,
@@ -68,9 +69,12 @@ const emit = defineEmits<{
 }>();
 
 // No active tool == select/move mode. The image tool never stays active:
-// it picks a file and places it at once.
-type Tool = "rect" | "ellipse" | "polygon" | "arc" | "wedge" | "image" | SymbolKind;
-const TOOLS: { tool: Tool; icon: IconName; title: string }[] = [
+// it picks a file and places it at once. The text tool places its text as
+// a path shape (glyph outlines from the backend, `text_path`).
+type Tool = "rect" | "ellipse" | "polygon" | "arc" | "wedge" | "image" | "text" | SymbolKind;
+// `divider`: a separator before the tool (image and text stand apart from
+// the drawn shapes).
+const TOOLS: { tool: Tool; icon: IconName; title: string; divider?: boolean }[] = [
   { tool: "rect", icon: "shape-rect", title: "Rectangle" },
   { tool: "ellipse", icon: "shape-ellipse", title: "Ellipse" },
   { tool: "polygon", icon: "shape-polygon", title: "Polygon" },
@@ -79,13 +83,38 @@ const TOOLS: { tool: Tool; icon: IconName; title: string }[] = [
   { tool: "arrow", icon: "shape-arrow", title: "Arrow" },
   { tool: "arrow2", icon: "shape-arrow2", title: "Double arrow" },
   { tool: "rotate", icon: "shape-rotate", title: "Rotation" },
-  { tool: "image", icon: "shape-image", title: "Image" },
+  { tool: "image", icon: "shape-image", title: "Image", divider: true },
+  { tool: "text", icon: "shape-text", title: "Text", divider: true },
 ];
+// The text tool's input: what the next click places, in which of the
+// system's font families (listed by the backend when the tool is first
+// used), regular or bold. The map stores only the outlines, so the font
+// choice is this machine's business alone; it is remembered.
+const TEXT_MAX_LEN = 256;
+const textInput = ref("");
+const textFamily = persistedRef<string>("bindsight.editor.textFamily", "");
+const textBold = persistedRef<boolean>("bindsight.editor.textBold", false);
+const fontFamilies = ref<string[] | null>(null);
+const fontOptions = computed<DropdownOption[]>(() => (fontFamilies.value ?? []).map((f) => ({ value: f, label: f })));
+
+async function loadFonts() {
+  if (fontFamilies.value) return;
+  try {
+    const list = await invoke<string[]>("list_fonts");
+    fontFamilies.value = list;
+    if (!list.includes(textFamily.value)) textFamily.value = list[0] ?? "";
+  } catch (e) {
+    fontFamilies.value = [];
+    emit("notify", `Fonts unavailable: ${e}`, "error");
+  }
+}
 const SYMBOLS: SymbolKind[] = ["arrow", "arrow2", "rotate"];
 
 // A new symbol is 5% of the image width, square on screen; a new image
-// shape 15% of the image width, keeping its own aspect.
+// shape 15% of the image width, keeping its own aspect; a new text 4% of
+// the image height, as wide as its text.
 const DEFAULT_SYMBOL_W = 0.05;
+const DEFAULT_TEXT_H = 0.04;
 const DEFAULT_IMAGE_W = 0.15;
 const NEW_ARC = { inner: 0.6, angle: 270, rotation: 135 };
 const NEW_WEDGE = { angle: 90, rotation: 225 };
@@ -245,12 +274,98 @@ const selectMode = computed(() => tool.value === null);
 const canDrag = computed(() => selectMode.value && editing.value);
 const selectedId = ref<string | null>(null);
 const selectedShape = computed(() => shapes.value.find((a) => a.id === selectedId.value) ?? null);
-// Arcs and wedges stay circular under the transformer.
+// Arcs and wedges stay circular under the transformer, text keeps its
+// aspect.
 const keepRatio = computed(() => {
   const k = selectedShape.value?.geometry.kind;
-  return k === "arc" || k === "wedge";
+  return k === "arc" || k === "wedge" || k === "path";
 });
 const hover = ref<{ x: number; y: number; text: string } | null>(null);
+
+// --- undo / redo -----------------------------------------------------------
+
+// Snapshots of the shape list, one per settled change: a deep watch on the
+// shapes, debounced so a slider drag or held arrow keys make one step, not
+// fifty. The image, the name and hidden shapes are not history (view, not
+// content). Undo / redo restore a snapshot without recording it. Cleared
+// when a map opens or edit mode ends; a save keeps it (the dirty check
+// compares against the saved state, not the history).
+const HISTORY_MAX = 100;
+const HISTORY_DEBOUNCE_MS = 250;
+// Past snapshots, the last one is the current state.
+const undoStack = ref<string[]>([]);
+const redoStack = ref<string[]>([]);
+let historyTimer: ReturnType<typeof setTimeout> | null = null;
+let restoring = false;
+const canUndo = computed(() => undoStack.value.length > 1);
+const canRedo = computed(() => redoStack.value.length > 0);
+
+function resetHistory() {
+  if (historyTimer) clearTimeout(historyTimer);
+  historyTimer = null;
+  undoStack.value = map.value ? [JSON.stringify(map.value.shapes)] : [];
+  redoStack.value = [];
+}
+
+function recordHistory() {
+  const m = map.value;
+  if (!m) return;
+  const snap = JSON.stringify(m.shapes);
+  if (snap === undoStack.value[undoStack.value.length - 1]) return;
+  undoStack.value.push(snap);
+  if (undoStack.value.length > HISTORY_MAX + 1) undoStack.value.shift();
+  redoStack.value = [];
+}
+
+// A pending debounced change becomes a step now (so an undo right after a
+// change undoes that change, not the one before).
+function flushHistory() {
+  if (!historyTimer) return;
+  clearTimeout(historyTimer);
+  historyTimer = null;
+  recordHistory();
+}
+
+watch(
+  () => map.value?.shapes,
+  () => {
+    if (restoring || !editing.value) return;
+    if (historyTimer) clearTimeout(historyTimer);
+    historyTimer = setTimeout(() => {
+      historyTimer = null;
+      recordHistory();
+    }, HISTORY_DEBOUNCE_MS);
+  },
+  { deep: true },
+);
+
+function applySnapshot(snap: string) {
+  const m = map.value;
+  if (!m) return;
+  restoring = true;
+  m.shapes = JSON.parse(snap) as Shape[];
+  if (selectedId.value && !m.shapes.some((a) => a.id === selectedId.value)) selectedId.value = null;
+  // The deep watch runs before the next tick; only then may it record again.
+  void nextTick(() => {
+    restoring = false;
+  });
+}
+
+function undo() {
+  flushHistory();
+  if (!canUndo.value) return;
+  const current = undoStack.value.pop();
+  if (current !== undefined) redoStack.value.push(current);
+  applySnapshot(undoStack.value[undoStack.value.length - 1]);
+}
+
+function redo() {
+  flushHistory();
+  const next = redoStack.value.pop();
+  if (next === undefined) return;
+  undoStack.value.push(next);
+  applySnapshot(next);
+}
 
 // The recorded input new shapes go to. Only Record changes it; it is dropped
 // whenever the map, the device, the view or the edit mode changes.
@@ -474,6 +589,7 @@ async function loadMap(id: string) {
   dropInput();
   // A map always opens read-only; the callers that want the editor say so.
   state.value = "view";
+  resetHistory();
 }
 
 function closeMap() {
@@ -713,6 +829,7 @@ async function cloneMap(s: ImageMapSummary) {
 function startEdit() {
   if (locked.value) return;
   state.value = "edit";
+  resetHistory();
 }
 
 function useForDevice() {
@@ -731,6 +848,7 @@ function leaveEdit() {
   zoom.value = 1;
   dropInput();
   cancelDraw();
+  resetHistory();
 }
 
 // Cancel drops the unsaved changes without asking — that is what the button
@@ -917,6 +1035,7 @@ function setTool(t: Tool) {
   // Clicking the active tool turns it off — no tool == select/move.
   tool.value = tool.value === t ? null : t;
   if (tool.value) selectedId.value = null;
+  if (tool.value === "text") void loadFonts();
 }
 
 // Image tool: pick a file, copy it into the map folder and place it at the
@@ -989,21 +1108,23 @@ function moveShape(a: Shape, dxPx: number, dyPx: number) {
   }
 }
 
-// A copy of the shape, offset a little, under the same input; the copy is
-// selected.
+// A copy of the shape, offset a little, under the recorded input when one
+// is recorded (that is how a shape is cloned to another input), else under
+// the same one; the copy is selected.
 function duplicateShape(a: Shape) {
   const m = map.value;
   if (!m || locked.value || !editing.value) return;
-  const copy: Shape = { ...JSON.parse(JSON.stringify(a)), id: newId() };
+  const copy: Shape = { ...JSON.parse(JSON.stringify(a)), id: newId(), input: currentKey.value ?? a.input };
   moveShape(copy, 12, 12);
   m.shapes.push(copy);
   selectedId.value = copy.id;
 }
 
-// Keyboard editing of the selected shape: arrows nudge (Shift: 10 px),
-// Delete / Backspace delete, Ctrl+D duplicates, Escape stops a recording,
-// else deselects or drops the tool. Text fields and open dialogs keep their
-// keys; while recording, the other keys are the input being recorded.
+// Keyboard editing: Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y undo and redo; on the
+// selected shape arrows nudge (Shift: 10 px), Delete / Backspace delete,
+// Ctrl+D duplicates; Escape stops a recording, else deselects or drops the
+// tool. Text fields and open dialogs keep their keys; while recording, the
+// other keys are the input being recorded.
 const NUDGE_PX = 1;
 const NUDGE_SHIFT_PX = 10;
 
@@ -1021,6 +1142,12 @@ function onEditorKey(e: KeyboardEvent) {
     } else if (selectedId.value) {
       selectedId.value = null;
     }
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z" || e.key === "y" || e.key === "Y")) {
+    if (e.key === "y" || e.key === "Y" || e.shiftKey) redo();
+    else undo();
+    e.preventDefault();
     return;
   }
   const a = selectedShape.value;
@@ -1057,12 +1184,14 @@ function onEditorKey(e: KeyboardEvent) {
 // The kind's tool icon.
 function shapeIcon(a: Shape): IconName {
   const g = a.geometry;
+  if (g.kind === "path") return "shape-text";
   return g.kind === "symbol" ? `shape-${g.symbol}` : `shape-${g.kind}`;
 }
 
 function shapeKind(a: Shape): string {
   const g = a.geometry;
   if (g.kind === "symbol") return g.symbol === "arrow2" ? "double arrow" : g.symbol === "rotate" ? "rotation" : g.symbol;
+  if (g.kind === "path") return "text";
   return g.kind;
 }
 
@@ -1186,6 +1315,8 @@ function onStageMouseDown(e: KonvaEventObject<MouseEvent>) {
     draft.value = { x0: pos.x, y0: pos.y, x1: pos.x, y1: pos.y };
   } else if (tool.value === "polygon") {
     draftPoly.value = [...draftPoly.value, pos.x, pos.y];
+  } else if (tool.value === "text") {
+    void addTextShape(pos.x / W.value, pos.y / H.value);
   } else if (tool.value && SYMBOLS.includes(tool.value as SymbolKind)) {
     addShape({
       kind: "symbol",
@@ -1196,6 +1327,31 @@ function onStageMouseDown(e: KonvaEventObject<MouseEvent>) {
       h: (DEFAULT_SYMBOL_W * W.value) / H.value,
       rotation: 0,
     });
+  }
+}
+
+// The text tool's click: the backend turns the text into path data in the
+// 100x100 box and tells its aspect; the shape is DEFAULT_TEXT_H high.
+async function addTextShape(x: number, y: number) {
+  const text = textInput.value;
+  if (!text.trim()) {
+    emit("notify", "Type a text first", "error");
+    return;
+  }
+  if (!textFamily.value) {
+    emit("notify", "Choose a font first", "error");
+    return;
+  }
+  try {
+    const { d, aspect } = await invoke<{ d: string; aspect: number }>("text_path", {
+      text,
+      family: textFamily.value,
+      bold: textBold.value,
+    });
+    const h = DEFAULT_TEXT_H;
+    addShape({ kind: "path", d, x, y, w: (h * H.value * aspect) / W.value, h, rotation: 0 });
+  } catch (e) {
+    emit("notify", String(e), "error");
   }
 }
 
@@ -1315,13 +1471,13 @@ function polyCfg(a: Shape) {
 }
 
 function symbolCfg(a: Shape) {
-  if (a.geometry.kind !== "symbol") return {};
+  if (a.geometry.kind !== "symbol" && a.geometry.kind !== "path") return {};
   const s = a.geometry;
   // 100 path units == w * image width by h * image height.
   const px = symbolPx(s, W.value, H.value);
   return {
     id: a.id,
-    data: SYMBOL_PATHS[s.symbol],
+    data: pathData(s),
     x: px.x,
     y: px.y,
     offsetX: 50,
@@ -1416,7 +1572,7 @@ function onDragEnd(a: Shape, e: KonvaEventObject<DragEvent>) {
   } else if (s.kind === "ellipse" || s.kind === "arc" || s.kind === "wedge") {
     s.cx = node.x() / W.value;
     s.cy = node.y() / H.value;
-  } else if (s.kind === "symbol" || s.kind === "image") {
+  } else if (s.kind === "symbol" || s.kind === "image" || s.kind === "path") {
     s.x = node.x() / W.value;
     s.y = node.y() / H.value;
   } else {
@@ -1470,7 +1626,7 @@ function onTransformEnd(a: Shape, e: KonvaEventObject<Event>) {
     s.cx = node.x() / W.value;
     s.cy = node.y() / H.value;
     s.rotation = node.rotation();
-  } else if (s.kind === "symbol") {
+  } else if (s.kind === "symbol" || s.kind === "path") {
     s.w = (sx * 100) / W.value;
     s.h = (sy * 100) / H.value;
     s.x = node.x() / W.value;
@@ -2043,19 +2199,48 @@ function noMaps(d: DeviceInfo): boolean {
       </template>
       <template v-else-if="map">
         <div v-if="editing" class="centre-head">
-          <button
-            v-for="t in TOOLS"
-            :key="t.tool"
-            type="button"
-            class="tool"
-            :class="{ on: tool === t.tool }"
-            :disabled="!currentKey"
-            :title="currentKey ? t.title : `${t.title} · record an input first`"
-            @click="setTool(t.tool)"
-          >
-            <Icon :name="t.icon" :size="16" />
-          </button>
+          <template v-for="t in TOOLS" :key="t.tool">
+            <div v-if="t.divider" class="divider" />
+            <button
+              type="button"
+              class="tool"
+              :class="{ on: tool === t.tool }"
+              :disabled="!currentKey"
+              :title="currentKey ? t.title : `${t.title} · record an input first`"
+              @click="setTool(t.tool)"
+            >
+              <Icon :name="t.icon" :size="16" />
+            </button>
+          </template>
+          <template v-if="tool === 'text'">
+            <input
+              v-model="textInput"
+              class="text-input"
+              type="text"
+              :maxlength="TEXT_MAX_LEN"
+              placeholder="Text, then click the image"
+              spellcheck="false"
+            />
+            <Dropdown
+              v-model="textFamily"
+              class="font-pick"
+              variant="small"
+              :options="fontOptions"
+              :placeholder="fontFamilies === null ? 'Loading fonts…' : 'No fonts'"
+              title="Font"
+            />
+            <button type="button" class="tool font" :class="{ on: textBold }" title="Bold" @click="textBold = !textBold">
+              B
+            </button>
+          </template>
           <div class="grow" />
+          <button type="button" class="tool" :disabled="!canUndo" title="Undo (Ctrl+Z)" @click="undo()">
+            <Icon name="undo" :size="16" />
+          </button>
+          <button type="button" class="tool" :disabled="!canRedo" title="Redo (Ctrl+Shift+Z)" @click="redo()">
+            <Icon name="redo" :size="16" />
+          </button>
+          <div class="divider" />
           <div class="zoom mono">
             <button type="button" title="Zoom out" @click="zoomStep(-1)">−</button>
             <button type="button" class="zoom-val" title="Reset zoom" @click="zoom = 1">
@@ -2880,6 +3065,39 @@ function noMaps(d: DeviceInfo): boolean {
 
 .centre-head .btn.small {
   height: 34px;
+}
+
+/* The text tool's input, font pick and bold toggle. */
+.text-input {
+  width: 220px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-surface-2);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+
+.tool.font {
+  width: auto;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.font-pick {
+  flex: none;
+  width: 200px;
+  max-width: 200px;
+}
+
+.centre-head .divider {
+  width: 1px;
+  height: 24px;
+  margin: 0 4px;
+  background: var(--border-dim);
 }
 
 .zoom {
