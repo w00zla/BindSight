@@ -1703,7 +1703,7 @@ function deviceRows(d: DeviceInfo): [string, string][] {
     ["game product", d.sc_product_guid ?? "—"],
     ["hardware id", d.hardware_id ?? "—"],
     ["sdl", `index ${d.index} · instance ${d.sdl_instance_id} · type ${d.sdl_type} · path ${d.sdl_path ?? "—"}`],
-    ["usb", `vid ${hex4(d.sdl_vendor)} · pid ${hex4(d.sdl_product)} · version ${hex4(d.sdl_product_version)} · power ${d.power_level}`],
+    ["usb", `vid ${hex4(d.sdl_vendor)} · pid ${hex4(d.sdl_product)} · version ${hex4(d.sdl_product_version)} · serial ${d.sdl_serial || "—"} · power ${d.power_level}`],
     [
       "io",
       `${d.num_buttons} buttons · ${d.num_axes} axes · ${d.num_hats} hats · ${d.num_balls} balls · rumble ${d.has_rumble ? "yes" : "no"} · led ${d.has_led ? "yes" : "no"}`,
