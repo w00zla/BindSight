@@ -1115,8 +1115,12 @@ onMounted(async () => {
   }
   window.addEventListener("blur", clearHeld);
   // Closing (top-bar button or the window manager) settles unsaved changes
-  // first; `destroy` skips this handler, `close` would run it again.
+  // first. The backend prevents every close and sends `close-requested`
+  // (its own event, see `lib.rs::CloseGuard`); the acknowledgement tells it
+  // the webview is alive, else it destroys the window itself after a
+  // timeout. `destroy` skips the guard, `close` would run it again.
   const win = getCurrentWindow();
+  let closing = false;
   // Every startup step on its own: one that fails is reported and the
   // rest still run, so a broken listener does not take the devices, the
   // game data or the image-maps down with it.
@@ -1130,9 +1134,17 @@ onMounted(async () => {
   };
   await step("Window close handling", async () => {
     unlisten.push(
-      await win.onCloseRequested(async (e) => {
-        e.preventDefault();
-        if (await allSettled()) await win.destroy();
+      await listen<{ request: number }>("close-requested", async (e) => {
+        await invoke("ack_close", { request: e.payload.request });
+        // A second request while the dialogs are up (window manager
+        // clicked twice) must not stack a second dialog.
+        if (closing) return;
+        closing = true;
+        try {
+          if (await allSettled()) await win.destroy();
+        } finally {
+          closing = false;
+        }
       }),
     );
   });

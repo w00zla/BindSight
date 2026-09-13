@@ -323,7 +323,14 @@ presentational components:
   `get_load_status` hands the last
   load outcome to a frontend that mounts after the first load already
   finished), `system_info` (app version, OS, toolkit versions for the
-  Device Info dumps), thread spawns, the Wayland DMABUF workaround, logging
+  Device Info dumps), the window-close guard (`CloseGuard`: every
+  `CloseRequested` is prevented and sent to the frontend as our own
+  `close-requested` event, never Tauri's — with a JS listener on
+  `tauri://close-requested` Tauri waits for the webview forever once it is
+  dead; the frontend acks via `ack_close`, settles unsaved changes and
+  calls `destroy`; no ack within 2 s = dead webview, the window is
+  destroyed here and the app exits if even that leaves it running), thread
+  spawns, the Wayland DMABUF workaround, logging
   setup.
 
 ## Logging

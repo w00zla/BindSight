@@ -1,4 +1,6 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use log::{debug, error, info, warn};
 use serde::Serialize;
@@ -897,6 +899,72 @@ fn log_startup(app: &AppHandle, config: &config::Config) {
     );
 }
 
+/// The window-close guard. Closing (top-bar button or window manager) has
+/// to settle unsaved changes in the frontend first, so every
+/// `CloseRequested` is prevented here and handed to the webview as our own
+/// `close-requested` event. Not Tauri's `tauri://close-requested`: with a
+/// JS listener on that one Tauri waits for the webview to close the
+/// window itself, forever if the webview is gone (WebKit's web process
+/// died, a blank window nothing could close). The webview acknowledges a
+/// request at once (`ack_close`), then asks its dialogs and calls
+/// `destroy`. No acknowledgement within `CLOSE_ACK_TIMEOUT` means the
+/// webview is dead: the window is destroyed here, and should even that
+/// leave the process running, the app exits.
+struct CloseGuard {
+    /// Counts the close requests; an acknowledgement names the request.
+    requests: AtomicU64,
+    /// The highest request the webview acknowledged.
+    acked: AtomicU64,
+}
+
+const CLOSE_ACK_TIMEOUT: Duration = Duration::from_secs(2);
+const CLOSE_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Serialize)]
+struct CloseRequest {
+    request: u64,
+}
+
+#[tauri::command]
+fn ack_close(request: u64, guard: State<CloseGuard>) {
+    guard.acked.fetch_max(request, Ordering::SeqCst);
+}
+
+fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) {
+    api.prevent_close();
+    let guard = window.state::<CloseGuard>();
+    let request = guard.requests.fetch_add(1, Ordering::SeqCst) + 1;
+    debug!("close request {request}");
+    if let Err(e) = window.emit("close-requested", CloseRequest { request }) {
+        warn!("close request {request}: not delivered to the webview ({e}), destroying the window");
+        destroy_or_exit(window.clone());
+        return;
+    }
+    let window = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(CLOSE_ACK_TIMEOUT);
+        if window.state::<CloseGuard>().acked.load(Ordering::SeqCst) < request {
+            warn!(
+                "close request {request}: the webview did not answer within {CLOSE_ACK_TIMEOUT:?}, destroying the window"
+            );
+            destroy_or_exit(window);
+        }
+    });
+}
+
+/// Destroys the window (no `CloseRequested` for that) and, if the process is
+/// still around after `CLOSE_EXIT_TIMEOUT`, exits the app.
+fn destroy_or_exit(window: tauri::Window) {
+    if let Err(e) = window.destroy() {
+        error!("window destroy failed: {e}");
+    }
+    std::thread::spawn(move || {
+        std::thread::sleep(CLOSE_EXIT_TIMEOUT);
+        warn!("window still alive {CLOSE_EXIT_TIMEOUT:?} after destroy, exiting");
+        window.app_handle().exit(0);
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // WebKitGTK's DMABUF renderer triggers "Error 71 (Protocol error)" on many
@@ -953,12 +1021,19 @@ pub fn run() {
                 last_clash_log: String::new(),
             }));
             app.manage(devices);
+            app.manage(CloseGuard { requests: AtomicU64::new(0), acked: AtomicU64::new(0) });
             spawn_sc_load(app.handle().clone());
             spawn_game_log_watch(app.handle().clone());
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                on_close_requested(window, api);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             list_devices,
+            ack_close,
             kblayout::keyboard_layout,
             system_info,
             get_actions,
