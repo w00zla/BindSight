@@ -507,18 +507,19 @@ async function deleteBackup(b: BackupSummary) {
 
 // --- diff filters ----------------------------------------------------------
 
-// Toggled chips; none toggled = everything. Remembered across restarts.
-// The kind chips live per device (`js1` -> ["changed"]).
-const kindFilter = persistedRef<Record<string, DiffKind[]>>("bindsight.compare.kindsByDevice", {});
-const deviceFilter = persistedRef<string[]>("bindsight.compare.devices", []);
+// Toggled chips; none toggled = everything. Not remembered across restarts:
+// a filter on a device the next compare lacks would show nothing. The kind
+// chips live per device (`js1` -> ["changed"]).
+const kindFilter = ref<Record<string, DiffKind[]>>({});
+const deviceFilter = ref<string[]>([]);
 // Rows grouped under one collapsible head per input (device + input, like
 // the Monitor's deck), the actions inside — or flat. Grouped and open by
 // default.
 const grouped = persistedRef<boolean>("bindsight.compare.grouped", true);
 
 // The kinds toggled on for a device that this compare actually has rows
-// for — a remembered toggle on a kind with no rows (its chip is disabled)
-// must not filter, or nothing would show.
+// for — a toggle left from an earlier compare on a kind with no rows (its
+// chip is disabled) must not filter, or nothing would show.
 function kindsOf(device: string): DiffKind[] {
   const counts = deviceChips.value.find((d) => d.label === device)?.counts;
   return (kindFilter.value[device] ?? []).filter((k) => !!counts?.[k]);
@@ -796,9 +797,9 @@ const deviceCols = computed<DeviceCol[]>(() => {
   ];
 });
 
-// Columns the user switched off (remembered; a device new to the file
-// starts visible).
-const hiddenCols = persistedRef<string[]>("bindsight.bindingslist.hiddencols", []);
+// Columns the user switched off. Not remembered: a device column hidden
+// once would stay hidden after a restart with no hint why.
+const hiddenCols = ref<string[]>([]);
 // No column toggled on means every column, like the other chip filters.
 const visibleCols = computed(() => {
   const shown = deviceCols.value.filter((c) => !hiddenCols.value.includes(c.key));

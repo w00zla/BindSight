@@ -27,9 +27,9 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ flash: [b: ResolvedBinding] }>();
 
-// Toggled device chips; none toggled = every device. Remembered, like the
-// grouping switch.
-const deviceFilter = persistedRef<string[]>("bindsight.monitor.devices", []);
+// Toggled device chips; none toggled = every device. Not remembered: a
+// filter on a device that is gone after a restart would empty the deck.
+const deviceFilter = ref<string[]>([]);
 
 function toggleDevice(label: string) {
   deviceFilter.value = deviceFilter.value.includes(label)
