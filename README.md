@@ -142,6 +142,7 @@ The app supports **Windows** and **Linux**!
    pnpm install
    pnpm tauri dev                     # development
    pnpm tauri build                   # release bundle
+   pnpm build:linux                   # release bundle on Linux (NO_STRIP: linuxdeploy's strip chokes on RELR libraries)
    cd src-tauri && cargo test --lib   # backend tests, no hardware needed
    ```
 

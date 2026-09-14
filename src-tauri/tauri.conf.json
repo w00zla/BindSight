@@ -26,6 +26,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "Game",
     "externalBin": ["binaries/starbreaker"],
     "resources": ["resources/imagemaps/"],
     "icon": [
