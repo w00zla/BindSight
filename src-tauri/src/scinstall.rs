@@ -1,22 +1,27 @@
 //! The configured SC install: its version (from `build_manifest.id`) and the
 //! game data BindSight needs from it — the action master list and the input
-//! token labels. Both are pulled out of `Data.p4k` with the bundled StarBreaker
-//! sidecar, converted to compact JSON (the app never parses the raw XML/INI
-//! twice) and cached per game version under the app cache dir, so a game
-//! patch is picked up automatically and older installs (PTU/LIVE) stay apart.
+//! token labels. Both are read out of `Data.p4k` (`p4k.rs`, CryXmlB decoded
+//! by `cryxml.rs`), converted to compact JSON (the app never parses the raw
+//! XML/INI twice) and cached per game version under the app cache dir, so a
+//! game patch is picked up automatically and older installs (PTU/LIVE) stay
+//! apart.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use log::{debug, info, warn};
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 
 use crate::scdata::{self, ActionMap};
+use crate::{cryxml, p4k};
 
-/// Files inside `Data.p4k` (forward or backward slashes, StarBreaker is not
-/// consistent between platforms), extracted in one run.
-const P4K_REGEX: &str = r"^Data[\\/]Libs[\\/]Config[\\/](defaultProfile|keybinding_localization)\.xml$|^Data[\\/]Localization[\\/]english[\\/]global\.ini$";
+/// The files inside `Data.p4k`: the action master list, the input token
+/// labels and the English localization.
+const P4K_FILES: [&str; 3] = [
+    "Data/Libs/Config/defaultProfile.xml",
+    "Data/Libs/Config/keybinding_localization.xml",
+    "Data/Localization/english/global.ini",
+];
 
 const ACTIONS_FILE: &str = "scdata.json";
 const TOKENS_FILE: &str = "tokens.json";
@@ -152,20 +157,6 @@ pub fn read_version(base_path: &str) -> Result<ScVersion, String> {
     Ok(version)
 }
 
-/// Path of the StarBreaker sidecar: Tauri places `externalBin` binaries next
-/// to the app executable (also in `target/debug` during development).
-pub fn sidecar_path() -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("current exe: {e}"))?;
-    let dir = exe.parent().ok_or("current exe has no parent dir")?;
-    let name = if cfg!(windows) { "starbreaker.exe" } else { "starbreaker" };
-    let path = dir.join(name);
-    if !path.is_file() {
-        return Err(format!("StarBreaker not found: {}", path.display()));
-    }
-    debug!("sidecar resolved: {}", path.display());
-    Ok(path)
-}
-
 /// Cache dir for one game version.
 fn cache_dir(cache_root: &Path, version: &ScVersion) -> PathBuf {
     // The label comes from the manifest; keep it a plain single path segment.
@@ -212,51 +203,26 @@ fn write_cache(dir: &Path, data: &ScData) -> Result<(), String> {
     std::fs::write(dir.join(TOKENS_FILE), tokens).map_err(|e| format!("{TOKENS_FILE}: {e}"))
 }
 
-/// Run StarBreaker to pull the three config files out of `Data.p4k` into
-/// `out` (it recreates the archive's directory tree there). Returns the
-/// paths of `defaultProfile.xml`, `keybinding_localization.xml`, `global.ini`.
-fn extract(sidecar: &Path, p4k: &Path, out: &Path) -> Result<[PathBuf; 3], String> {
+/// Pull the three config files out of `Data.p4k`, CryXmlB decoded to XML
+/// text. Returns the texts of `defaultProfile.xml`,
+/// `keybinding_localization.xml`, `global.ini`, in that order.
+fn extract(p4k: &Path) -> Result<[String; 3], String> {
     if !p4k.is_file() {
         return Err(format!("Data.p4k not found: {}", p4k.display()));
     }
-    let mut cmd = Command::new(sidecar);
-    cmd.arg("p4k")
-        .arg("extract")
-        .arg("--p4k")
-        .arg(p4k)
-        .arg("-o")
-        .arg(out)
-        .arg("--regex")
-        .arg(P4K_REGEX)
-        .arg("--convert")
-        .arg("cryxml");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
+    let mut archive = p4k::Archive::open(p4k)?;
+    let mut texts: Vec<String> = Vec::with_capacity(P4K_FILES.len());
+    for name in P4K_FILES {
+        let entry = archive.entry(name).ok_or_else(|| format!("not in Data.p4k: {name}"))?.clone();
+        let bytes = archive.read(&entry)?;
+        let text = if cryxml::is_cryxmlb(&bytes) {
+            cryxml::to_xml(&bytes).map_err(|e| format!("{name}: {e}"))?
+        } else {
+            String::from_utf8(bytes).map_err(|_| format!("{name}: not UTF-8"))?
+        };
+        texts.push(text);
     }
-    debug!("sc data extract command: {:?}", cmd);
-    let output = cmd.output().map_err(|e| format!("run {}: {e}", sidecar.display()))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let detail = stderr.trim().lines().last().or_else(|| stdout.trim().lines().last()).unwrap_or("");
-        warn!("starbreaker failed ({}): {}", output.status, stderr.trim());
-        return Err(format!("StarBreaker failed ({}): {detail}", output.status));
-    }
-
-    let files = [
-        out.join("Data").join("Libs").join("Config").join("defaultProfile.xml"),
-        out.join("Data").join("Libs").join("Config").join("keybinding_localization.xml"),
-        out.join("Data").join("Localization").join("english").join("global.ini"),
-    ];
-    for f in &files {
-        if !f.is_file() {
-            return Err(format!("not in Data.p4k: {}", f.strip_prefix(out).unwrap_or(f).display()));
-        }
-    }
-    Ok(files)
+    texts.try_into().map_err(|_| "extract: wrong file count".to_string())
 }
 
 /// Convert the raw SC files into the app's data: the action master list
@@ -287,7 +253,6 @@ pub const LOAD_STEPS: u8 = 4;
 /// cached; a cache hit jumps straight to 4).
 pub fn load(
     cache_root: &Path,
-    sidecar: &Path,
     base_path: &str,
     version: &ScVersion,
     global_ini: Option<&Path>,
@@ -307,30 +272,22 @@ pub fn load(
         None => info!("sc data cache miss, extracting: cache_dir={} p4k={}", dir.display(), p4k.display()),
     }
 
-    let tmp = dir.join("extract");
-    let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
     let extract_start = std::time::Instant::now();
-    let extracted = extract(sidecar, &p4k, &tmp);
-    let extract_elapsed = extract_start.elapsed();
-    let result = extracted.and_then(|[profile, keybinding, global]| {
-        progress(2);
-        info!("sc data extracted in {:.2?}", extract_elapsed);
-        let read = |p: &Path| std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()));
-        let global = global_ini.unwrap_or(&global);
-        let data = convert(&read(&profile)?, &read(&keybinding)?, &read(global)?)?;
-        let total_actions: usize = data.actions.iter().map(|m| m.actions.len()).sum();
-        info!(
-            "sc data converted: {} actionmaps, {} actions, {} tokens",
-            data.actions.len(),
-            total_actions,
-            data.tokens.len()
-        );
-        Ok(data)
-    });
-    let _ = std::fs::remove_dir_all(&tmp);
-
-    let data = result?;
+    let [profile, keybinding, global] = extract(&p4k)?;
+    progress(2);
+    info!("sc data extracted in {:.2?}", extract_start.elapsed());
+    let global = match global_ini {
+        Some(p) => std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?,
+        None => global,
+    };
+    let data = convert(&profile, &keybinding, &global)?;
+    let total_actions: usize = data.actions.iter().map(|m| m.actions.len()).sum();
+    info!(
+        "sc data converted: {} actionmaps, {} actions, {} tokens",
+        data.actions.len(),
+        total_actions,
+        data.tokens.len()
+    );
     progress(3);
     if global_ini.is_none() {
         write_cache(&dir, &data)?;
@@ -451,9 +408,14 @@ mod tests {
     }
 
     #[test]
-    fn extract_reports_missing_p4k() {
-        let err = extract(Path::new("/nonexistent/starbreaker"), Path::new("/nonexistent/Data.p4k"), Path::new("/tmp"))
-            .unwrap_err();
+    fn extract_reports_missing_p4k_or_files() {
+        let err = extract(Path::new("/nonexistent/Data.p4k")).unwrap_err();
         assert!(err.contains("Data.p4k not found"), "{err}");
+        // A file that is no archive.
+        let path = std::env::temp_dir().join(format!("bindsight-scinstall-{}.p4k", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"nope").unwrap();
+        let err = extract(&path).unwrap_err();
+        assert!(err.contains("end of central directory"), "{err}");
+        std::fs::remove_file(&path).unwrap();
     }
 }

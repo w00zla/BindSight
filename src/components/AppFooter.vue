@@ -6,7 +6,7 @@ import logo from "../assets/logo.png";
 // The app version from `system_info` (empty until it arrived).
 defineProps<{ version: string }>();
 
-const REPO_URL = "https://github.com/w00zla/bindsight";
+const REPO_URL = "https://github.com/w00zla/BindSight";
 
 // A plain href would navigate the webview itself; the system browser opens it.
 async function openRepo() {

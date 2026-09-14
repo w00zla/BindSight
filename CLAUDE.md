@@ -60,11 +60,10 @@ any time. Concretely:
   ("Star Citizen" is fine where it reads better). Terse: one-word states,
   explanatory sentences only where a dialog guides an action.
 - **Repo content policy**: no SC game data in the repo — the app extracts what
-  it needs from the user's install at runtime. The StarBreaker sidecar
-  binaries (MIT) are not committed either: `scripts/fetch-starbreaker.sh`
-  (or `.ps1`) downloads the pinned release into `src-tauri/binaries/`
-  (gitignored) and verifies SHA256; keep version + hashes in both scripts in
-  sync. Without them every `cargo build` fails in the Tauri build script.
+  it needs from the user's install at runtime. The `Data.p4k` reader and the
+  CryXmlB decoder (`p4k.rs`, `cryxml.rs`) are ports from StarBreaker (MIT,
+  by diogotr7): keep the credit header in both files and the notice in
+  `THIRD-PARTY-LICENSES.md`.
 
 ## Stack
 
@@ -237,15 +236,30 @@ presentational components:
   and `ScState::invalid_install` keeps `reload_bindings` from reading
   anything). Version from `build_manifest.id` (`ScVersion`, label
   `<branch minus sc-alpha->.<P4 changelist>`, e.g. `4.10.0-hotfix.12572603`).
-  Game data (`ScData`: action master list + token labels): StarBreaker
-  sidecar `p4k extract --regex` (~1 s), `scdata::parse_*` (unlabeled actions
-  dropped), cached as JSON under `<app_cache_dir>/<label>/`. `scdata.json`
+  Game data (`ScData`: action master list + token labels): the three files
+  read straight out of `Data.p4k` (`p4k.rs` + `cryxml.rs`, `P4K_FILES`,
+  ~150 ms), `scdata::parse_*` (unlabeled actions dropped), cached as JSON
+  under `<app_cache_dir>/<label>/`. `scdata.json`
   carries a `format` stamp (`CACHE_FORMAT`): bump it whenever the cached
   shape changes meaning, the cache is then re-extracted once. Loaded in a
   background thread at start and on environment change
   (`lib.rs::spawn_sc_load`; an active `global.ini` override bypasses the
   cache): steps via `scdata-progress` (`LOAD_STEPS` = 4), result via
   `scdata-changed`.
+- `p4k.rs` — reader for `Data.p4k`: Zip64 central directory (tail of the
+  file only, ~1.4 M entries) with CIG's extra fields (`0x0001`, `0x5000`,
+  `0x5002` = encryption flag, `0x5003`, in that order), CIG's local-header
+  signature, AES-128-CBC with CIG's fixed key + zero padding, zstd (method
+  100) / deflate / stored. `Archive::open` + `entry` (either separator,
+  case-insensitive) + `read`; `Cursor` is the bounds-checked LE reader
+  `cryxml.rs` shares. Ported from StarBreaker; the synthetic test archives
+  cover every method incl. encrypted, `examples/p4k_extract.rs` diffs a
+  real install against another extractor.
+- `cryxml.rs` — CryXmlB (CryEngine binary XML, the in-archive form of
+  `defaultProfile.xml` and `keybinding_localization.xml`) to XML text,
+  byte-identical to StarBreaker's output. Validates every index and that
+  the nodes form a tree before an iterative walk (no recursion, no panic
+  on a broken blob).
 - `scdata.rs` — parse `defaultProfile.xml` (action master list with the
   `joystick=` / `keyboard=` / `gamepad=` defaults, attribute or child-element
   form, child wins), `global.ini` (labels), `keybinding_localization.xml`
@@ -459,7 +473,7 @@ cargo run --example dinput_order                # SC's joystick order (Windows)
 cargo run --example wine_order                  # SC's joystick order under Wine (Linux)
 cargo run --example pad_events                  # pad mapping + controller-level events
 cargo run --example parse_scdata -- <defaultProfile.xml> <global.ini>  # parser check
-scripts/fetch-starbreaker.sh                    # sidecar binaries (once)
+cargo run --release --example p4k_extract -- <Data.p4k> <out dir>      # P4K reader check
 ```
 
 The game data cache lives per version under `~/.cache/com.w00zla.bindsight/
@@ -467,8 +481,6 @@ The game data cache lives per version under `~/.cache/com.w00zla.bindsight/
 
 ## Prerequisites
 
-- **All platforms**: the StarBreaker sidecar binaries (see Repo content
-  policy; `fetch-starbreaker.sh` needs `curl`, `tar`, `unzip`).
 - **Fedora/Nobara**: `rustup`, `pnpm`, `webkit2gtk4.1-devel openssl-devel
   curl wget file libappindicator-gtk3-devel librsvg2-devel libxdo-devel
   SDL2-devel` plus the `c-development` group.

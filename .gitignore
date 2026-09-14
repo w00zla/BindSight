@@ -4,9 +4,6 @@ temp
 # Claude Code session data (worktrees, local settings)
 .claude
 
-# StarBreaker sidecar binaries: fetched by scripts/fetch-starbreaker.sh, not committed
-src-tauri/binaries/
-
 # Python bytecode
 __pycache__/
 

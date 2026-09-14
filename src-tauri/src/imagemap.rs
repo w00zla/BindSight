@@ -677,9 +677,9 @@ fn user_root(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map(|d| d.join("imagemaps")).map_err(|e| e.to_string())
 }
 
-/// Bundled image-maps dir; falls back to the source tree in development,
-/// where the bundled resources are absent (same as `read_resource` in
-/// lib.rs).
+/// Bundled image-maps dir (`resources/imagemaps/` next to the app); falls
+/// back to the source tree in development, where the bundled resources are
+/// absent. A release without the folder lists no bundled maps, silently.
 fn bundled_root(app: &AppHandle) -> PathBuf {
     app.path()
         .resolve("resources/imagemaps", BaseDirectory::Resource)

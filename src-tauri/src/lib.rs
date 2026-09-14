@@ -11,6 +11,7 @@ pub mod apply;
 pub mod backups;
 pub mod bindings;
 pub mod config;
+pub mod cryxml;
 pub mod diff;
 pub mod dinput;
 pub mod gamefile;
@@ -23,6 +24,7 @@ pub mod kblayout;
 pub mod logwatch;
 pub mod names;
 pub mod order;
+pub mod p4k;
 pub mod binding_profiles;
 pub mod rebind;
 pub mod resort;
@@ -771,8 +773,8 @@ struct GameLogChanged {
 }
 
 /// Load the configured install's game data in the background (version from
-/// `build_manifest.id`, then the cached JSON or a fresh StarBreaker extraction
-/// of `Data.p4k`), reload the bindings against it and emit `scdata-changed`
+/// `build_manifest.id`, then the cached JSON or a fresh extraction from
+/// `Data.p4k`), reload the bindings against it and emit `scdata-changed`
 /// with the load status. Completed steps are reported as `scdata-progress`
 /// (payload: the `ScStatus`). A load superseded by a newer one discards its
 /// result.
@@ -818,8 +820,7 @@ fn spawn_sc_load(app: AppHandle) {
             }
             progress(1);
             let cache_root = app.path().app_cache_dir().map_err(|e| format!("app cache dir: {e}"))?;
-            let sidecar = scinstall::sidecar_path()?;
-            scinstall::load(&cache_root, &sidecar, &base_path, version, global_ini.as_deref(), &progress)
+            scinstall::load(&cache_root, &base_path, version, global_ini.as_deref(), &progress)
         });
 
         let state = app.state::<Mutex<AppData>>();

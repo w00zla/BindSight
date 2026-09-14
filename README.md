@@ -30,9 +30,8 @@ Answers the question: *"What does each button do, and where does each action liv
 - **Select an action, see the bound input!** An "images and shapes"-based visualization of the input device shows you the keys, buttons, axes etc. which are bound to a specific action via realtime highlighting.
 
 <p align="center">
-  <a href="docs/img/preview_app_monitor1.png"><img src="docs/img/preview_app_monitor1.png" width="500" alt="Preview Monitor"/></a>
-  &nbsp;
-  <a href="docs/img/preview_app_monitor2.png"><img src="docs/img/preview_app_monitor2.png" width="500" alt="Preview Monitor 2"/></a>
+  <a href="docs/img/preview_app_monitor1.png"><img src="docs/img/preview_app_monitor1.png" width="300" alt="Preview Monitor"/></a>
+  <a href="docs/img/preview_app_monitor2.png"><img src="docs/img/preview_app_monitor2.png" width="300" alt="Preview Monitor 2"/></a>
 </p>
 
 ### 🕹️ Action Bindings
@@ -44,9 +43,8 @@ Extended version of the game's **bindings interface**:
 - **Import and export of binding profiles** per device with a detailed **compare interface** for a clear insight into differences to configured bindings.
 
 <p align="center">
-  <a href="docs/img/preview_app_bindings1.png"><img src="docs/img/preview_app_bindings1.png" width="500" alt="Preview Bindings"/></a>
-  &nbsp;
-  <a href="docs/img/preview_app_bindings2.png"><img src="docs/img/preview_app_bindings2.png" width="500" alt="Preview Bindings 2"/></a>
+  <a href="docs/img/preview_app_bindings1.png"><img src="docs/img/preview_app_bindings1.png" width="300" alt="Preview Bindings"/></a>
+  <a href="docs/img/preview_app_bindings2.png"><img src="docs/img/preview_app_bindings2.png" width="300" alt="Preview Bindings 2"/></a>
 </p>
 
 </p>
@@ -57,18 +55,18 @@ Due to the built-in **visualization editor** the app supports a near infinite am
 
 - Build your own visualizations for your devices with images, shapes, text and colors. You can even share them via im- and export ;)
 
-- *Currently included are following device visualizations:*
+- Currently included are following device visualizations:
   
-  - Generic Keyboard/Mouse (US/DE + TKL)
+  - *Generic Keyboard/Mouse (US/DE + TKL)*
   
-  - Generic Xbox and PlayStation Controller
+  - *Generic Xbox and PlayStation Controller*
   
-  - VKB Gladiator NXT EVO R (Premium)
+  - *VKB Gladiator NXT EVO R (Premium)*
   
-  - VKB Gladiator NXT EVO Omni L (Premium)
+  - *VKB Gladiator NXT EVO Omni L (Premium)*
 
 <p align="center">
-  <a href="docs/img/preview_app_devices1.png"><img src="docs/img/preview_app_devices1.png" width="500" alt="Preview Devices"></a>
+  <a href="docs/img/preview_app_devices1.png"><img src="docs/img/preview_app_devices1.png" width="300" alt="Preview Devices"></a>
 </p>
 
 ### 🖥️ Cross-Platform
@@ -123,26 +121,19 @@ The app supports **Windows** and **Linux**!
 
 ## Building
 
-1. Fetch the [StarBreaker](https://github.com/diogotr7/StarBreaker) sidecar:
-   
-   ```sh
-   scripts/fetch-starbreaker.sh      # Linux, Git Bash
-   scripts\fetch-starbreaker.ps1     # PowerShell
-   ```
-
-2. Install toolchain and dependencies:
+1. Install toolchain and dependencies:
    
    - **All platforms**: `rustup`, `pnpm`
    - **Linux (Fedora/Nobara)**: `webkit2gtk4.1-devel openssl-devel libappindicator-gtk3-devel librsvg2-devel libxdo-devel SDL2-devel`, group `c-development`
    - **Windows**: Visual Studio Build Tools 2022+ with the workload *Desktop development with C++*, CMake on `PATH` (SDL2 is built from source and linked statically)
 
-3. Build and run the app:
+2. Build and run the app:
    
    ```sh
    pnpm install
    pnpm tauri dev                     # development
-   pnpm tauri build                   # release bundle
-   pnpm build:linux                   # release bundle on Linux (NO_STRIP: linuxdeploy's strip chokes on RELR libraries)
+   pnpm tauri build                   # release bundle on Windows
+   pnpm build:linux                   # release bundle on Linux
    cd src-tauri && cargo test --lib   # backend tests, no hardware needed
    ```
 
@@ -154,12 +145,12 @@ The app supports **Windows** and **Linux**!
 | Frontend       | Vue 3, TypeScript, Vite, [Konva](https://konvajs.org) (editor)                                                                                            |
 | Input          | [SDL2](https://libsdl.org) joystick + GameController APIs, [hidapi](https://github.com/libusb/hidapi) (HID names, axis usages), webview (keyboard, mouse) |
 | Joystick order | DirectInput 8 `EnumDevices` via `windows-sys`; on Linux Wine's registry key order rebuilt from hidapi + sysfs                                             |
-| Game data      | [StarBreaker](https://github.com/diogotr7/StarBreaker) extracts `defaultProfile.xml`, `global.ini`, token labels from `Data.p4k`                          |
+| Game data      | [StarBreaker](https://github.com/diogotr7/StarBreaker) code to extract `defaultProfile.xml`, `global.ini`, token labels from `Data.p4k`                   |
 | XML            | `quick-xml` parsing; textual rewrites keep the game's file layout; atomic writes, re-parsed before applied                                                |
 
 ## Credits
 
-- [StarBreaker](https://github.com/diogotr7/StarBreaker) by diogotr7, used for extracting Star Citizen game data
-- [Wine](https://www.winehq.org) source, for the DirectInput and winebus behaviour replicated on Linux
+- [StarBreaker](https://github.com/diogotr7/StarBreaker) source by diogotr7, used for extracting Star Citizen game data
+
 - [Star Citizen](https://robertsspaceindustries.com/en/) and its data belong to [Cloud Imperium Games](https://cloudimperiumgames.com). 
   *This app does not include game assets or resources.*
