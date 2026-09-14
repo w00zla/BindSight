@@ -25,8 +25,14 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis", "deb", "rpm", "appimage"],
     "category": "Game",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico"
+      }
+    },
     "externalBin": ["binaries/starbreaker"],
     "resources": ["resources/imagemaps/"],
     "icon": [
