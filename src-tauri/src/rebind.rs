@@ -480,12 +480,12 @@ mod tests {
         let xml = XML.replace("<rebind input=\"kb1_ralt+y\"/>", "<rebind input=\"kb1_ralt+y\" activationMode=\"hold\"/>");
         let mut c = change("spaceship_general", "v_eject", DeviceKind::Keyboard, "kb1_e");
         c.attrs = Some(vec![("multiTap".into(), "2".into())]);
-        let out = apply_rebinds(&xml, &[c.clone()]).unwrap();
+        let out = apply_rebinds(&xml, std::slice::from_ref(&c)).unwrap();
         assert!(out.contains("    <rebind input=\"kb1_e\" multiTap=\"2\"/>\n"));
         assert!(!out.contains("activationMode"));
         // An empty list strips the attributes; a new element gets them too.
         c.attrs = Some(Vec::new());
-        let out = apply_rebinds(&xml, &[c.clone()]).unwrap();
+        let out = apply_rebinds(&xml, std::slice::from_ref(&c)).unwrap();
         assert!(out.contains("    <rebind input=\"kb1_e\"/>\n"));
         c.action = "v_new".into();
         c.attrs = Some(vec![("activationMode".into(), "press".into())]);
@@ -588,15 +588,15 @@ mod tests {
         let before = parse_actionmaps(XML).unwrap();
         let c = change("spaceship_general", "v_boost", DeviceKind::Joystick, "js1_button9");
         // The honest rewrite passes.
-        let good = apply_rebinds(XML, &[c.clone()]).unwrap();
-        verify_applied(&before, &parse_actionmaps(&good).unwrap(), &[c.clone()]).unwrap();
+        let good = apply_rebinds(XML, std::slice::from_ref(&c)).unwrap();
+        verify_applied(&before, &parse_actionmaps(&good).unwrap(), std::slice::from_ref(&c)).unwrap();
         // The rebind landed under another action: valid XML, wrong meaning.
         let wrong = XML.replace("<rebind input=\"js1_ \"/>", "<rebind input=\"js1_button9\"/>");
-        let err = verify_applied(&before, &parse_actionmaps(&wrong).unwrap(), &[c.clone()]).unwrap_err();
+        let err = verify_applied(&before, &parse_actionmaps(&wrong).unwrap(), std::slice::from_ref(&c)).unwrap_err();
         assert!(err.contains("rewrite check failed"), "{err}");
         // The target is right but a bystander changed.
         let bystander = good.replace("kb1_ralt+y", "kb1_ralt+z");
-        assert!(verify_applied(&before, &parse_actionmaps(&bystander).unwrap(), &[c.clone()]).is_err());
+        assert!(verify_applied(&before, &parse_actionmaps(&bystander).unwrap(), std::slice::from_ref(&c)).is_err());
         // The target is right but a device option changed.
         let device = good.replace("instance=\"1\" Product", "instance=\"2\" Product");
         assert!(verify_applied(&before, &parse_actionmaps(&device).unwrap(), &[c]).is_err());
