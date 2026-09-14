@@ -70,9 +70,18 @@ pub struct Config {
     /// Write DEBUG records to the app log; INFO and up otherwise.
     #[serde(default)]
     pub debug_logging: bool,
+    /// Check for an update at startup (the App Update dialog opens when one
+    /// is found; nothing is ever installed unasked). On unless the user
+    /// switched it off; a manual check stays possible either way.
+    #[serde(default = "default_update_check")]
+    pub update_check: bool,
 }
 
 fn default_auto_backup() -> bool {
+    true
+}
+
+fn default_update_check() -> bool {
     true
 }
 
@@ -84,6 +93,7 @@ impl Default for Config {
             imagemap_choices: HashMap::new(),
             auto_backup: default_auto_backup(),
             debug_logging: false,
+            update_check: default_update_check(),
         }
     }
 }
@@ -214,6 +224,8 @@ mod tests {
         assert!(!serde_json::from_str::<Config>(r#"{"auto_backup":false}"#).unwrap().auto_backup);
         assert!(!c.debug_logging);
         assert!(serde_json::from_str::<Config>(r#"{"debug_logging":true}"#).unwrap().debug_logging);
+        assert!(c.update_check);
+        assert!(!serde_json::from_str::<Config>(r#"{"update_check":false}"#).unwrap().update_check);
 
         // An unknown active slug falls back to LIVE; an override that is off
         // or has no path is none.

@@ -10,6 +10,7 @@ const props = defineProps<{
   environments: Record<string, Environment>;
   autoBackup: boolean;
   debugLogging: boolean;
+  updateCheck: boolean;
 }>();
 // Escape closes without saving, like the Cancel button.
 function onKey(e: KeyboardEvent) {
@@ -21,7 +22,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 const emit = defineEmits<{
   close: [];
   save: [
-    settings: { environments: Record<string, Environment>; autoBackup: boolean; debugLogging: boolean },
+    settings: { environments: Record<string, Environment>; autoBackup: boolean; debugLogging: boolean; updateCheck: boolean },
   ];
   notify: [message: string, type: "ok" | "error"];
 }>();
@@ -54,6 +55,7 @@ function onNoBackupChoose(value: string) {
   if (value === "disable") autoBackup.value = false;
 }
 const debugLogging = ref(props.debugLogging);
+const updateCheck = ref(props.updateCheck);
 
 // Immediate, not part of Save: opens the folder in the file manager.
 async function openLogDir() {
@@ -142,11 +144,18 @@ async function browseIni(slug: string) {
             <button type="button" class="btn outline" @click="openLogDir">Open Log Folder</button>
           </div>
         </section>
+
+        <section>
+          <div class="panel-title">Updates</div>
+          <div class="row between">
+            <label class="check"><input v-model="updateCheck" type="checkbox" /> Check for updates at startup</label>
+          </div>
+        </section>
       </div>
 
       <div class="foot">
         <button type="button" class="btn outline" @click="emit('close')">Cancel</button>
-        <button type="button" class="btn primary" @click="emit('save', { environments: envs, autoBackup, debugLogging })">
+        <button type="button" class="btn primary" @click="emit('save', { environments: envs, autoBackup, debugLogging, updateCheck })">
           <Icon name="save" :size="14" />
           Save
         </button>

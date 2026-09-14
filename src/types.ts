@@ -97,6 +97,9 @@ export interface SystemInfo {
   tauri: string;
   webview: string;
   sdl: string;
+  // This install checks for and installs its own updates (the Windows
+  // installer and the AppImage; not the bare executable, not deb / rpm).
+  updater: boolean;
 }
 
 // Toast kinds: "ok" done, "error" broken, "warn" degraded but running,
@@ -126,6 +129,8 @@ export interface Config {
   auto_backup: boolean;
   // Write DEBUG records to bindsight.log (else INFO and up).
   debug_logging: boolean;
+  // Check for an update at startup (never installs anything unasked).
+  update_check: boolean;
 }
 
 export interface Action {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, shallowRef, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -20,6 +20,8 @@ import SettingsDialog from "./components/SettingsDialog.vue";
 import StartupTile from "./components/StartupTile.vue";
 import AppFooter from "./components/AppFooter.vue";
 import { setDebugLogging } from "./logging";
+import VersionDialog from "./components/VersionDialog.vue";
+import type { Updater } from "./update";
 import type {
   DeviceKind,
   ActionMap,
@@ -79,6 +81,12 @@ const DEFAULT_MAPS: Partial<Record<DeviceKind, string>> = { keyboard: MAP_US, ga
 const keyboardLayout = ref<string | null>(null);
 // One line of environment facts for the Device Info dumps.
 const systemInfo = ref<SystemInfo | null>(null);
+// The in-app updater (update.ts), only in an install that has one (see
+// `SystemInfo.updater`); its footer mark is a component it brings along.
+const updater = shallowRef<Updater | null>(null);
+// The App Update dialog (footer click; opens itself when the startup check
+// finds an update).
+const showVersion = ref(false);
 const systemLine = computed(() => {
   const s = systemInfo.value;
   const env = s ? `BindSight ${s.app_version} · ${s.os} ${s.arch} · tauri ${s.tauri} · webview ${s.webview} · SDL ${s.sdl}` : "BindSight";
@@ -151,6 +159,9 @@ const showSettings = ref(false);
 const autoBackup = ref(true);
 // Write DEBUG records to bindsight.log (Settings).
 const debugLogging = ref(false);
+// Check for an update at startup (Settings); the dialog's manual check is
+// always available.
+const updateCheck = ref(true);
 
 // --- image-maps --------------------------------------------------------
 
@@ -682,6 +693,7 @@ async function applySettings(s: {
   environments: Record<string, Environment>;
   autoBackup: boolean;
   debugLogging: boolean;
+  updateCheck: boolean;
 }) {
   // A changed active environment means another bindings file: settle the
   // pending rebinds first.
@@ -695,6 +707,8 @@ async function applySettings(s: {
     await invoke("set_debug_logging", { enabled: s.debugLogging });
     debugLogging.value = s.debugLogging;
     setDebugLogging(s.debugLogging);
+    await invoke("set_update_check", { enabled: s.updateCheck });
+    updateCheck.value = s.updateCheck;
     const reloading = await invoke<boolean>("set_environments", { environments: s.environments });
     environments.value = s.environments;
     if (reloading) {
@@ -1130,6 +1144,17 @@ onMounted(async () => {
   } catch (e) {
     console.warn("system info unavailable", e);
   }
+  // The updater module only in an install it can replace; the bare
+  // executable and deb / rpm never load it. A dev build (`tauri dev`, no
+  // updater either) gets the simulated one, to look at the GUI parts.
+  if (systemInfo.value?.updater || import.meta.env.DEV) {
+    try {
+      const { createUpdater } = await import("./update");
+      updater.value = createUpdater(!systemInfo.value?.updater);
+    } catch (e) {
+      console.error("updater unavailable", e);
+    }
+  }
   window.addEventListener("blur", clearHeld);
   // Closing (top-bar button or the window manager) settles unsaved changes
   // first. The backend prevents every close and sends `close-requested`
@@ -1207,6 +1232,7 @@ onMounted(async () => {
     autoBackup.value = cfg.auto_backup;
     debugLogging.value = cfg.debug_logging;
     setDebugLogging(cfg.debug_logging);
+    updateCheck.value = cfg.update_check;
     mapChoices.value = cfg.imagemap_choices ?? {};
     // The outcome of a load that ended before the listener was up: bindings,
     // whether the profile parsed, and its error.
@@ -1218,6 +1244,9 @@ onMounted(async () => {
     endStartup();
   }
   await step("Image-maps", reloadMaps);
+  // The startup check (Settings can switch it off): an update opens the
+  // App Update dialog, the user decides.
+  if (updater.value && updateCheck.value && (await updater.value.check())) showVersion.value = true;
   // What only the frontend knows: the viewport (the layout wants 1280x720),
   // the pixel ratio, whether localStorage works (-1 = it does not: every
   // remembered width, chip and filter silently falls back to its default).
@@ -1263,6 +1292,7 @@ onUnmounted(() => {
       :environments="environments"
       :autoBackup="autoBackup"
       :debugLogging="debugLogging"
+      :updateCheck="updateCheck"
       @close="showSettings = false"
       @save="applySettings"
       @notify="notify"
@@ -1369,7 +1399,17 @@ onUnmounted(() => {
       @clear-log="events = []"
     />
 
-    <AppFooter :version="systemInfo?.app_version ?? ''" />
+    <AppFooter :version="systemInfo?.app_version ?? ''" @version="showVersion = true">
+      <template v-if="updater?.info" #mark>
+        <component :is="updater.mark" @click="showVersion = true" />
+      </template>
+    </AppFooter>
+    <VersionDialog
+      v-if="showVersion"
+      :version="systemInfo?.app_version ?? ''"
+      :updater="updater"
+      @close="showVersion = false"
+    />
     <Toasts :toasts="toasts" />
     <WindowEdges />
   </main>

@@ -118,7 +118,26 @@ presentational components:
   arrows, scrollbar hidden), `Toasts` (`ok` / `error` / `hint`: green done,
   red broken, blue guidance; a hint is logged as info, every error toast
   goes to the app log), `Icon` (inline stroke SVGs by name — never emoji),
-  `WindowEdges`.
+  `WindowEdges`, `AppFooter` (credits, a `mark` slot before the logo; the
+  logo and the link-styled version button open the **App Update dialog**),
+  `VersionDialog` (a `ConfirmDialog`: Current chip = the running version,
+  Update chip = the found version / "Checking…" / a dash, then download
+  progress, an error line, the dev toggle; without an updater only the
+  Current row; the updater's buttons after Close).
+- **Updater** (`update.ts`, `UpdateMark.vue`): loaded by `App.vue` via
+  dynamic import only when `system_info.updater` is true (see Releases), or
+  in a dev build as the simulated one (`createUpdater(true)`: a toggle in
+  the dialog fakes an available update and a download, so the GUI parts
+  can be looked at; the simulation code sits behind `import.meta.env.DEV`
+  and is not in a release). `createUpdater()` returns reactive state
+  (`idle` / `checking` / `current` / `available` / `downloading` /
+  `installing` / `error`), `check()`, `install()` (download with progress,
+  then `relaunch()`), the footer `mark` and the dialog `buttons()` (Check
+  Update until one is found, then Install). The startup check runs last in
+  `onMounted` unless Settings switched it off (`Config::update_check`); a
+  found update opens the dialog and puts the mark in the footer —
+  **nothing is downloaded or installed without the user's click**. A
+  failed startup check only logs.
 - Shared modules: `imagemap.ts` (image-map types/helpers incl. token <->
   input key, `arcArrowPath`), `keyboard.ts` (webview keyboard capture,
   `KeyboardEvent.code` -> SC key name, feeds the same handler as
@@ -339,7 +358,8 @@ presentational components:
   (`ENVIRONMENTS` = LIVE / HOTFIX / PTU / EPTU, each a base path + optional
   `global.ini` override; Windows default paths), the active one
   (`Config::base_path()` / `global_ini_override()`), the image-map choice
-  per device, the auto-backup and debug-logging switches. An older file's
+  per device, the auto-backup, debug-logging and startup update-check
+  switches. An older file's
   `ignored_devices` (the Exclude feature of 0.10 – 0.12) is ignored.
   `load` fills missing environments with defaults; no migration of older
   shapes.
@@ -374,7 +394,8 @@ presentational components:
   commands hold it for their backup + write + reload on purpose (user
   actions, consistency). `get_load_status` hands the last load outcome to
   a frontend that mounts after the first load already finished;
-  `system_info` (app version, OS, toolkit versions) feeds the Device Info
+  `system_info` (app version, OS, toolkit versions, `updater`: this
+  install updates itself, see Releases) feeds the Device Info
   dumps. **Window-close guard** (`CloseGuard`): every `CloseRequested` is
   prevented and sent to the frontend as our own `close-requested` event,
   never Tauri's — with a JS listener on `tauri://close-requested` Tauri
@@ -464,6 +485,38 @@ All of it lives in the Devices mode's Device Info view instead.
   (US keyboard, Xbox pad), else the first map. Joysticks match by hardware
   id only.
 
+## Releases and updates
+
+- **One build serves every shape.** `tauri build` stamps the binary it
+  packs into each bundle with its bundle type (`__TAURI_BUNDLE_TYPE_VAR_*`,
+  `tauri::utils::platform::bundle_type`); the bare `target/release/`
+  executable stays unstamped. `lib.rs::updater_available` accepts NSIS and
+  AppImage only: the Windows installer and the AppImage update themselves,
+  the bare executable (the standalone / portable download, just the file
+  from `target/release/`) and the deb / rpm packages (the package manager's
+  business) never load the updater module. No feature flags, no runtime
+  switch.
+- **Updater config** (`tauri.conf.json` `plugins.updater`): the minisign
+  `pubkey` and the endpoint
+  `https://github.com/w00zla/BindSight/releases/latest/download/latest.json`.
+  `bundle.createUpdaterArtifacts` is on, so `tauri build` needs the private
+  key as **content** in `TAURI_SIGNING_PRIVATE_KEY` (the `_PATH` variant is
+  not honoured by the CLI, verified 2026-09-14) plus
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if set, and writes a `.sig` next to
+  every bundle. **With an empty `pubkey` nothing is signed and nothing
+  complains** — a release built that way can never be an update source.
+  Keypair once via `pnpm tauri signer generate -w <file>`; the private key
+  never enters the repo, and a lost key means no installed copy can ever
+  update again.
+- **Release feed**: `scripts/latest-json.sh <version> <assets dir> [notes]`
+  assembles `latest.json` from the signed installer + AppImage (both
+  platforms' files collected into one folder) — upload it to the GitHub
+  release next to the assets. Windows and Linux updates are keyed
+  `windows-x86_64` / `linux-x86_64`.
+- **Testing on Linux**: the dev build and the bare binary have no updater;
+  only an AppImage does. The feed URL is fixed, so a manual check against a
+  release that has no `latest.json` shows "Check failed".
+
 ## Commands
 
 ```sh
@@ -479,6 +532,7 @@ cargo run --example wine_order                  # SC's joystick order under Wine
 cargo run --example pad_events                  # pad mapping + controller-level events
 cargo run --example parse_scdata -- <defaultProfile.xml> <global.ini>  # parser check
 cargo run --release --example p4k_extract -- <Data.p4k> <out dir>      # P4K reader check
+scripts/latest-json.sh <version> <assets dir> [notes]   # updater feed for a release
 ```
 
 The game data cache lives per version under `~/.cache/com.w00zla.bindsight/

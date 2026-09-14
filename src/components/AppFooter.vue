@@ -3,8 +3,11 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import Icon from "./Icon.vue";
 import logo from "../assets/logo.png";
 
-// The app version from `system_info` (empty until it arrived).
+// The app version from `system_info` (empty until it arrived); a click on
+// it or the logo opens the version dialog. The `mark` slot sits before the
+// logo.
 defineProps<{ version: string }>();
+const emit = defineEmits<{ version: [] }>();
 
 const REPO_URL = "https://github.com/w00zla/BindSight";
 
@@ -23,11 +26,12 @@ async function openRepo() {
     <span class="credits">Made with ❤️ and ☕ by w00zla &amp; Claude</span>
     <span class="spacer" />
     <span class="meta">
-      <img class="logo" :src="logo" alt="" />
-      <span v-if="version" class="version mono">v{{ version }}</span>
+      <slot name="mark" />
+      <img class="logo" :src="logo" alt="" @click="emit('version')" />
+      <button v-if="version" type="button" class="version mono" @click="emit('version')">v{{ version }}</button>
       <a class="repo" :href="REPO_URL" @click.prevent="openRepo">
         <Icon name="github" :size="14" fill="currentColor" />
-        GitHub Page
+        GitHub
       </a>
     </span>
   </footer>
@@ -64,10 +68,21 @@ async function openRepo() {
   width: 16px;
   height: 16px;
   display: block;
+  cursor: pointer;
 }
 
 .version {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
   color: var(--text-2);
+  cursor: pointer;
+}
+
+.version:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .repo {

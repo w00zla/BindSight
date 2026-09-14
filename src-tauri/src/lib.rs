@@ -412,6 +412,20 @@ fn set_debug_logging(enabled: bool, app: AppHandle, data: State<Mutex<AppData>>)
     }
 }
 
+/// Persist the startup update-check switch (Settings Save).
+#[tauri::command]
+fn set_update_check(enabled: bool, app: AppHandle, data: State<Mutex<AppData>>) {
+    let mut data = data.lock().unwrap();
+    if data.config.update_check == enabled {
+        return;
+    }
+    data.config.update_check = enabled;
+    info!("update check at startup set: {enabled}");
+    if let Err(e) = config::save(&app, &data.config) {
+        error!("failed to save config: {e}");
+    }
+}
+
 /// Open the app's log folder in the system file manager (Settings).
 #[tauri::command]
 fn open_log_dir(app: AppHandle) -> Result<(), String> {
@@ -878,6 +892,18 @@ struct SystemInfo {
     tauri: String,
     webview: String,
     sdl: String,
+    /// This build checks for and installs its own updates.
+    updater: bool,
+}
+
+/// Whether this install updates itself: only the Windows installer and the
+/// Linux AppImage. The bundler stamps the binary it packs with its bundle
+/// type; the bare executable (the standalone build, `target/release/`) and
+/// the deb / rpm packages (the package manager's business) get no updater.
+fn updater_available() -> bool {
+    use tauri::utils::config::BundleType;
+    use tauri::utils::platform::bundle_type;
+    matches!(bundle_type(), Some(BundleType::Nsis | BundleType::AppImage))
 }
 
 #[tauri::command]
@@ -891,6 +917,7 @@ fn system_info() -> SystemInfo {
         tauri: tauri::VERSION.into(),
         webview: tauri::webview_version().unwrap_or_else(|_| "?".into()),
         sdl: format!("{}.{}.{}", sdl.major, sdl.minor, sdl.patch),
+        updater: updater_available(),
     }
 }
 
@@ -937,10 +964,11 @@ fn log_startup(app: &AppHandle, config: &config::Config) {
         );
     }
     info!(
-        "config: active_env={} auto_backup={} debug_logging={} environments={:?} imagemap_choices={:?}",
+        "config: active_env={} auto_backup={} debug_logging={} update_check={} environments={:?} imagemap_choices={:?}",
         config.active_env,
         config.auto_backup,
         config.debug_logging,
+        config.update_check,
         config.environments,
         config.imagemap_choices
     );
@@ -1022,7 +1050,7 @@ pub fn run() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(
             // Stdout for `tauri dev`, plus a rotating file in the app log dir
             // (see `log_startup` for its location). Our own crate and the
@@ -1042,6 +1070,10 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // The updater and the relaunch it needs (see `updater_available`).
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+    builder
         .setup(|app| {
             // A panic still ends the app (release builds abort), but this way
             // the reason reaches the log file first.
@@ -1130,6 +1162,7 @@ pub fn run() {
             backups::open_backups_dir,
             set_auto_backup,
             set_debug_logging,
+            set_update_check,
             diff::compare_bindings
         ])
         .run(tauri::generate_context!())

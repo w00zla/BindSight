@@ -23,9 +23,16 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": ["https://github.com/w00zla/BindSight/releases/latest/download/latest.json"]
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis", "deb", "rpm", "appimage"],
+    "createUpdaterArtifacts": true,
     "category": "Game",
     "windows": {
       "nsis": {
