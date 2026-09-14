@@ -4,8 +4,9 @@ import type { ScStatus } from "../types";
 import logo from "../../src-tauri/icons/128x128@2x.png";
 
 // Shown instead of every mode while the first game-data load after start
-// runs; App.vue swaps it for the normal view once that load ends.
-defineProps<{ sc: ScStatus | null }>();
+// runs; App.vue swaps it for the normal view once that load ends. `version`
+// is the app version from `system_info` (empty until it arrived).
+defineProps<{ sc: ScStatus | null; version: string }>();
 </script>
 
 <template>
@@ -13,6 +14,8 @@ defineProps<{ sc: ScStatus | null }>();
     <div class="brand">
       <img class="logo" :src="logo" alt="" />
       <span class="wordmark">BIND<span class="sight">SIGHT</span></span>
+      <span class="tagline">BindSight gets your binds right!</span>
+      <span v-if="version" class="version mono">v{{ version }}</span>
     </div>
     <div class="progress">
       <span class="label">Reading game data…</span>
@@ -61,6 +64,19 @@ defineProps<{ sc: ScStatus | null }>();
 
 .sight {
   color: var(--accent);
+}
+
+.tagline {
+  margin-top: -8px;
+  font-size: 14px;
+  color: var(--text-2);
+}
+
+.version {
+  margin-top: -12px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-2);
 }
 
 .progress {

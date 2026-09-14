@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import type { ToastType } from "../types";
+
 interface Toast {
   id: number;
   message: string;
-  type: "ok" | "error" | "hint";
+  type: ToastType;
 }
 
 defineProps<{ toasts: Toast[] }>();
@@ -19,7 +21,8 @@ defineProps<{ toasts: Toast[] }>();
 <style scoped>
 .toasts {
   position: fixed;
-  bottom: 24px;
+  /* Clear of the 28px footer. */
+  bottom: 40px;
   right: 24px;
   display: flex;
   flex-direction: column-reverse;
@@ -38,9 +41,13 @@ defineProps<{ toasts: Toast[] }>();
 }
 
 /* The accent says what kind of message it is: green done, red broken,
-   blue guidance. */
+   amber degraded, blue guidance. */
 .toast.error {
   border-left-color: var(--err);
+}
+
+.toast.warn {
+  border-left-color: var(--warn);
 }
 
 .toast.hint {

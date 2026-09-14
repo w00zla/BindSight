@@ -99,8 +99,9 @@ export interface SystemInfo {
   sdl: string;
 }
 
-// Toast kinds: "hint" is guidance styled like an error.
-export type ToastType = "ok" | "error" | "hint";
+// Toast kinds: "ok" done, "error" broken, "warn" degraded but running,
+// "hint" guidance.
+export type ToastType = "ok" | "error" | "warn" | "hint";
 
 // Top-level GUI mode.
 export type Mode = "monitor" | "bindings" | "devices";

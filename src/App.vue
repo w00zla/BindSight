@@ -18,6 +18,7 @@ import { deviceKey, deviceName } from "./devices";
 import Splitter from "./components/Splitter.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
 import StartupTile from "./components/StartupTile.vue";
+import AppFooter from "./components/AppFooter.vue";
 import { setDebugLogging } from "./logging";
 import type {
   DeviceKind,
@@ -493,7 +494,7 @@ function isFlashed(b: ResolvedBinding): boolean {
 // cannot (a missing area is already tagged on the row itself).
 function flashBinding(b: ResolvedBinding) {
   const r = resolvePin(b);
-  if ("reason" in r && !missingInMap(b)) notify(r.reason, "hint");
+  if ("reason" in r && !missingInMap(b)) notify(r.reason, "warn");
   const target = "reason" in r ? null : r;
   flash.value = { b, target };
   const d = deviceForBinding(b);
@@ -742,7 +743,7 @@ async function loadClash(announce = false) {
   }
   const after = clash.value?.has_clash ?? false;
   if (announce && before !== after) {
-    if (after) notify("Joystick order clash detected", "hint");
+    if (after) notify("Joystick order clash detected", "warn");
     else notify("Joystick order clash resolved", "ok");
   }
 }
@@ -750,7 +751,7 @@ async function loadClash(announce = false) {
 // Hot-plug toasts, one per device.
 function announceDevices(change: DevicesChanged) {
   for (const d of change.added) notify(`${deviceName(d)} connected`, "ok");
-  for (const d of change.removed) notify(`${deviceName(d)} disconnected`, "hint");
+  for (const d of change.removed) notify(`${deviceName(d)} disconnected`, "warn");
 }
 
 // The game log was read: at start-up / after an environment change quietly,
@@ -858,7 +859,7 @@ function applyResolution(p: JoyInput, key: string, res: InputResolution) {
     const now = Date.now();
     if (lastMissingToast.key !== tk || now - lastMissingToast.at > TOAST_MS) {
       lastMissingToast = { key: tk, at: now };
-      notify(`No shape for ${res.token ? tokenLabel(res.token) : currentInput.value.sdl}`, "hint");
+      notify(`No shape for ${res.token ? tokenLabel(res.token) : currentInput.value.sdl}`, "warn");
     }
   }
 }
@@ -945,8 +946,8 @@ function onInput(p: JoyInput) {
   }
 }
 
-// "hint" looks like an error but is guidance ("Press an input first"),
-// logged as info rather than as a broken feature.
+// "warn" is degraded but running (logged as a warning), "hint" is guidance
+// ("Game started"), logged as info.
 interface Toast {
   id: number;
   message: string;
@@ -965,6 +966,7 @@ let eventSeq = 0;
 // error toast is the only trace of most failures, so it goes to the log too.
 function notify(message: string, type: ToastType = "ok") {
   if (type === "error") console.error(`toast: ${message}`);
+  else if (type === "warn") console.warn(`toast: ${message}`);
   else if (type === "hint") console.info(`hint: ${message}`);
   const id = ++toastSeq;
   toasts.value.push({ id, message, type });
@@ -1267,7 +1269,7 @@ onUnmounted(() => {
     />
 
     <div v-if="starting" class="content">
-      <StartupTile :sc="scStatus" />
+      <StartupTile :sc="scStatus" :version="systemInfo?.app_version ?? ''" />
     </div>
 
     <div v-else-if="mode === 'monitor'" class="content">
@@ -1367,6 +1369,7 @@ onUnmounted(() => {
       @clear-log="events = []"
     />
 
+    <AppFooter :version="systemInfo?.app_version ?? ''" />
     <Toasts :toasts="toasts" />
     <WindowEdges />
   </main>
