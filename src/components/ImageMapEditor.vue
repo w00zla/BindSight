@@ -84,7 +84,7 @@ const TOOLS: { tool: Tool; icon: IconName; title: string; divider?: boolean }[] 
   { tool: "curve", icon: "shape-curve", title: "Curved arrow" },
   { tool: "rotate", icon: "shape-rotate", title: "Rotation" },
   { tool: "image", icon: "shape-image", title: "Image", divider: true },
-  { tool: "text", icon: "shape-text", title: "Text", divider: true },
+  { tool: "text", icon: "shape-text", title: "Text" },
 ];
 // The text tool's input: what the next click places, in which of the
 // system's font families (listed by the backend when the tool is first
@@ -109,6 +109,42 @@ async function loadFonts() {
   }
 }
 const SYMBOLS: SymbolKind[] = ["arrow", "arrow2", "rotate", "curve"];
+
+// The editor controls overlay (top right of the canvas, toggled from the
+// toolbar, off on every open): one line per key or mouse gesture.
+const showControls = ref(false);
+const CONTROLS: { title: string; rows: [keys: string, action: string][] }[] = [
+  {
+    title: "Canvas",
+    rows: [
+      ["Shift+Drag / Middle", "Pan"],
+      ["Ctrl+Wheel", "Zoom"],
+    ],
+  },
+  {
+    title: "Shape",
+    rows: [
+      ["Click", "Select"],
+      ["Shift+Click", "Add / remove"],
+      ["Drag on the image", "Frame select"],
+      ["Ctrl+A", "Select all"],
+      ["Esc", "Deselect"],
+      ["Arrows", "Nudge"],
+      ["Shift+Arrows", "Nudge 10 px"],
+      ["Delete", "Delete"],
+      ["Ctrl+D", "Duplicate, or clone to the recorded input"],
+      ["PgUp / PgDn", "Raise / lower (one shape)"],
+      ["Home / End", "Top / bottom (one shape)"],
+    ],
+  },
+  {
+    title: "History",
+    rows: [
+      ["Ctrl+Z", "Undo"],
+      ["Ctrl+Shift+Z", "Redo"],
+    ],
+  },
+];
 
 // A new symbol is 5% of the image width, square on screen; a new image
 // shape 15% of the image width, keeping its own aspect; a new text 4% of
@@ -278,8 +314,24 @@ const H = computed(() => Math.round(natH.value * fit.value * zoom.value));
 const tool = ref<Tool | null>(null);
 const selectMode = computed(() => tool.value === null);
 const canDrag = computed(() => selectMode.value && editing.value);
-const selectedId = ref<string | null>(null);
-const selectedShape = computed(() => shapes.value.find((a) => a.id === selectedId.value) ?? null);
+// The selection holds several shapes (Shift+click adds or removes one, a
+// frame dragged on the bare image takes what it encloses, Ctrl+A every
+// visible one); the last picked is `selectedId`, the bucket list follows
+// it. `selectedShape` is set only while exactly one shape is selected: the
+// panel, the transformer's handles and the vertex anchors edit one shape.
+const selectedIds = ref<string[]>([]);
+const selectedId = computed<string | null>({
+  get: () => selectedIds.value[selectedIds.value.length - 1] ?? null,
+  set: (id) => {
+    selectedIds.value = id ? [id] : [];
+  },
+});
+const selectedShapes = computed(() => shapes.value.filter((a) => selectedIds.value.includes(a.id)));
+const selectedShape = computed(() => (selectedShapes.value.length === 1 ? selectedShapes.value[0] : null));
+// Drops the given ids from the selection, touching it only when one is in.
+function dropSelected(ids: Set<string>) {
+  if (selectedIds.value.some((id) => ids.has(id))) selectedIds.value = selectedIds.value.filter((id) => !ids.has(id));
+}
 // Arcs and wedges stay circular under the transformer, text keeps its
 // aspect.
 const keepRatio = computed(() => {
@@ -350,7 +402,7 @@ function applySnapshot(snap: string) {
   if (!m) return;
   restoring = true;
   m.shapes = JSON.parse(snap) as Shape[];
-  if (selectedId.value && !m.shapes.some((a) => a.id === selectedId.value)) selectedId.value = null;
+  dropSelected(new Set(selectedIds.value.filter((id) => !m.shapes.some((a) => a.id === id))));
   // The deep watch runs before the next tick; only then may it record again.
   void nextTick(() => {
     restoring = false;
@@ -510,7 +562,7 @@ async function deleteBucket(g: Bucket) {
   if (choice !== "delete") return;
   const ids = new Set(g.rows.map((a) => a.id));
   m.shapes = m.shapes.filter((a) => !ids.has(a.id));
-  if (selectedId.value && ids.has(selectedId.value)) selectedId.value = null;
+  dropSelected(ids);
 }
 // Show everything again when anything is hidden, else hide everything.
 function toggleAllHidden() {
@@ -548,6 +600,8 @@ watch(selectedId, (id) => {
 
 // Drag-drawn rect/ellipse in progress, in stage pixels.
 const draft = ref<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+// The selection frame being dragged on the bare image (select mode).
+const marquee = ref<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
 // Polygon under construction, flat [x0, y0, ...] in stage pixels.
 const draftPoly = ref<number[]>([]);
 const pointer = ref<{ x: number; y: number } | null>(null);
@@ -1117,22 +1171,37 @@ function cancelDraw() {
   draftPoly.value = [];
 }
 
-async function deleteShape(id: string) {
+async function deleteShapes(ids: string[]) {
   const m = map.value;
-  if (!m || locked.value || !editing.value) return;
-  const choice = await ask("Delete shape?", "trash", [
+  if (!m || locked.value || !editing.value || !ids.length) return;
+  const choice = await ask(ids.length === 1 ? "Delete shape?" : `Delete ${ids.length} shapes?`, "trash", [
     { label: "Delete", kind: "danger", value: "delete" },
     { label: "Cancel", kind: "outline", value: "cancel" },
   ]);
   if (choice !== "delete") return;
-  m.shapes = m.shapes.filter((a) => a.id !== id);
-  if (selectedId.value === id) selectedId.value = null;
+  const set = new Set(ids);
+  m.shapes = m.shapes.filter((a) => !set.has(a.id));
+  dropSelected(set);
 }
 
-// A row in the list, or a shape on the canvas: both select the shape. The
+function deleteShape(id: string) {
+  return deleteShapes([id]);
+}
+
+// A row in the list, or a shape on the canvas: both select the shape; with
+// `toggle` (Shift held) it joins or leaves the selection instead. The
 // recorded input stays what it is — only Record changes it.
-function pickShape(a: Shape) {
-  selectedId.value = a.id;
+function pickShape(a: Shape, toggle = false) {
+  if (!toggle) {
+    selectedId.value = a.id;
+    return;
+  }
+  const ids = selectedIds.value;
+  selectedIds.value = ids.includes(a.id) ? ids.filter((id) => id !== a.id) : [...ids, a.id];
+}
+
+function selectAll() {
+  selectedIds.value = visibleShapes.value.map((a) => a.id);
 }
 
 // Shift a shape by stage pixels.
@@ -1173,24 +1242,33 @@ function moveShapeZ(a: Shape, move: ZMove) {
   m.shapes.splice(to, 0, a);
 }
 
-// A copy of the shape, offset a little, under the recorded input when one
-// is recorded (that is how a shape is cloned to another input), else under
-// the same one; the copy is selected.
-function duplicateShape(a: Shape) {
+// A copy of every shape under the recorded input when one is recorded (that
+// is how shapes are cloned to another input: in place, 1:1), else under
+// their own, offset a little so the copy shows; the copies are selected.
+function duplicateShapes(list: Shape[]) {
   const m = map.value;
-  if (!m || locked.value || !editing.value) return;
-  const copy: Shape = { ...JSON.parse(JSON.stringify(a)), id: newId(), input: currentKey.value ?? a.input };
-  moveShape(copy, 12, 12);
-  m.shapes.push(copy);
-  selectedId.value = copy.id;
+  if (!m || locked.value || !editing.value || !list.length) return;
+  const copies = list.map((a) => {
+    const input = currentKey.value ?? a.input;
+    const copy: Shape = { ...JSON.parse(JSON.stringify(a)), id: newId(), input };
+    if (input === a.input) moveShape(copy, 12, 12);
+    return copy;
+  });
+  m.shapes.push(...copies);
+  selectedIds.value = copies.map((c) => c.id);
 }
 
-// Keyboard editing: Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y undo and redo; on the
-// selected shape arrows nudge (Shift: 10 px), Delete / Backspace delete,
-// Ctrl+D duplicates, PageUp / PageDown / Home / End change the z-order;
-// Escape stops a recording, else deselects or drops the
-// tool. Text fields and open dialogs keep their keys; while recording, the
-// other keys are the input being recorded.
+function duplicateShape(a: Shape) {
+  duplicateShapes([a]);
+}
+
+// Keyboard editing: Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y undo and redo, Ctrl+A
+// selects every visible shape; on the selected shapes arrows nudge (Shift:
+// 10 px), Delete / Backspace delete, Ctrl+D duplicates; PageUp / PageDown /
+// Home / End change the z-order of a single selected shape; Escape stops a
+// recording, else deselects or drops the tool. Text fields and open dialogs
+// keep their keys; while recording, the other keys are the input being
+// recorded.
 const NUDGE_PX = 1;
 const NUDGE_SHIFT_PX = 10;
 
@@ -1205,8 +1283,8 @@ function onEditorKey(e: KeyboardEvent) {
   if (e.key === "Escape") {
     if (tool.value) {
       setTool(tool.value);
-    } else if (selectedId.value) {
-      selectedId.value = null;
+    } else if (selectedIds.value.length) {
+      selectedIds.value = [];
     }
     return;
   }
@@ -1216,42 +1294,52 @@ function onEditorKey(e: KeyboardEvent) {
     e.preventDefault();
     return;
   }
-  const a = selectedShape.value;
-  if (!a) return;
+  if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
+    selectAll();
+    e.preventDefault();
+    return;
+  }
+  const sel = selectedShapes.value;
+  if (!sel.length) return;
+  const one = selectedShape.value;
   const step = e.shiftKey ? NUDGE_SHIFT_PX : NUDGE_PX;
   switch (e.key) {
     case "ArrowUp":
-      moveShape(a, 0, -step);
+      sel.forEach((a) => moveShape(a, 0, -step));
       break;
     case "ArrowDown":
-      moveShape(a, 0, step);
+      sel.forEach((a) => moveShape(a, 0, step));
       break;
     case "ArrowLeft":
-      moveShape(a, -step, 0);
+      sel.forEach((a) => moveShape(a, -step, 0));
       break;
     case "ArrowRight":
-      moveShape(a, step, 0);
+      sel.forEach((a) => moveShape(a, step, 0));
       break;
     case "Delete":
     case "Backspace":
-      void deleteShape(a.id);
+      void deleteShapes(selectedIds.value);
       break;
     case "d":
     case "D":
       if (!(e.ctrlKey || e.metaKey)) return;
-      duplicateShape(a);
+      duplicateShapes(sel);
       break;
     case "PageUp":
-      moveShapeZ(a, "up");
+      if (!one) return;
+      moveShapeZ(one, "up");
       break;
     case "PageDown":
-      moveShapeZ(a, "down");
+      if (!one) return;
+      moveShapeZ(one, "down");
       break;
     case "Home":
-      moveShapeZ(a, "top");
+      if (!one) return;
+      moveShapeZ(one, "top");
       break;
     case "End":
-      moveShapeZ(a, "bottom");
+      if (!one) return;
+      moveShapeZ(one, "bottom");
       break;
     default:
       return;
@@ -1363,8 +1451,8 @@ function stagePointer(): { x: number; y: number } | null {
 
 // Drag the canvas around inside its scrolling box: the middle button or
 // Shift + left button anywhere (caught before Konva sees the press, so no
-// shape drag or draw starts), the left button on the bare image (select
-// mode) or on the box around the canvas.
+// shape drag or draw starts), or the left button on the box around the
+// canvas. On the bare image the left button drags the selection frame.
 let pan: { x: number; y: number; left: number; top: number } | null = null;
 
 function startPan(ev: MouseEvent) {
@@ -1392,9 +1480,22 @@ function onBoxMouseDown(ev: MouseEvent) {
   if ((ev.target as HTMLElement | null)?.closest(".shape-panel")) return;
   const onBox = ev.target === stageBox.value;
   if (ev.button === 1 || (ev.button === 0 && (ev.shiftKey || onBox))) {
+    // Shift + left on a shape in select mode is the selection toggle, not a
+    // pan: Konva gets the press.
+    if (ev.shiftKey && ev.button === 0 && selectMode.value && hitsShape(ev)) return;
     ev.stopPropagation();
     startPan(ev);
   }
+}
+
+// Whether a press lands on a shape (anything but the bare image).
+function hitsShape(ev: MouseEvent): boolean {
+  const stage = stageRef.value?.getStage();
+  if (!stage) return false;
+  stage.setPointersPositions(ev);
+  const pos = stage.getPointerPosition();
+  const hit = pos ? stage.getIntersection(pos) : null;
+  return !!hit && hit.name() !== "bg";
 }
 
 function onStageMouseDown(e: KonvaEventObject<MouseEvent>) {
@@ -1402,10 +1503,10 @@ function onStageMouseDown(e: KonvaEventObject<MouseEvent>) {
   const pos = stagePointer();
   if (!pos) return;
   if (selectMode.value) {
-    // A click on the bare image clears the selection and starts a pan.
-    if (e.target === e.target.getStage() || e.target.name() === "bg") {
-      selectedId.value = null;
-      startPan(e.evt);
+    // A press on the bare image starts the selection frame; released
+    // without a drag it clears the selection.
+    if (e.evt.button === 0 && (e.target === e.target.getStage() || e.target.name() === "bg")) {
+      marquee.value = { x0: pos.x, y0: pos.y, x1: pos.x, y1: pos.y };
     }
     return;
   }
@@ -1465,9 +1566,38 @@ function onStageMouseMove() {
     draft.value.x1 = pos.x;
     draft.value.y1 = pos.y;
   }
+  if (marquee.value && pos) {
+    marquee.value.x1 = pos.x;
+    marquee.value.y1 = pos.y;
+  }
+}
+
+// The selection frame's release: what it fully encloses (bounding boxes in
+// stage pixels) becomes the selection; a frame too small to be a drag is a
+// click on the bare image and clears it.
+function endMarquee() {
+  const q = marquee.value;
+  marquee.value = null;
+  const stage = stageRef.value?.getStage();
+  if (!q || !stage) return;
+  const x0 = Math.min(q.x0, q.x1);
+  const y0 = Math.min(q.y0, q.y1);
+  const x1 = Math.max(q.x0, q.x1);
+  const y1 = Math.max(q.y0, q.y1);
+  if (x1 - x0 < MIN_DRAW_PX || y1 - y0 < MIN_DRAW_PX) {
+    selectedIds.value = [];
+    return;
+  }
+  selectedIds.value = visibleShapes.value
+    .filter((a) => {
+      const r = stage.findOne<KonvaNode>(`#${a.id}`)?.getClientRect();
+      return r && r.x >= x0 && r.y >= y0 && r.x + r.width <= x1 && r.y + r.height <= y1;
+    })
+    .map((a) => a.id);
 }
 
 function onStageMouseUp() {
+  if (marquee.value) endMarquee();
   const d = draft.value;
   draft.value = null;
   if (!d || !W.value) return;
@@ -1646,9 +1776,16 @@ function imageCfg(a: Shape) {
 
 // --- shape edits -----------------------------------------------------------
 
-function onShapeClick(a: Shape) {
+function onShapeClick(a: Shape, e: KonvaEventObject<MouseEvent>) {
   if (!selectMode.value) return;
-  pickShape(a);
+  pickShape(a, e.evt.shiftKey);
+}
+
+// Dragging a shape outside the selection moves that one alone; a selected
+// one takes the whole selection along (the transformer proxies the drag to
+// every node it holds, each one fires its own dragend).
+function onDragStart(a: Shape) {
+  if (!selectedIds.value.includes(a.id)) selectedId.value = a.id;
 }
 
 function onShapeEnter(a: Shape) {
@@ -1783,19 +1920,18 @@ function onVertexDrag(i: number, e: KonvaEventObject<DragEvent>) {
 
 // Attach/detach the transformer whenever the selection or the shapes change.
 watch(
-  [selectedId, canDrag, shapes, W],
+  [selectedIds, canDrag, shapes, W],
   async () => {
     await nextTick();
     const tr = trRef.value?.getNode();
     const stage = stageRef.value?.getStage();
     if (!tr || !stage) return;
-    const a = selectedShape.value;
-    if (!a || !canDrag.value) {
+    if (!canDrag.value) {
       tr.nodes([]);
       return;
     }
-    const node = stage.findOne<KonvaNode>(`#${a.id}`);
-    tr.nodes(node ? [node] : []);
+    const nodes = selectedShapes.value.map((a) => stage.findOne<KonvaNode>(`#${a.id}`)).filter((n): n is KonvaNode => !!n);
+    tr.nodes(nodes);
   },
   { deep: true },
 );
@@ -1808,6 +1944,17 @@ const drawPreview = computed(() => {
     y: Math.min(d.y0, d.y1),
     width: Math.abs(d.x1 - d.x0),
     height: Math.abs(d.y1 - d.y0),
+  };
+});
+
+const marqueePreview = computed(() => {
+  const q = marquee.value;
+  if (!q) return null;
+  return {
+    x: Math.min(q.x0, q.x1),
+    y: Math.min(q.y0, q.y1),
+    width: Math.abs(q.x1 - q.x0),
+    height: Math.abs(q.y1 - q.y0),
   };
 });
 
@@ -2309,27 +2456,16 @@ function noMaps(d: DeviceInfo): boolean {
               <Icon :name="t.icon" :size="16" />
             </button>
           </template>
-          <template v-if="tool === 'text'">
-            <input
-              v-model="textInput"
-              class="text-input"
-              type="text"
-              :maxlength="TEXT_MAX_LEN"
-              placeholder="Text, then click the image"
-              spellcheck="false"
-            />
-            <Dropdown
-              v-model="textFamily"
-              class="font-pick"
-              variant="small"
-              :options="fontOptions"
-              :placeholder="fontFamilies === null ? 'Loading fonts…' : 'No fonts'"
-              title="Font"
-            />
-            <button type="button" class="tool font" :class="{ on: textBold }" title="Bold" @click="textBold = !textBold">
-              B
-            </button>
-          </template>
+          <div class="divider" />
+          <button
+            type="button"
+            class="tool help"
+            :class="{ on: showControls }"
+            title="Show editor controls"
+            @click="showControls = !showControls"
+          >
+            <Icon name="help" :size="16" />
+          </button>
           <div class="grow" />
           <button type="button" class="tool" :disabled="!canUndo" title="Undo (Ctrl+Z)" @click="undo()">
             <Icon name="undo" :size="16" />
@@ -2374,63 +2510,70 @@ function noMaps(d: DeviceInfo): boolean {
                   <v-rect
                     v-if="a.geometry.kind === 'rect'"
                     :config="rectCfg(a)"
-                    @click="onShapeClick(a)"
+                    @click="onShapeClick(a, $event)"
                     @mouseenter="onShapeEnter(a)"
                     @mouseleave="onShapeLeave"
+                    @dragstart="onDragStart(a)"
                     @dragend="onDragEnd(a, $event)"
                     @transformend="onTransformEnd(a, $event)"
                   />
                   <v-ellipse
                     v-else-if="a.geometry.kind === 'ellipse'"
                     :config="ellipseCfg(a)"
-                    @click="onShapeClick(a)"
+                    @click="onShapeClick(a, $event)"
                     @mouseenter="onShapeEnter(a)"
                     @mouseleave="onShapeLeave"
+                    @dragstart="onDragStart(a)"
                     @dragend="onDragEnd(a, $event)"
                     @transformend="onTransformEnd(a, $event)"
                   />
                   <v-line
                     v-else-if="a.geometry.kind === 'polygon'"
                     :config="polyCfg(a)"
-                    @click="onShapeClick(a)"
+                    @click="onShapeClick(a, $event)"
                     @mouseenter="onShapeEnter(a)"
                     @mouseleave="onShapeLeave"
+                    @dragstart="onDragStart(a)"
                     @dragend="onDragEnd(a, $event)"
                     @transformend="onTransformEnd(a, $event)"
                   />
                   <v-arc
                     v-else-if="a.geometry.kind === 'arc'"
                     :config="arcCfg(a)"
-                    @click="onShapeClick(a)"
+                    @click="onShapeClick(a, $event)"
                     @mouseenter="onShapeEnter(a)"
                     @mouseleave="onShapeLeave"
+                    @dragstart="onDragStart(a)"
                     @dragend="onDragEnd(a, $event)"
                     @transformend="onTransformEnd(a, $event)"
                   />
                   <v-wedge
                     v-else-if="a.geometry.kind === 'wedge'"
                     :config="wedgeCfg(a)"
-                    @click="onShapeClick(a)"
+                    @click="onShapeClick(a, $event)"
                     @mouseenter="onShapeEnter(a)"
                     @mouseleave="onShapeLeave"
+                    @dragstart="onDragStart(a)"
                     @dragend="onDragEnd(a, $event)"
                     @transformend="onTransformEnd(a, $event)"
                   />
                   <v-image
                     v-else-if="a.geometry.kind === 'image'"
                     :config="imageCfg(a)"
-                    @click="onShapeClick(a)"
+                    @click="onShapeClick(a, $event)"
                     @mouseenter="onShapeEnter(a)"
                     @mouseleave="onShapeLeave"
+                    @dragstart="onDragStart(a)"
                     @dragend="onDragEnd(a, $event)"
                     @transformend="onTransformEnd(a, $event)"
                   />
                   <v-path
                     v-else
                     :config="symbolCfg(a)"
-                    @click="onShapeClick(a)"
+                    @click="onShapeClick(a, $event)"
                     @mouseenter="onShapeEnter(a)"
                     @mouseleave="onShapeLeave"
+                    @dragstart="onDragStart(a)"
                     @dragend="onDragEnd(a, $event)"
                     @transformend="onTransformEnd(a, $event)"
                   />
@@ -2467,6 +2610,10 @@ function noMaps(d: DeviceInfo): boolean {
                   v-if="polyPreview"
                   :config="{ points: polyPreview, stroke: paint.live, dash: [4, 4], closed: false, listening: false }"
                 />
+                <v-rect
+                  v-if="marqueePreview"
+                  :config="{ ...marqueePreview, stroke: paint.live, dash: [4, 4], listening: false }"
+                />
 
                 <v-circle
                   v-for="v in vertexAnchors"
@@ -2486,7 +2633,8 @@ function noMaps(d: DeviceInfo): boolean {
                 <v-transformer
                   ref="trRef"
                   :config="{
-                    rotateEnabled: true,
+                    rotateEnabled: selectedIds.length < 2,
+                    resizeEnabled: selectedIds.length < 2,
                     keepRatio,
                     anchorSize: 8,
                     borderStroke: paint.live,
@@ -2505,7 +2653,57 @@ function noMaps(d: DeviceInfo): boolean {
         </div>
         <!-- the selected shape's panel floats over the canvas, top left; it
              sits next to the scrolling box, so it neither moves the canvas
-             nor scrolls with it -->
+             nor scrolls with it. The text tool's options take the same
+             spot (a tool clears the selection, a selection drops the tool),
+             the controls overlay sits top right. -->
+        <div v-if="editing && tool === 'text'" class="shape-panel text-panel">
+          <div class="sp-head">
+            <Icon name="shape-text" :size="14" />
+            <span class="sp-kind">Text</span>
+          </div>
+          <div class="sp-row">
+            <span class="sp-label">Text</span>
+            <input
+              v-model="textInput"
+              class="text-input"
+              type="text"
+              :maxlength="TEXT_MAX_LEN"
+              placeholder="Text, then click the image"
+              spellcheck="false"
+            />
+          </div>
+          <div class="sp-row">
+            <span class="sp-label">Font</span>
+            <div class="sp-line">
+              <Dropdown
+                v-model="textFamily"
+                class="font-pick"
+                variant="small"
+                :options="fontOptions"
+                :placeholder="fontFamilies === null ? 'Loading fonts…' : 'No fonts'"
+                title="Font"
+              />
+              <button type="button" class="tool font" :class="{ on: textBold }" title="Bold" @click="textBold = !textBold">
+                B
+              </button>
+            </div>
+          </div>
+        </div>
+        <div v-if="editing && showControls" class="shape-panel controls-panel">
+          <div v-for="g in CONTROLS" :key="g.title" class="cp-group">
+            <span class="sp-label cp-title">{{ g.title }}</span>
+            <template v-for="[keys, action] in g.rows" :key="keys + action">
+              <kbd class="cp-keys mono">{{ keys }}</kbd>
+              <span class="cp-action">{{ action }}</span>
+            </template>
+          </div>
+        </div>
+        <div v-if="editing && selectedIds.length > 1" class="shape-panel">
+          <div class="sp-head">
+            <Icon name="shape" :size="14" />
+            <span class="sp-kind">{{ selectedIds.length }} shapes</span>
+          </div>
+        </div>
         <div v-if="editing && selectedShape" class="shape-panel">
             <div class="sp-head">
               <Icon :name="shapeIcon(selectedShape)" :size="14" />
@@ -2733,8 +2931,8 @@ function noMaps(d: DeviceInfo): boolean {
                 v-for="a in g.rows"
                 :key="a.id"
                 class="row shape-row"
-                :class="{ cur: g.key === currentKey, sel: a.id === selectedId, off: hidden.has(a.id) }"
-                @click="pickShape(a)"
+                :class="{ cur: g.key === currentKey, sel: selectedIds.includes(a.id), off: hidden.has(a.id) }"
+                @click="pickShape(a, $event.shiftKey)"
               >
                 <span />
                 <span class="shape-cell">
@@ -3200,13 +3398,34 @@ function noMaps(d: DeviceInfo): boolean {
   cursor: default;
 }
 
+/* The controls toggle: round and dim, unlike the tools; on = accent outline
+   instead of the filled accent. */
+.tool.help {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border-color: var(--border-dim);
+  color: var(--text-3);
+}
+
+.tool.help:hover {
+  color: var(--text-2);
+}
+
+.tool.help.on {
+  background: transparent;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .centre-head .btn.small {
   height: 34px;
 }
 
-/* The text tool's input, font pick and bold toggle. */
+/* The text panel's input, font pick and bold toggle. */
 .text-input {
-  width: 220px;
+  width: 100%;
+  box-sizing: border-box;
   height: 34px;
   padding: 0 10px;
   border: 1px solid var(--border);
@@ -3225,9 +3444,8 @@ function noMaps(d: DeviceInfo): boolean {
 }
 
 .font-pick {
-  flex: none;
-  width: 200px;
-  max-width: 200px;
+  flex: 1;
+  min-width: 0;
 }
 
 .centre-head .divider {
@@ -3602,6 +3820,41 @@ function noMaps(d: DeviceInfo): boolean {
   flex-direction: column;
   gap: 10px;
   font-size: 13px;
+}
+
+/* The controls overlay (after .shape-panel: it overrides its left): one grid per group, key chip and action per row. */
+.controls-panel {
+  left: auto;
+  right: 8px;
+  width: 300px;
+  gap: 8px;
+}
+
+.cp-group {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 10px;
+  align-items: center;
+}
+
+.cp-title {
+  grid-column: 1 / -1;
+  padding-top: 0;
+}
+
+.cp-keys {
+  padding: 1px 6px;
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius-control);
+  background: var(--bg-surface-2);
+  color: var(--text-2);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.cp-action {
+  color: var(--text-2);
+  font-size: 12px;
 }
 
 .sp-head {
