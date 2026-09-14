@@ -1,92 +1,164 @@
-# BindSight
+﻿<p align="center">
+  <img src="src-tauri/icons/128x128.png" width="96" alt="BindSight">
+</p>
 
-Star Citizen binding visualizer and mapper. Answers "what does each button
-do, and where does each action live?" by joining SC's own config with live
-input from your joysticks, gamepad, keyboard and mouse.
+<h1 align="center">BindSight</h1>
+<p align="center">
+  Star Citizen input binding VISUALIZER and MAPPER.
+</p>
+<h4 align="center"><em>"BindSight gets your binds right!"</em></h4>
 
-- **Monitor**: press a key or button, move an axis, flip a hat — see the
-  bound action(s), their category and the SC input token. Image-maps light
-  up the control on a picture of your device (bundled: US / DE keyboards,
-  full and TKL, Xbox and PlayStation pads; joystick maps you draw yourself).
-  Below it, every binding of your connected devices resolved to a label,
-  sortable and filterable per device, including the shipped defaults you
-  never rebound. Joysticks get their `jsN` from the order the game itself
-  logged, never from a guess.
-- **Bindings**: the game's keybinding screen as a table, one column per
-  device, editable without starting the game — Save writes `actionmaps.xml`
-  after a verified backup. Binding profiles (save the live file as one,
-  import / export), backups with restore, Apply of a profile or backup per
-  device, and a Compare view that diffs a profile or backup against the
-  current bindings per input.
-- **Device order**: detects the `jsN` shift SC applies when devices enumerate
-  in a different order (from `Game.log`) and fixes it — via
-  `pp_resortdevices` console commands or by rewriting `actionmaps.xml`.
-- **Devices**: an editor for image-maps (rectangles, ellipses, polygons,
-  arcs, wedges, arrow / rotation symbols and images per input, own colours),
-  with zip export / import, plus Device Info: every fact about your devices
-  and a live input-event log, each savable as text.
-- **Game-file safety**: every write to a live game file takes a byte-exact
-  verified backup first (unless you switch that off), every rewrite is
-  re-parsed before it touches the disk, and writes are atomic. Imported
-  image-maps are validated before anything lands on disk, and only the
-  files a map references are unpacked.
+<p align="center">
+  <img alt="Platforms" src="https://img.shields.io/badge/platforms-Windows%20%7C%20Linux-lightgrey">
+  <img alt="Built with" src="https://img.shields.io/badge/Tauri%202-Rust%20%2B%20Vue%203-24C8DB">
+  <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
+</p>
 
-Game data (action list, labels, input token names) is pulled out of your own
-install's `Data.p4k` at runtime with the bundled [StarBreaker](https://github.com/diogotr7/StarBreaker)
-CLI and cached per game version, so a new SC patch needs no app update. Nothing
-leaves your machine.
+<!-- screenshot: Monitor mode with a joystick image-map lit -->
 
-## Running
+The intention of this app is to be an add-on utility for the game [Star Citizen](https://robertsspaceindustries.com/en/) with the goal to provide usable and powerful management features for input devices like **keyboard/mouse, joysticks and gamepads**, which the game is currently lacking.
 
-Settings holds one folder per SC environment (LIVE, HOTFIX, PTU, EPTU) —
-the one containing `Data.p4k`, e.g.
-`C:\Program Files\Roberts Space Industries\StarCitizen\LIVE` (the default),
-or the equivalent under your Wine prefix. The chip in the top bar switches
-which environment the app reads. Per environment you can point the action
-labels at your own `global.ini` (e.g. a community translation) instead of
-the install's. Everything else is derived from the active folder.
+You always forget what input which action was? You always get lost in the game's huge and impractical bindings list? You have issues with the game breaking your device bindings? Then this app is for you!
 
-## Troubleshooting
+## Main Features
 
-BindSight writes a log (rotated at 2 MB, three files kept) with the
-environment, the detected devices, the SC install and everything it loads —
-attach it when reporting a problem:
+### 👀 Input Monitor
 
-- Linux: `~/.local/share/com.w00zla.bindsight/logs/bindsight.log`
-- Windows: `%LOCALAPPDATA%\com.w00zla.bindsight\logs\bindsight.log`
-- macOS: `~/Library/Logs/com.w00zla.bindsight/bindsight.log`
+Answers the question: *"What does each button do, and where does each action live?"*
 
-For more detail, switch on **Enable debug logging** in Settings → Logging;
-**Open log folder** next to it opens the folder.
+- **Press any input, see the bound actions!** The app displays configured game bindings for keys, buttons, axes etc. for any input device in realtime.
+- **Select an action, see the bound input!** An "images and shapes"-based visualization of the input device shows you the keys, buttons, axes etc. which are bound to a specific action via realtime highlighting.
+
+<p align="center">
+  <a href="docs/img/preview_app_monitor1.png"><img src="docs/img/preview_app_monitor1.png" width="500" alt="Preview Monitor"/></a>
+  &nbsp;
+  <a href="docs/img/preview_app_monitor2.png"><img src="docs/img/preview_app_monitor2.png" width="500" alt="Preview Monitor 2"/></a>
+</p>
+
+### 🕹️ Action Bindings
+
+Extended version of the game's **bindings interface**:
+
+- **Search, filter and sort** functionality and support for **re-binding** inputs.
+
+- **Import and export of binding profiles** per device with a detailed **compare interface** for a clear insight into differences to configured bindings.
+
+<p align="center">
+  <a href="docs/img/preview_app_bindings1.png"><img src="docs/img/preview_app_bindings1.png" width="500" alt="Preview Bindings"/></a>
+  &nbsp;
+  <a href="docs/img/preview_app_bindings2.png"><img src="docs/img/preview_app_bindings2.png" width="500" alt="Preview Bindings 2"/></a>
+</p>
+
+</p>
+
+### 🖼️ Custom Visualizations
+
+Due to the built-in **visualization editor** the app supports a near infinite amount of devices!
+
+- Build your own visualizations for your devices with images, shapes, text and colors. You can even share them via im- and export ;)
+
+- *Currently included are following device visualizations:*
+  
+  - Generic Keyboard/Mouse (US/DE + TKL)
+  
+  - Generic Xbox and PlayStation Controller
+  
+  - VKB Gladiator NXT EVO R (Premium)
+  
+  - VKB Gladiator NXT EVO Omni L (Premium)
+
+<p align="center">
+  <a href="docs/img/preview_app_devices1.png"><img src="docs/img/preview_app_devices1.png" width="500" alt="Preview Devices"></a>
+</p>
+
+### 🖥️ Cross-Platform
+
+The app supports **Windows** and **Linux**! 
+
+- *Currently tested with Windows 10 and Nobara Linux 44.*
+
+- If you haven't already, try Linux now :)
+
+## Additional Tools
+
+### 🔀 Device Order Fix
+
+- Currently Star Citizen does not assign your device bindings in a reliable way, so bindings can get broken when devices are un/plugged on game startup.
+- The app can recognize and fix those issues beforehand or while in-game!
+
+### 💾 Backups
+
+- By default, the app makes backups of every changed game file before any modification. You can always revert unintentional or faulty changes!
+- And of course, you can manually back up at any time.
+
+### 🔍 Device Info
+
+- Every fact about your devices plus a live event log, savable for troubleshooting.
+
+## Infos
+
+### ⚙️ Settings
+
+#### Game Environments
+
+1. Choose the correct Star Citizen game folders (the ones with a `Data.p4k` file in them) for your existing environments like LIVE and PTU, e.g.:
+   - *Windows:* `C:\Program Files\Roberts Space Industries\StarCitizen\LIVE` 
+   - *Linux/Wine:* `<wine-prefix>/drive_c/Program Files/Roberts Space Industries/StarCitizen/LIVE`
+2. You can then switch the used Star Citizen environment on-the-fly in the app.
+
+### 💡FAQ / Known Issues
+
+- ESC key is never captured or recorded due to technical reasons (doesn't have a configurable binding either).
+- Mouse inputs are only captured while recording inputs (you need the mouse to use the app anyway).
+- Gamepad triggers are only buttons, no axis, as currently in the game.
+- A running game keeps its configuration and device order. You have to restart the game for most changes to take effect.
+- The app only shows connected devices which are also seen by the game (this specifically applies to Linux/Wine).
+- *POTENTIAL ISSUE:* app is untested with multiple devices of same type (e.g. two times the same joystick) and duplicate device-IDs might cause problems.
+
+### 🗓️ Planned Features
+
+- Support for managing input inversion-, sensitivity- and deadzone settings.
+
+- Improved responsiveness so the GUI works better with smaller window sizes.
 
 ## Building
 
-Tauri v2 + Rust backend, Vue 3 + TypeScript frontend.
-
-1. Fetch the StarBreaker sidecar binaries (pinned release, SHA256-verified):
+1. Fetch the [StarBreaker](https://github.com/diogotr7/StarBreaker) sidecar:
+   
    ```sh
-   scripts/fetch-starbreaker.sh      # Linux/macOS, or Git Bash on Windows
+   scripts/fetch-starbreaker.sh      # Linux, Git Bash
    scripts\fetch-starbreaker.ps1     # PowerShell
    ```
-2. Install the toolchain:
-   - **Linux (Fedora/Nobara)**: `rustup`, `pnpm`, and `webkit2gtk4.1-devel
-     openssl-devel curl wget file libappindicator-gtk3-devel librsvg2-devel
-     libxdo-devel SDL2-devel` plus the `c-development` group.
-   - **Windows**: `rustup` with the MSVC toolchain, Visual Studio Build Tools
-     2022 or a newer Visual Studio (2026 works; *Desktop development with
-     C++*), CMake on `PATH` (SDL2 is built
-     from source and statically linked), `pnpm`, WebView2 runtime.
-3. Build and run:
+
+2. Install toolchain and dependencies:
+   
+   - **All platforms**: `rustup`, `pnpm`
+   - **Linux (Fedora/Nobara)**: `webkit2gtk4.1-devel openssl-devel libappindicator-gtk3-devel librsvg2-devel libxdo-devel SDL2-devel`, group `c-development`
+   - **Windows**: Visual Studio Build Tools 2022+ with the workload *Desktop development with C++*, CMake on `PATH` (SDL2 is built from source and linked statically)
+
+3. Build and run the app:
+   
    ```sh
    pnpm install
-   pnpm tauri dev       # development
-   pnpm tauri build     # release bundle
+   pnpm tauri dev                     # development
+   pnpm tauri build                   # release bundle
+   cd src-tauri && cargo test --lib   # backend tests, no hardware needed
    ```
 
-`cd src-tauri && cargo test --lib` runs the backend tests; no hardware needed.
+## Under the Hood
 
-## License
+| Part           | What                                                                                                                                                      |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shell          | [Tauri 2](https://tauri.app), Rust                                                                                                                        |
+| Frontend       | Vue 3, TypeScript, Vite, [Konva](https://konvajs.org) (editor)                                                                                            |
+| Input          | [SDL2](https://libsdl.org) joystick + GameController APIs, [hidapi](https://github.com/libusb/hidapi) (HID names, axis usages), webview (keyboard, mouse) |
+| Joystick order | DirectInput 8 `EnumDevices` via `windows-sys`; on Linux Wine's registry key order rebuilt from hidapi + sysfs                                             |
+| Game data      | [StarBreaker](https://github.com/diogotr7/StarBreaker) extracts `defaultProfile.xml`, `global.ini`, token labels from `Data.p4k`                          |
+| XML            | `quick-xml` parsing; textual rewrites keep the game's file layout; atomic writes, re-parsed before applied                                                |
 
-MIT — see [LICENSE](LICENSE). StarBreaker is MIT-licensed by its author and
-is downloaded, not vendored. Star Citizen and its data are property of Cloud
-Imperium Games; this tool reads your local install only.
+## Credits
+
+- [StarBreaker](https://github.com/diogotr7/StarBreaker) by diogotr7, used for extracting Star Citizen game data
+- [Wine](https://www.winehq.org) source, for the DirectInput and winebus behaviour replicated on Linux
+- [Star Citizen](https://robertsspaceindustries.com/en/) and its data belong to [Cloud Imperium Games](https://cloudimperiumgames.com). 
+  *This app does not include game assets or resources.*
