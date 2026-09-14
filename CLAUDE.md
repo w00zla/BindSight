@@ -431,11 +431,13 @@ All of it lives in the Devices mode's Device Info view instead.
   `pad:a` (a combo pins the part after the last `+`). The editor shows keys
   by their native name only (`button 3`, `hat 0 up`, `axis 2 (rotz)`): an
   image-map does not know which `jsN` its device is.
-- **Bundled image-maps** (`src-tauri/resources/imagemaps/`): Keyboard US,
-  Keyboard DE, Xbox controller, PlayStation controller, Keyboard US (TKL),
-  Keyboard DE (TKL) — generated, never hand-edited (a generator outside the
-  repo holds the geometry and writes `image.png` + `imagemap.json`; fixed
-  ids `4b7a2c1e-…-000000000001` to `…0006`).
+- **Bundled image-maps** (`src-tauri/resources/imagemaps/`, fixed ids
+  `4b7a2c1e-…-000000000001` onwards): Keyboard US, Keyboard DE, Xbox
+  controller, PlayStation controller, Keyboard US (TKL), Keyboard DE (TKL)
+  (`…0001` to `…0006`) are generated, never hand-edited — a generator
+  outside the repo holds the geometry and writes `image.png` +
+  `imagemap.json`. VKB EVO Omni L (`…0007`) and VKB EVO R (`…0008`) are
+  hand-made in the editor.
 - **Default map per device** (`App.vue`, `chosenMapId`): the user's choice,
   else the first fitting hard-coded `BUNDLED_RULES` entry (not part of the
   model; gamepads by case-insensitive `*`/`?` wildcards on the controller
