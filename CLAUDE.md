@@ -346,10 +346,14 @@ presentational components:
 - `imagemap.rs` — one folder per image-map, named by its id, under
   `<app_data_dir>/imagemaps/<id>/`: `imagemap.json` plus the image files it
   references by bare file name (png / jpg / jpeg / webp / svg / gif, no
-  path). Bundled ones under `resources/imagemaps/<id>/` (read-only; clone
-  into the user root with a fresh id, import assigns a fresh id too). Zip
-  export/import, image add/remove/read (data URL), validation. Pure logic
-  takes `&Path` roots; the `#[tauri::command]` wrappers only resolve dirs.
+  path). Bundled ones are compiled into the binary from
+  `resources/imagemaps/<id>/` (`include_dir`, `BUNDLED`; read-only; clone
+  into the user root with a fresh id, import assigns a fresh id too), so no
+  folder ships next to the app; `build.rs` re-runs the build when a map
+  changes. Zip export/import, image add/remove/read (data URL), validation.
+  Pure logic takes a `Bundled` source (embedded dir, or a folder in tests)
+  plus the `&Path` user root; the `#[tauri::command]` wrappers only resolve
+  them.
 - `names.rs` — the name rule (see Image-map data model).
 - `textpath.rs` — the text tool's backend: `list_fonts` (the system's
   font families via `fontdb`, scanned once on first use; the app bundles
@@ -445,7 +449,8 @@ All of it lives in the Devices mode's Device Info view instead.
   `pad:a` (a combo pins the part after the last `+`). The editor shows keys
   by their native name only (`button 3`, `hat 0 up`, `axis 2 (rotz)`): an
   image-map does not know which `jsN` its device is.
-- **Bundled image-maps** (`src-tauri/resources/imagemaps/`, fixed ids
+- **Bundled image-maps** (`src-tauri/resources/imagemaps/`, embedded at
+  compile time, fixed ids
   `4b7a2c1e-…-000000000001` onwards): Keyboard US, Keyboard DE, Xbox
   controller, PlayStation controller, Keyboard US (TKL), Keyboard DE (TKL)
   (`…0001` to `…0006`) are generated, never hand-edited — a generator

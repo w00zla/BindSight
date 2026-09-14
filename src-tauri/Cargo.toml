@@ -34,6 +34,7 @@ log = "0.4"
 os_info = { version = "3", default-features = false }
 ttf-parser = "0.25.1"
 fontdb = "0.24.0"
+include_dir = "0.7"
 # Data.p4k reading (see p4k.rs): CIG encrypts with AES-128-CBC, compresses with zstd.
 aes = "0.8"
 cbc = "0.1"

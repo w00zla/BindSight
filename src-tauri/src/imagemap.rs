@@ -3,10 +3,11 @@
 //! control. Joysticks use SDL-level keys (`button:5`, `hat:0:up`, `axis:2`);
 //! keyboard and gamepad use SC's own names (`key:lshift`, `pad:a`).
 //!
-//! On disk an image-map is one folder — `imagemap.json` plus the image file it
-//! references by bare file name. Two roots are searched:
+//! An image-map is one folder — `imagemap.json` plus the image file it
+//! references by bare file name. Two sources are searched:
 //!
-//! - bundled: `resources/imagemaps/<id>/` (shipped with the app, read-only),
+//! - bundled: `resources/imagemaps/<id>/`, compiled into the binary
+//!   (`BUNDLED`, read-only) so the app needs no folder next to it,
 //! - user: `<app_data_dir>/imagemaps/<id>/` (everything the editor writes).
 //!
 //! Bundled image-maps are read-only: `save`, `add_image`, `remove_image` and
@@ -19,8 +20,9 @@
 //! root. Import refuses entries with path separators, so a zip can never
 //! write outside its image-map folder.
 //!
-//! The pure logic works on `&Path` roots so it is testable without an
-//! `AppHandle`; the `#[tauri::command]` wrappers only resolve the roots.
+//! The pure logic works on a [`Bundled`] source (the embedded dir, or a
+//! folder in tests) and a `&Path` user root, so it is testable without an
+//! `AppHandle`; the `#[tauri::command]` wrappers only resolve them.
 
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -31,7 +33,6 @@ use std::sync::Mutex;
 use base64::Engine;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
-use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager, State};
 
 use crate::names::{is_safe_name, sanitize_name};
@@ -42,6 +43,82 @@ use crate::{config, AppData};
 pub const FORMAT: u32 = 4;
 
 const MAP_FILE: &str = "imagemap.json";
+
+/// The bundled image-maps, compiled in from `resources/imagemaps/`.
+static BUNDLED: include_dir::Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/resources/imagemaps");
+
+/// Where the read-only bundled image-maps come from: the embedded dir in
+/// the app, a folder in tests. One folder per image-map, named by its id.
+pub enum Bundled<'a> {
+    Embedded(&'a include_dir::Dir<'a>),
+    Folder(&'a Path),
+}
+
+impl Bundled<'_> {
+    /// Folder names (= ids) that hold an `imagemap.json`.
+    fn ids(&self) -> Vec<String> {
+        match self {
+            Bundled::Embedded(root) => root
+                .dirs()
+                .filter(|d| d.get_file(d.path().join(MAP_FILE)).is_some())
+                .filter_map(|d| Some(d.path().file_name()?.to_str()?.to_string()))
+                .collect(),
+            Bundled::Folder(root) => fs::read_dir(root)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.path().join(MAP_FILE).is_file())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .collect(),
+        }
+    }
+
+    fn has(&self, id: &str) -> bool {
+        self.exists(id, MAP_FILE)
+    }
+
+    fn exists(&self, id: &str, name: &str) -> bool {
+        match self {
+            Bundled::Embedded(root) => root.get_file(format!("{id}/{name}")).is_some(),
+            Bundled::Folder(root) => root.join(id).join(name).is_file(),
+        }
+    }
+
+    fn read(&self, id: &str, name: &str) -> Result<Vec<u8>, String> {
+        match self {
+            Bundled::Embedded(root) => root
+                .get_file(format!("{id}/{name}"))
+                .map(|f| f.contents().to_vec())
+                .ok_or_else(|| format!("{id}/{name}: not bundled")),
+            Bundled::Folder(root) => fs::read(root.join(id).join(name)).map_err(|e| format!("{id}/{name}: {e}")),
+        }
+    }
+}
+
+/// Where an existing image-map lives.
+enum Loc {
+    User(PathBuf),
+    Bundled(String),
+}
+
+fn read_at(bundled: &Bundled, loc: &Loc, name: &str) -> Result<Vec<u8>, String> {
+    match loc {
+        Loc::User(dir) => fs::read(dir.join(name)).map_err(|e| format!("{name}: {e}")),
+        Loc::Bundled(id) => bundled.read(id, name),
+    }
+}
+
+fn exists_at(bundled: &Bundled, loc: &Loc, name: &str) -> bool {
+    match loc {
+        Loc::User(dir) => dir.join(name).is_file(),
+        Loc::Bundled(id) => bundled.exists(id, name),
+    }
+}
+
+fn read_map_at(bundled: &Bundled, loc: &Loc) -> Result<ImageMap, String> {
+    let bytes = read_at(bundled, loc, MAP_FILE)?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("{MAP_FILE}: {e}"))
+}
 
 /// The image of the device — mandatory, an image-map is nothing without it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,9 +402,9 @@ fn is_colour(c: &str) -> bool {
 }
 
 /// Check that every referenced file exists in `dir`.
-fn validate_files(p: &ImageMap, dir: &Path) -> Result<(), String> {
+fn validate_files(bundled: &Bundled, loc: &Loc, p: &ImageMap) -> Result<(), String> {
     for f in p.files() {
-        if !dir.join(f).is_file() {
+        if !exists_at(bundled, loc, f) {
             return Err(format!("image file {f:?} is missing"));
         }
     }
@@ -388,10 +465,15 @@ fn read_root(root: &Path) -> Vec<ImageMap> {
 
 /// Bundled + user image-maps, user shadowing bundled by id. Bundled first,
 /// then by name — so the first match for a device is the shipped one.
-pub fn list(bundled_root: &Path, user_root: &Path) -> Vec<ImageMapSummary> {
+pub fn list(bundled: &Bundled, user_root: &Path) -> Vec<ImageMapSummary> {
     let mut by_id: HashMap<String, ImageMapSummary> = HashMap::new();
-    for p in read_root(bundled_root) {
-        by_id.insert(p.id.clone(), ImageMapSummary::of(&p, ImageMapSource::Bundled));
+    for id in bundled.ids() {
+        match read_map_at(bundled, &Loc::Bundled(id.clone())) {
+            Ok(p) => {
+                by_id.insert(p.id.clone(), ImageMapSummary::of(&p, ImageMapSource::Bundled));
+            }
+            Err(e) => warn!("skipping bundled image-map {id}: {e}"),
+        }
     }
     for p in read_root(user_root) {
         by_id.insert(p.id.clone(), ImageMapSummary::of(&p, ImageMapSource::User));
@@ -406,25 +488,24 @@ pub fn list(bundled_root: &Path, user_root: &Path) -> Vec<ImageMapSummary> {
     out
 }
 
-/// The folder an image-map is read from: user first, then bundled.
-fn find_dir(bundled_root: &Path, user_root: &Path, id: &str) -> Result<(PathBuf, ImageMapSource), String> {
+/// Where an image-map is read from: user first, then bundled.
+fn find(bundled: &Bundled, user_root: &Path, id: &str) -> Result<(Loc, ImageMapSource), String> {
     if !is_bare_name(id) {
         return Err(format!("invalid image-map id {id:?}"));
     }
     let user = user_root.join(id);
     if user.join(MAP_FILE).is_file() {
-        return Ok((user, ImageMapSource::User));
+        return Ok((Loc::User(user), ImageMapSource::User));
     }
-    let bundled = bundled_root.join(id);
-    if bundled.join(MAP_FILE).is_file() {
-        return Ok((bundled, ImageMapSource::Bundled));
+    if bundled.has(id) {
+        return Ok((Loc::Bundled(id.to_string()), ImageMapSource::Bundled));
     }
     Err(format!("unknown image-map {id:?}"))
 }
 
 /// The writable folder for an existing user image-map. Errors (without
 /// creating anything) if `id` is bundled-only (read-only) or unknown.
-fn writable_dir(bundled_root: &Path, user_root: &Path, id: &str) -> Result<PathBuf, String> {
+fn writable_dir(bundled: &Bundled, user_root: &Path, id: &str) -> Result<PathBuf, String> {
     if !is_bare_name(id) {
         return Err(format!("invalid image-map id {id:?}"));
     }
@@ -432,15 +513,15 @@ fn writable_dir(bundled_root: &Path, user_root: &Path, id: &str) -> Result<PathB
     if user.join(MAP_FILE).is_file() {
         return Ok(user);
     }
-    if bundled_root.join(id).join(MAP_FILE).is_file() {
+    if bundled.has(id) {
         return Err(format!("{id:?} is a bundled image-map (read-only)"));
     }
     Err(format!("unknown image-map {id:?}"))
 }
 
-pub fn get(bundled_root: &Path, user_root: &Path, id: &str) -> Result<ImageMap, String> {
-    let (dir, _) = find_dir(bundled_root, user_root, id)?;
-    read_map(&dir)
+pub fn get(bundled: &Bundled, user_root: &Path, id: &str) -> Result<ImageMap, String> {
+    let (loc, _) = find(bundled, user_root, id)?;
+    read_map_at(bundled, &loc)
 }
 
 /// Create a user image-map around `image_source` (copied into the new
@@ -472,10 +553,10 @@ pub fn create(
 
 /// Copy an image-map (bundled or user) into a new, editable user image-map
 /// with a fresh id.
-pub fn clone_map(bundled_root: &Path, user_root: &Path, id: &str, name: &str) -> Result<ImageMap, String> {
-    let (src_dir, _) = find_dir(bundled_root, user_root, id)?;
-    let source = read_map(&src_dir)?;
-    validate_files(&source, &src_dir)?;
+pub fn clone_map(bundled: &Bundled, user_root: &Path, id: &str, name: &str) -> Result<ImageMap, String> {
+    let (src, _) = find(bundled, user_root, id)?;
+    let source = read_map_at(bundled, &src)?;
+    validate_files(bundled, &src, &source)?;
 
     let new_id = uuid::Uuid::new_v4().to_string();
     let map = ImageMap {
@@ -492,9 +573,10 @@ pub fn clone_map(bundled_root: &Path, user_root: &Path, id: &str, name: &str) ->
     let dir = user_root.join(&new_id);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     for f in map.files() {
-        if let Err(e) = fs::copy(src_dir.join(f), dir.join(f)) {
+        let copied = read_at(bundled, &src, f).and_then(|bytes| fs::write(dir.join(f), bytes).map_err(|e| format!("{f}: {e}")));
+        if let Err(e) = copied {
             let _ = fs::remove_dir_all(&dir);
-            return Err(format!("{f}: {e}"));
+            return Err(e);
         }
     }
     write_map(&dir, &map)?;
@@ -502,10 +584,10 @@ pub fn clone_map(bundled_root: &Path, user_root: &Path, id: &str, name: &str) ->
 }
 
 /// Write the image-map; image files it no longer references are removed.
-pub fn save(bundled_root: &Path, user_root: &Path, map: ImageMap) -> Result<ImageMap, String> {
+pub fn save(bundled: &Bundled, user_root: &Path, map: ImageMap) -> Result<ImageMap, String> {
     validate(&map)?;
-    let dir = writable_dir(bundled_root, user_root, &map.id)?;
-    validate_files(&map, &dir)?;
+    let dir = writable_dir(bundled, user_root, &map.id)?;
+    validate_files(bundled, &Loc::User(dir.clone()), &map)?;
     write_map(&dir, &map)?;
     prune_files(&map, &dir);
     Ok(map)
@@ -513,8 +595,8 @@ pub fn save(bundled_root: &Path, user_root: &Path, map: ImageMap) -> Result<Imag
 
 /// Delete the user copy. Bundled image-maps are read-only and cannot be
 /// deleted.
-pub fn delete(bundled_root: &Path, user_root: &Path, id: &str) -> Result<(), String> {
-    let dir = writable_dir(bundled_root, user_root, id)?;
+pub fn delete(bundled: &Bundled, user_root: &Path, id: &str) -> Result<(), String> {
+    let dir = writable_dir(bundled, user_root, id)?;
     fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -543,8 +625,8 @@ fn unique(base: &str, mut taken: impl FnMut(&str) -> bool) -> String {
 /// Copy an image (a replacement device image, or one for an image shape)
 /// into the image-map folder. Does not touch `imagemap.json` — the caller
 /// references it; a file nothing references is pruned at the next save.
-pub fn add_image(bundled_root: &Path, user_root: &Path, id: &str, source: &Path) -> Result<ImageFile, String> {
-    let dir = writable_dir(bundled_root, user_root, id)?;
+pub fn add_image(bundled: &Bundled, user_root: &Path, id: &str, source: &Path) -> Result<ImageFile, String> {
+    let dir = writable_dir(bundled, user_root, id)?;
     copy_image_into(&dir, source)
 }
 
@@ -571,11 +653,11 @@ fn copy_image_into(dir: &Path, source: &Path) -> Result<ImageFile, String> {
 }
 
 /// Delete an image file from the user folder; missing file is a no-op.
-pub fn remove_image(bundled_root: &Path, user_root: &Path, id: &str, file: &str) -> Result<(), String> {
+pub fn remove_image(bundled: &Bundled, user_root: &Path, id: &str, file: &str) -> Result<(), String> {
     if !is_bare_name(file) {
         return Err("invalid name".into());
     }
-    let dir = writable_dir(bundled_root, user_root, id)?;
+    let dir = writable_dir(bundled, user_root, id)?;
     match fs::remove_file(dir.join(file)) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -584,28 +666,28 @@ pub fn remove_image(bundled_root: &Path, user_root: &Path, id: &str, file: &str)
 }
 
 /// An image as a `data:` URL.
-pub fn read_image(bundled_root: &Path, user_root: &Path, id: &str, file: &str) -> Result<String, String> {
+pub fn read_image(bundled: &Bundled, user_root: &Path, id: &str, file: &str) -> Result<String, String> {
     if !is_bare_name(file) {
         return Err(format!("invalid image file name {file:?}"));
     }
     let mime = mime_for(file).ok_or_else(|| format!("{file}: unsupported image format"))?;
-    let (dir, _) = find_dir(bundled_root, user_root, id)?;
-    let bytes = fs::read(dir.join(file)).map_err(|e| format!("{file}: {e}"))?;
+    let (loc, _) = find(bundled, user_root, id)?;
+    let bytes = read_at(bundled, &loc, file)?;
     Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
 }
 
 /// Zip `imagemap.json` + every referenced image (flat, deflate) to `dest`.
-pub fn export(bundled_root: &Path, user_root: &Path, id: &str, dest: &Path) -> Result<(), String> {
-    let (dir, _) = find_dir(bundled_root, user_root, id)?;
-    let map = read_map(&dir)?;
+pub fn export(bundled: &Bundled, user_root: &Path, id: &str, dest: &Path) -> Result<(), String> {
+    let (loc, _) = find(bundled, user_root, id)?;
+    let map = read_map_at(bundled, &loc)?;
     validate(&map)?;
-    validate_files(&map, &dir)?;
+    validate_files(bundled, &loc, &map)?;
 
     let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     let mut zip = zip::ZipWriter::new(File::create(dest).map_err(|e| format!("{}: {e}", dest.display()))?);
     for name in std::iter::once(MAP_FILE).chain(map.files()) {
         zip.start_file(name, opts).map_err(|e| e.to_string())?;
-        let bytes = fs::read(dir.join(name)).map_err(|e| format!("{name}: {e}"))?;
+        let bytes = read_at(bundled, &loc, name)?;
         zip.write_all(&bytes).map_err(|e| e.to_string())?;
     }
     zip.finish().map_err(|e| e.to_string())?;
@@ -677,31 +759,25 @@ fn user_root(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map(|d| d.join("imagemaps")).map_err(|e| e.to_string())
 }
 
-/// Bundled image-maps dir (`resources/imagemaps/` next to the app); falls
-/// back to the source tree in development, where the bundled resources are
-/// absent. A release without the folder lists no bundled maps, silently.
-fn bundled_root(app: &AppHandle) -> PathBuf {
-    app.path()
-        .resolve("resources/imagemaps", BaseDirectory::Resource)
-        .ok()
-        .filter(|p| p.is_dir())
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources").join("imagemaps"))
+/// The bundled image-maps compiled into the binary.
+fn bundled() -> Bundled<'static> {
+    Bundled::Embedded(&BUNDLED)
 }
 
 #[tauri::command]
 pub(crate) fn list_imagemaps(app: AppHandle) -> Vec<ImageMapSummary> {
     match user_root(&app) {
-        Ok(user) => list(&bundled_root(&app), &user),
+        Ok(user) => list(&bundled(), &user),
         Err(e) => {
             error!("no app data dir: {e}");
-            list(&bundled_root(&app), Path::new(""))
+            list(&bundled(), Path::new(""))
         }
     }
 }
 
 #[tauri::command]
 pub(crate) fn get_imagemap(id: String, app: AppHandle) -> Result<ImageMap, String> {
-    get(&bundled_root(&app), &user_root(&app)?, &id)
+    get(&bundled(), &user_root(&app)?, &id)
 }
 
 #[tauri::command]
@@ -719,43 +795,43 @@ pub(crate) fn create_imagemap(
 
 #[tauri::command]
 pub(crate) fn save_imagemap(map: ImageMap, app: AppHandle) -> Result<ImageMap, String> {
-    let map = save(&bundled_root(&app), &user_root(&app)?, map)?;
+    let map = save(&bundled(), &user_root(&app)?, map)?;
     info!("image-map saved: {} ({}), {} shapes", map.id, map.name, map.shapes.len());
     Ok(map)
 }
 
 #[tauri::command]
 pub(crate) fn delete_imagemap(id: String, app: AppHandle) -> Result<(), String> {
-    delete(&bundled_root(&app), &user_root(&app)?, &id)?;
+    delete(&bundled(), &user_root(&app)?, &id)?;
     info!("image-map deleted: {id}");
     Ok(())
 }
 
 #[tauri::command]
 pub(crate) fn clone_imagemap(id: String, name: String, app: AppHandle) -> Result<ImageMap, String> {
-    let map = clone_map(&bundled_root(&app), &user_root(&app)?, &id, &name)?;
+    let map = clone_map(&bundled(), &user_root(&app)?, &id, &name)?;
     info!("image-map {id} cloned to {} ({})", map.id, map.name);
     Ok(map)
 }
 
 #[tauri::command]
 pub(crate) fn add_imagemap_image(id: String, source_path: String, app: AppHandle) -> Result<ImageFile, String> {
-    add_image(&bundled_root(&app), &user_root(&app)?, &id, Path::new(&source_path))
+    add_image(&bundled(), &user_root(&app)?, &id, Path::new(&source_path))
 }
 
 #[tauri::command]
 pub(crate) fn remove_imagemap_image(id: String, file: String, app: AppHandle) -> Result<(), String> {
-    remove_image(&bundled_root(&app), &user_root(&app)?, &id, &file)
+    remove_image(&bundled(), &user_root(&app)?, &id, &file)
 }
 
 #[tauri::command]
 pub(crate) fn read_imagemap_image(id: String, file: String, app: AppHandle) -> Result<String, String> {
-    read_image(&bundled_root(&app), &user_root(&app)?, &id, &file)
+    read_image(&bundled(), &user_root(&app)?, &id, &file)
 }
 
 #[tauri::command]
 pub(crate) fn export_imagemap(id: String, dest_path: String, app: AppHandle) -> Result<(), String> {
-    export(&bundled_root(&app), &user_root(&app)?, &id, Path::new(&dest_path))?;
+    export(&bundled(), &user_root(&app)?, &id, Path::new(&dest_path))?;
     info!("image-map exported: {id} -> {dest_path}");
     Ok(())
 }
@@ -991,9 +1067,10 @@ mod tests {
     #[test]
     fn user_shadows_bundled_in_listing() {
         let t = Tmp::new();
-        let (bundled, user) = (t.path("bundled"), t.path("user"));
-        put(&bundled, &sample("shared", "Bundled name"));
-        put(&bundled, &sample("only-bundled", "Zeta"));
+        let (bdir, user) = (t.path("bundled"), t.path("user"));
+        let bundled = Bundled::Folder(&bdir);
+        put(&bdir, &sample("shared", "Bundled name"));
+        put(&bdir, &sample("only-bundled", "Zeta"));
         let mut u = sample("shared", "User name");
         u.shapes.clear();
         put(&user, &u);
@@ -1018,27 +1095,29 @@ mod tests {
     #[test]
     fn bundled_maps_are_read_only() {
         let t = Tmp::new();
-        let (bundled, user) = (t.path("bundled"), t.path("user"));
-        put(&bundled, &sample("b1", "Bundled"));
+        let (bdir, user) = (t.path("bundled"), t.path("user"));
+        let bundled = Bundled::Folder(&bdir);
+        put(&bdir, &sample("b1", "Bundled"));
 
         let mut edited = sample("b1", "Edited");
         edited.shapes[0].input = "button:7".into();
         assert!(save(&bundled, &user, edited).unwrap_err().contains("read-only"));
         assert!(!user.join("b1").exists());
 
-        assert!(add_image(&bundled, &user, "b1", &bundled.join("b1").join("top.png")).is_err());
+        assert!(add_image(&bundled, &user, "b1", &bdir.join("b1").join("top.png")).is_err());
 
         assert!(remove_image(&bundled, &user, "b1", "top.png").is_err());
-        assert!(bundled.join("b1").join("top.png").is_file());
+        assert!(bdir.join("b1").join("top.png").is_file());
 
         assert!(delete(&bundled, &user, "b1").is_err());
-        assert!(bundled.join("b1").join(MAP_FILE).is_file());
+        assert!(bdir.join("b1").join(MAP_FILE).is_file());
     }
 
     #[test]
     fn save_of_unknown_id_fails() {
         let t = Tmp::new();
-        let (bundled, user) = (t.path("bundled"), t.path("user"));
+        let (bdir, user) = (t.path("bundled"), t.path("user"));
+        let bundled = Bundled::Folder(&bdir);
         assert!(save(&bundled, &user, sample("nope", "X")).unwrap_err().contains("unknown"));
         assert!(!user.join("nope").exists());
 
@@ -1052,8 +1131,9 @@ mod tests {
     #[test]
     fn clone_makes_an_editable_user_copy() {
         let t = Tmp::new();
-        let (bundled, user) = (t.path("bundled"), t.path("user"));
-        put(&bundled, &sample("p1", "Bundled"));
+        let (bdir, user) = (t.path("bundled"), t.path("user"));
+        let bundled = Bundled::Folder(&bdir);
+        put(&bdir, &sample("p1", "Bundled"));
 
         let cloned = clone_map(&bundled, &user, "p1", "  My copy ").unwrap();
         assert_ne!(cloned.id, "p1");
@@ -1075,7 +1155,7 @@ mod tests {
         assert_eq!(read_map(&user.join(&cloned.id)).unwrap().name, "Renamed");
 
         // Bundled folder untouched throughout.
-        assert_eq!(read_map(&bundled.join("p1")).unwrap().name, "Bundled");
+        assert_eq!(read_map(&bdir.join("p1")).unwrap().name, "Bundled");
 
         // Cloning a user map works the same way.
         put(&user, &sample("u1", "User"));
@@ -1090,7 +1170,8 @@ mod tests {
     #[test]
     fn create_and_add_image() {
         let t = Tmp::new();
-        let (bundled, user) = (t.path("bundled"), t.path("user"));
+        let (bdir, user) = (t.path("bundled"), t.path("user"));
+        let bundled = Bundled::Folder(&bdir);
         let src = t.path("My Stick Top.PNG");
         fs::write(&src, PNG).unwrap();
         let p = create(&user, "New", "{GUID}", "Stick", &src).unwrap();
@@ -1120,7 +1201,8 @@ mod tests {
     #[test]
     fn read_image_maps_mime_by_extension() {
         let t = Tmp::new();
-        let (bundled, user) = (t.path("bundled"), t.path("user"));
+        let (bdir, user) = (t.path("bundled"), t.path("user"));
+        let bundled = Bundled::Folder(&bdir);
         let mut p = sample("p1", "P");
         p.image = ImageFile { file: "a.png".into(), label: String::new() };
         p.shapes.clear();
@@ -1149,7 +1231,8 @@ mod tests {
     #[test]
     fn export_import_round_trip() {
         let t = Tmp::new();
-        let (bundled, user, user2) = (t.path("bundled"), t.path("user"), t.path("user2"));
+        let (bdir, user, user2) = (t.path("bundled"), t.path("user"), t.path("user2"));
+        let bundled = Bundled::Folder(&bdir);
         put(&user, &sample("rt", "Round trip"));
         let zip_path = t.path("rt.zip");
         export(&bundled, &user, "rt", &zip_path).unwrap();
@@ -1169,7 +1252,7 @@ mod tests {
         assert_eq!(list(&bundled, &user2).len(), 2);
 
         // Exporting a bundled image-map works too.
-        put(&bundled, &sample("b", "B"));
+        put(&bdir, &sample("b", "B"));
         export(&bundled, &t.path("none"), "b", &t.path("b.zip")).unwrap();
     }
 
@@ -1218,7 +1301,8 @@ mod tests {
     #[test]
     fn image_shape_files_travel_with_the_map() {
         let t = Tmp::new();
-        let (bundled, user, user2) = (t.path("bundled"), t.path("user"), t.path("user2"));
+        let (bdir, user, user2) = (t.path("bundled"), t.path("user"), t.path("user2"));
+        let bundled = Bundled::Folder(&bdir);
         let mut p = sample("img", "With image shape");
         p.shapes.push(image_shape("i1", "glyph.png"));
         put(&user, &p);
@@ -1247,6 +1331,33 @@ mod tests {
         assert!(!user.join("img").join("orphan.png").exists());
         assert!(user.join("img").join("notes.txt").is_file());
         assert!(user.join("img").join("top.png").is_file());
+    }
+
+    #[test]
+    fn embedded_maps_are_complete() {
+        let bundled = Bundled::Embedded(&BUNDLED);
+        let ids = bundled.ids();
+        assert_eq!(ids.len(), 8, "{ids:?}");
+        for id in &ids {
+            let map = get(&bundled, Path::new("/nonexistent"), id).unwrap();
+            assert_eq!(&map.id, id, "folder name is the id");
+            validate(&map).unwrap();
+            validate_files(&bundled, &Loc::Bundled(id.clone()), &map).unwrap();
+            let url = read_image(&bundled, Path::new("/nonexistent"), id, &map.image.file).unwrap();
+            assert!(url.starts_with("data:image/"), "{id}: {}", &url[..30]);
+        }
+        assert_eq!(list(&bundled, Path::new("/nonexistent")).len(), 8);
+        assert!(!bundled.has("../4b7a2c1e-0001-4000-8000-000000000001"));
+        assert!(bundled.read("nope", MAP_FILE).unwrap_err().contains("not bundled"));
+
+        // The embedded source behaves like a folder: read-only, clonable.
+        let t = Tmp::new();
+        let user = t.path("user");
+        let id = &ids[0];
+        assert!(save(&bundled, &user, get(&bundled, &user, id).unwrap()).unwrap_err().contains("read-only"));
+        let cloned = clone_map(&bundled, &user, id, "Copy").unwrap();
+        assert!(user.join(&cloned.id).join(&cloned.image.file).is_file());
+        export(&bundled, &user, id, &t.path("b.zip")).unwrap();
     }
 
     #[test]
