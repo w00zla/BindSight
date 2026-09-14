@@ -1,0 +1,174 @@
+# Build BindSight for Windows and Linux.
+#
+# - Manual run (any branch): tests, then the installers as workflow
+#   artifacts (14 days). With `prerelease` ticked they also land in a GitHub
+#   pre-release `test-<sha>` — never `latest`, invisible to the updater.
+# - Tag `v*`: tests, then a *draft* release with every bundle, the updater
+#   signatures and latest.json. Nothing goes live until the draft is
+#   published by hand.
+#
+# Secrets: TAURI_SIGNING_PRIVATE_KEY (the minisign key, one line),
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD (empty if the key has none).
+name: Build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: "Also publish a GitHub pre-release (test-<sha>)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  LINUX_DEPS: libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf libsdl2-dev libudev-dev
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: App version (Cargo.toml)
+        id: version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -n 1)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "App version $version"
+      - name: Tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag=${GITHUB_REF#refs/tags/v}
+          if [ "$tag" != "${{ steps.version.outputs.version }}" ]; then
+            echo "Tag v$tag but Cargo.toml says ${{ steps.version.outputs.version }}" >&2
+            exit 1
+          fi
+      - name: Linux packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y $LINUX_DEPS
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: pnpm install --frozen-lockfile
+      - name: Frontend typecheck + build
+        run: pnpm build
+      - name: Backend tests
+        run: cargo test --lib
+        working-directory: src-tauri
+      - name: Clippy
+        run: cargo clippy --lib --examples --tests -- -D warnings
+        working-directory: src-tauri
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-22.04
+          - name: windows
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.test.outputs.version }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux packages
+        if: matrix.name == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y $LINUX_DEPS
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: pnpm install --frozen-lockfile
+      - name: Build (Linux)
+        if: matrix.name == 'linux'
+        run: NO_STRIP=true pnpm tauri build --bundles appimage,deb,rpm
+      - name: Build (Windows)
+        if: matrix.name == 'windows'
+        run: pnpm tauri build --bundles nsis
+      - name: Collect (Linux)
+        if: matrix.name == 'linux'
+        shell: bash
+        run: |
+          mkdir -p assets
+          cp src-tauri/target/release/bundle/appimage/BindSight_${VERSION}_amd64.AppImage* assets/
+          cp src-tauri/target/release/bundle/deb/BindSight_${VERSION}_amd64.deb assets/
+          cp src-tauri/target/release/bundle/rpm/BindSight-${VERSION}-1.x86_64.rpm assets/
+          ls -la assets
+      - name: Collect (Windows)
+        if: matrix.name == 'windows'
+        shell: bash
+        run: |
+          mkdir -p assets
+          cp src-tauri/target/release/bundle/nsis/BindSight_${VERSION}_x64-setup.exe* assets/
+          # The standalone build is the bare, unstamped executable.
+          7z a -tzip "assets/BindSight_${VERSION}_x64-standalone.zip" ./src-tauri/target/release/bindsight.exe
+          ls -la assets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bindsight-${{ matrix.name }}-${{ needs.test.outputs.version }}
+          path: assets/
+          retention-days: 14
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: [test, build]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.prerelease
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.test.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bindsight-*
+          path: assets
+          merge-multiple: true
+      - name: Draft release (tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          scripts/latest-json.sh "$VERSION" assets > assets/latest.json
+          cat assets/latest.json
+          gh release create "v$VERSION" --draft --title "BindSight $VERSION" --notes "" assets/*
+          echo "Draft release v$VERSION created — publish it on GitHub to go live."
+      - name: Pre-release (manual run)
+        if: inputs.prerelease
+        run: |
+          tag="test-${GITHUB_SHA::7}"
+          RELEASE_TAG="$tag" scripts/latest-json.sh "$VERSION" assets > assets/latest.json
+          gh release create "$tag" --prerelease --target "$GITHUB_SHA" \
+            --title "Test build $VERSION ($tag)" --notes "Test build, not a release." assets/*
+          echo "Pre-release $tag created."

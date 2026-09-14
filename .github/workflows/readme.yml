@@ -1,0 +1,37 @@
+# After a release is published (a draft made public; never a pre-release):
+# point the README's download block at it and commit that to main.
+name: README downloads
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  readme:
+    name: Update readme content
+    if: ${{ !github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v') }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Replace readme content tokens
+        run: scripts/readme-updater.sh "${TAG#v}"
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- README.md; then
+            echo "README.md already up to date"
+            exit 0
+          fi
+          git add README.md
+          git commit -m "Point the README downloads at ${TAG}"
+          git push origin main
+        env:
+          TAG: ${{ github.event.release.tag_name }}

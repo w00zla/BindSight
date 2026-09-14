@@ -20,9 +20,17 @@ The intention of this app is to be an add-on utility for the game [Star Citizen]
 
 You always forget what input which action was? You always get lost in the game's huge and impractical bindings list? You have issues with the game breaking your device bindings? Then this app is for you!
 
-## Main Features
+## Latest Downloads
 
-### 👀 Input Monitor
+<div id="release_dls">
+</div>
+
+<!-- release_dls -->
+<!-- /release_dls -->
+
+# Main Features
+
+## 👀 Input Monitor
 
 Answers the question: *"What does each button do, and where does each action live?"*
 
@@ -34,7 +42,7 @@ Answers the question: *"What does each button do, and where does each action liv
   <a href="docs/img/preview_app_monitor2.png"><img src="docs/img/preview_app_monitor2.png" width="300" alt="Preview Monitor 2"/></a>
 </p>
 
-### 🕹️ Action Bindings
+## 🕹️ Action Bindings
 
 Extended version of the game's **bindings interface**:
 
@@ -49,7 +57,7 @@ Extended version of the game's **bindings interface**:
 
 </p>
 
-### 🖼️ Custom Visualizations
+## 🖼️ Custom Visualizations
 
 Due to the built-in **visualization editor** the app supports a near infinite amount of devices!
 
@@ -69,7 +77,7 @@ Due to the built-in **visualization editor** the app supports a near infinite am
   <a href="docs/img/preview_app_devices1.png"><img src="docs/img/preview_app_devices1.png" width="300" alt="Preview Devices"></a>
 </p>
 
-### 🖥️ Cross-Platform
+## 🖥️ Cross-Platform
 
 The app supports **Windows** and **Linux**! 
 
@@ -77,34 +85,40 @@ The app supports **Windows** and **Linux**!
 
 - If you haven't already, try Linux now :)
 
-## Additional Tools
+# Additional Tools
 
-### 🔀 Device Order Fix
+## 🔀 Device Order Fix
 
 - Currently Star Citizen does not assign your device bindings in a reliable way, so bindings can get broken when devices are un/plugged on game startup.
 - The app can recognize and fix those issues beforehand or while in-game!
 
-### 💾 Backups
+## 💾 Backups
 
 - By default, the app makes backups of every changed game file before any modification. You can always revert unintentional or faulty changes!
 - And of course, you can manually back up at any time.
 
-### 🔍 Device Info
+## 🔍 Device Info
 
 - Every fact about your devices plus a live event log, savable for troubleshooting.
 
-## Infos
+# Infos
 
-### ⚙️ Settings
+## ⚙️ Settings
 
-#### Game Environments
+### Game Environments
 
 1. Choose the correct Star Citizen game folders (the ones with a `Data.p4k` file in them) for your existing environments like LIVE and PTU, e.g.:
    - *Windows:* `C:\Program Files\Roberts Space Industries\StarCitizen\LIVE` 
    - *Linux/Wine:* `<wine-prefix>/drive_c/Program Files/Roberts Space Industries/StarCitizen/LIVE`
 2. You can then switch the used Star Citizen environment on-the-fly in the app.
 
-### 💡FAQ / Known Issues
+## ♻️ Application Updates
+
+- The application has auto-updates enabled by default
+
+- `standalone`, `deb` and `rpm` versions DO NOT support auto-updates!
+
+## 💡FAQ / Known Issues
 
 - ESC key is never captured or recorded due to technical reasons (doesn't have a configurable binding either).
 - Mouse inputs are only captured while recording inputs (you need the mouse to use the app anyway).
@@ -113,13 +127,13 @@ The app supports **Windows** and **Linux**!
 - The app only shows connected devices which are also seen by the game (this specifically applies to Linux/Wine).
 - *POTENTIAL ISSUE:* app is untested with multiple devices of same type (e.g. two times the same joystick) and duplicate device-IDs might cause problems.
 
-### 🗓️ Planned Features
+## 🗓️ Planned Features
 
 - Support for managing input inversion-, sensitivity- and deadzone settings.
 
 - Improved responsiveness so the GUI works better with smaller window sizes.
 
-## Building
+# Building
 
 1. Install toolchain and dependencies:
    
@@ -137,7 +151,7 @@ The app supports **Windows** and **Linux**!
    cd src-tauri && cargo test --lib   # backend tests, no hardware needed
    ```
 
-## Under the Hood
+# Under the Hood
 
 | Part           | What                                                                                                                                                      |
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |

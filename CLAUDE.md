@@ -510,9 +510,30 @@ All of it lives in the Devices mode's Device Info view instead.
   update again.
 - **Release feed**: `scripts/latest-json.sh <version> <assets dir> [notes]`
   assembles `latest.json` from the signed installer + AppImage (both
-  platforms' files collected into one folder) — upload it to the GitHub
-  release next to the assets. Windows and Linux updates are keyed
-  `windows-x86_64` / `linux-x86_64`.
+  platforms' files collected into one folder; `RELEASE_TAG` overrides the
+  tag in the URLs) — it goes to the GitHub release next to the assets.
+  Windows and Linux updates are keyed `windows-x86_64` / `linux-x86_64`.
+- **The version lives in `src-tauri/Cargo.toml` only** (`tauri.conf.json`
+  has none, Tauri takes the crate's; `package.json` and `Cargo.lock` just
+  follow). `scripts/bump-version.sh <x.y.z>` sets all three, commits
+  "Bump version to x.y.z", tags `vx.y.z` and asks before pushing.
+- **CI** (`.github/workflows/build.yml`): `test` (typecheck + build, cargo
+  test, clippy `-D warnings`, on a tag also tag == Cargo.toml version),
+  then `build` on ubuntu-22.04 (AppImage, deb, rpm; `NO_STRIP`) and
+  windows-latest (NSIS + the bare exe zipped as `_x64-standalone.zip`),
+  bundles as workflow artifacts (14 days). A manual run with `prerelease`
+  ticked also makes a GitHub pre-release `test-<sha>` (never `latest`, the
+  updater ignores it). A `v*` tag makes a **draft** release with every
+  bundle, the `.sig` files and `latest.json` — nothing is live until the
+  draft is published by hand. Secrets: `TAURI_SIGNING_PRIVATE_KEY`,
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+- **README downloads** (`.github/workflows/readme.yml`): on a published,
+  non-pre-release release, `scripts/readme-updater.sh <version>` fills the
+  README's tags — `<span id="release_v">…</span>` (the version, `v0.13.0`)
+  and `<div id="release_dls">` … `</div>` (the download table, blank lines
+  inside the div or GitHub renders it raw), both optional, any number of
+  times — and commits to main as github-actions[bot]. HTML tags, not
+  comments: MarkText strips comments.
 - **Testing on Linux**: the dev build and the bare binary have no updater;
   only an AppImage does. The feed URL is fixed, so a manual check against a
   release that has no `latest.json` shows "Check failed".
@@ -533,6 +554,8 @@ cargo run --example pad_events                  # pad mapping + controller-level
 cargo run --example parse_scdata -- <defaultProfile.xml> <global.ini>  # parser check
 cargo run --release --example p4k_extract -- <Data.p4k> <out dir>      # P4K reader check
 scripts/latest-json.sh <version> <assets dir> [notes]   # updater feed for a release
+scripts/bump-version.sh <x.y.z>                 # version everywhere, commit, tag, offer push
+scripts/readme-updater.sh <x.y.z>             # README release tokens (CI runs it)
 ```
 
 The game data cache lives per version under `~/.cache/com.w00zla.bindsight/

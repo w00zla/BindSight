@@ -8,7 +8,9 @@
 # Usage: scripts/latest-json.sh <version> <assets dir> [notes file] > latest.json
 #
 # Upload latest.json to the GitHub release `v<version>` next to the assets;
-# the app reads it from releases/latest/download/latest.json.
+# the app reads it from releases/latest/download/latest.json. RELEASE_TAG in
+# the environment overrides the tag the asset URLs point to (a test
+# pre-release).
 set -eu
 
 if [ $# -lt 2 ]; then
@@ -18,7 +20,7 @@ fi
 version=$1
 dir=$2
 notes=${3:-}
-base="https://github.com/w00zla/BindSight/releases/download/v$version"
+base="https://github.com/w00zla/BindSight/releases/download/${RELEASE_TAG:-v$version}"
 
 # JSON string escaping for the notes: backslash, quote, newline, tab.
 escape() {
