@@ -115,13 +115,19 @@ pub struct DeviceInfo {
     /// fixed `"keyboard"`, and `None` for anything that cannot be bound
     /// (a further pad, a joystick with an unparseable GUID).
     pub hardware_id: Option<String>,
-    /// `Some(1)` for the first game controller in SDL index order — SC's one
-    /// `gp1` slot, first come first serve. `None` for every further pad and
-    /// for non-pads.
+    /// `Some(1)` for the pad on SC's one `gp1` slot: Windows the first game
+    /// controller in SDL index order, Linux the first gamepad in Wine's key
+    /// order (XInput's user 0). `None` for every further pad and for non-pads.
     pub gamepad_slot: Option<u32>,
     /// `SDL_GameControllerName` for pads, `None` otherwise. Usually friendlier
     /// than the raw joystick name.
     pub controller_name: Option<String>,
+    /// Linux: the game's XInput gamepad by winebus's rule (an SDL device
+    /// with exactly 6 axes and 14+ buttons, or an SDL controller that is
+    /// no wheel / flight stick) although SDL has no controller mapping for
+    /// it; its raw input is mapped like Wine maps it (`wine_pad_button`,
+    /// `wine_pad_axis`). False for a real SDL controller and on Windows.
+    pub wine_gamepad: bool,
     /// SDL enumeration index (NOT SC's `jsN` instance number — the two differ).
     pub index: u32,
     /// The device name exactly as SC shows it: the HID product string
@@ -168,6 +174,54 @@ pub struct DeviceInfo {
 /// Shared, hot-pluggable device list, maintained by the input thread and read
 /// by the `list_devices` command.
 pub type DeviceList = Arc<Mutex<Vec<DeviceInfo>>>;
+
+/// A device hidapi lists with a joystick / gamepad / multi-axis interface
+/// that SDL does not list (Device List only): the user sees why it is in
+/// no Monitor. `product_guid` is SC's Product GUID for the vendor /
+/// product, the key the Wine rows match by.
+#[derive(Debug, Clone, Serialize)]
+pub struct HidOnlyDevice {
+    pub vid: u16,
+    pub pid: u16,
+    pub product_guid: String,
+    pub name: Option<String>,
+    /// The joystick interface's HID usage (4 joystick, 5 gamepad, 8 multi-axis).
+    pub usage: u16,
+    pub path: String,
+    /// Every hidapi interface with the same vendor / product.
+    pub interfaces: Vec<HidInterface>,
+}
+
+/// The hidapi joystick-class devices whose vendor / product SDL's list
+/// (`listed`) lacks, in hidapi's order.
+pub fn hid_only_devices(listed: &[DeviceInfo]) -> Vec<HidOnlyDevice> {
+    let table = hid_table();
+    let mut out: Vec<HidOnlyDevice> = Vec::new();
+    for ((vid, pid), info) in &table.map {
+        let Some(path) = &info.joystick_path else { continue };
+        if listed.iter().any(|d| d.kind != DeviceKind::Keyboard && d.sdl_vendor == *vid && d.sdl_product == *pid) {
+            continue;
+        }
+        let path = path.to_string_lossy().into_owned();
+        // hidapi lists one entry per usage of a node: take the joystick-class one.
+        let usage = info
+            .interfaces
+            .iter()
+            .find(|i| i.path == path && i.usage_page == 0x01 && matches!(i.usage, 4 | 5 | 8))
+            .map_or(0, |i| i.usage);
+        out.push(HidOnlyDevice {
+            vid: *vid,
+            pid: *pid,
+            product_guid: crate::wineorder::product_guid(*vid, *pid),
+            name: info.name.clone(),
+            usage,
+            path,
+            interfaces: info.interfaces.clone(),
+        });
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out
+}
 
 /// A single live input change, forwarded to the frontend as a `joy-input`
 /// event. `guid` is the device's SDL GUID, the join key to [`DeviceInfo`].
@@ -444,10 +498,17 @@ fn sdl_type_name(t: sdl2::sys::SDL_JoystickType) -> &'static str {
     }
 }
 
-/// Build the [`DeviceInfo`] for one open joystick. `pad` carries the game
-/// controller facts when SDL recognises the device as one, and whether it took
-/// SC's single `gp1` slot.
-fn device_info(stick: &Joystick, index: u32, hid: &HidTable, pad: Option<(&GameController, bool)>) -> DeviceInfo {
+/// How a device is a gamepad, if it is one: SDL's controller name (a real
+/// SDL controller) or none (the Wine rule). The `gp1` slot is given
+/// afterwards by `open_all`.
+struct PadFacts {
+    controller_name: Option<String>,
+    wine: bool,
+}
+
+/// Build the [`DeviceInfo`] for one open joystick; `pad` is set when the
+/// device is a gamepad.
+fn device_info(stick: &Joystick, index: u32, hid: &HidTable, pad: Option<&PadFacts>) -> DeviceInfo {
     let sdl_guid = stick.guid().string();
     let vid_pid = crate::guid::sdl_guid_vendor_product(&sdl_guid);
     let hid_info = vid_pid.and_then(|k| hid.get(k));
@@ -482,17 +543,18 @@ fn device_info(stick: &Joystick, index: u32, hid: &HidTable, pad: Option<(&GameC
     };
     let sc_product_guid = sdl_guid_to_sc_product(&sdl_guid);
     let kind = if pad.is_some() { DeviceKind::Gamepad } else { DeviceKind::Joystick };
-    let has_slot = matches!(pad, Some((_, true)));
     DeviceInfo {
         kind,
         // Only the pad on SC's single `gp1` slot can carry bindings, so only
-        // it gets an image-map key; a further pad gets none.
+        // it gets an image-map key (set by `open_all` with the slot); a
+        // further pad gets none.
         hardware_id: match kind {
-            DeviceKind::Gamepad => has_slot.then(|| GAMEPAD_HARDWARE_ID.to_string()),
+            DeviceKind::Gamepad => None,
             _ => sc_product_guid.clone(),
         },
-        gamepad_slot: has_slot.then_some(1),
-        controller_name: pad.map(|(c, _)| c.name()),
+        gamepad_slot: None,
+        controller_name: pad.and_then(|p| p.controller_name.clone()),
+        wine_gamepad: pad.is_some_and(|p| p.wine),
         index,
         sc_name,
         sdl_name: stick.name(),
@@ -532,10 +594,17 @@ struct OpenDevices {
     pads: Vec<GameController>,
     /// Instance ids of the pads, whose raw `Joy*` events are dropped.
     pad_instances: HashSet<u32>,
+    /// Instance ids of the Wine-rule pads (Linux): their raw `Joy*` events
+    /// are translated into controller events (`translate_wine_pad`).
+    wine_pads: HashSet<u32>,
 }
 
-/// Open every connected device and describe it. The first device SDL
-/// recognises as a game controller takes SC's single `gp1` slot.
+/// Open every connected device and describe it. What is a gamepad and
+/// which one holds SC's single `gp1` slot follows the game: on Windows the
+/// SDL controllers (XInput devices), the first in SDL's order takes the
+/// slot; on Linux winebus's rule (`wineorder::sdl_is_gamepad`) decides,
+/// and the slot goes to the first gamepad in Wine's key order (XInput's
+/// user 0), which is not SDL's order.
 fn open_all(joystick: &JoystickSubsystem, controllers: &GameControllerSubsystem, hid: &HidTable) -> Result<OpenDevices, String> {
     let count = joystick.num_joysticks()?;
     let mut open = OpenDevices {
@@ -543,8 +612,8 @@ fn open_all(joystick: &JoystickSubsystem, controllers: &GameControllerSubsystem,
         sticks: Vec::with_capacity(count as usize),
         pads: Vec::new(),
         pad_instances: HashSet::new(),
+        wine_pads: HashSet::new(),
     };
-    let mut slot_taken = false;
 
     for index in 0..count {
         let stick = match joystick.open(index) {
@@ -554,9 +623,31 @@ fn open_all(joystick: &JoystickSubsystem, controllers: &GameControllerSubsystem,
                 continue;
             }
         };
-        // A pad is opened twice: as a joystick for the raw facts below, as a
-        // controller for its named events.
-        let pad = controllers.is_game_controller(index).then(|| controllers.open(index)).transpose();
+        let is_controller = controllers.is_game_controller(index);
+        // Linux: the game's view. A device winebus takes through hidraw
+        // (VKB, VPC, …) is never a gamepad; of the SDL-fed rest, an SDL
+        // controller that is a wheel / flight stick is a joystick to the
+        // game, and a plain joystick with 6 axes and 14+ buttons is its
+        // gamepad, mapped like Wine maps it.
+        #[cfg(target_os = "linux")]
+        let is_pad = {
+            let i = index as std::os::raw::c_int;
+            let (vid, pid, t) = unsafe {
+                (
+                    sdl2::sys::SDL_JoystickGetDeviceVendor(i),
+                    sdl2::sys::SDL_JoystickGetDeviceProduct(i),
+                    sdl_type_name(sdl2::sys::SDL_JoystickGetDeviceType(i)),
+                )
+            };
+            let buttons = stick.num_buttons();
+            !crate::wineorder::hidraw_preferred(vid, pid, buttons)
+                && crate::wineorder::sdl_is_gamepad(is_controller, t, stick.num_axes(), buttons)
+        };
+        #[cfg(not(target_os = "linux"))]
+        let is_pad = is_controller;
+        // A real controller is opened twice: as a joystick for the raw facts,
+        // as a controller for its named events.
+        let pad = (is_pad && is_controller).then(|| controllers.open(index)).transpose();
         let pad = match pad {
             Ok(pad) => pad,
             Err(e) => {
@@ -564,18 +655,144 @@ fn open_all(joystick: &JoystickSubsystem, controllers: &GameControllerSubsystem,
                 None
             }
         };
-        let has_slot = pad.is_some() && !slot_taken;
-        slot_taken |= pad.is_some();
+        let facts = is_pad.then(|| PadFacts { controller_name: pad.as_ref().map(|c| c.name()), wine: pad.is_none() });
 
-        open.infos.push(device_info(&stick, index, hid, pad.as_ref().map(|c| (c, has_slot))));
+        open.infos.push(device_info(&stick, index, hid, facts.as_ref()));
         if let Some(pad) = pad {
             open.pad_instances.insert(pad.instance_id());
             open.pads.push(pad);
+        } else if is_pad {
+            open.wine_pads.insert(stick.instance_id());
         }
         open.sticks.push(stick);
     }
 
+    if let Some(i) = gp1_holder(&open.infos) {
+        open.infos[i].gamepad_slot = Some(1);
+        open.infos[i].hardware_id = Some(GAMEPAD_HARDWARE_ID.to_string());
+    }
     Ok(open)
+}
+
+/// Position in `infos` of the pad that holds `gp1`: Windows the first pad
+/// in SDL's order, Linux the first in Wine's key order.
+fn gp1_holder(infos: &[DeviceInfo]) -> Option<usize> {
+    #[cfg(target_os = "linux")]
+    {
+        use crate::wineorder::{first_gamepad, syspath, WineDevice};
+        let pads: Vec<usize> = (0..infos.len()).filter(|&i| infos[i].kind == DeviceKind::Gamepad).collect();
+        let wine: Vec<WineDevice> = pads
+            .iter()
+            .map(|&i| {
+                let d = &infos[i];
+                WineDevice {
+                    vid: d.sdl_vendor,
+                    pid: d.sdl_product,
+                    interface: None,
+                    version: d.sdl_product_version,
+                    serial: d.sdl_serial.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| "0000".to_string()),
+                    is_gamepad: true,
+                    product_name: d.sdl_name.clone(),
+                    syspath: d.sdl_path.as_deref().map(|p| syspath("input", p)).unwrap_or_default(),
+                }
+            })
+            .collect();
+        first_gamepad(&wine).map(|k| pads[k])
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        infos.iter().position(|d| d.kind == DeviceKind::Gamepad)
+    }
+}
+
+/// Wine's XInput mapping of a plain joystick's button (bus_sdl builds a
+/// generic report, button `n` = usage `n+1`; xinput1_3 takes usages 1..10
+/// as A B X Y LB RB Back Start LS RS, the rest is not in the report).
+fn wine_pad_button(index: u8) -> Option<Button> {
+    Some(match index {
+        0 => Button::A,
+        1 => Button::B,
+        2 => Button::X,
+        3 => Button::Y,
+        4 => Button::LeftShoulder,
+        5 => Button::RightShoulder,
+        6 => Button::Back,
+        7 => Button::Start,
+        8 => Button::LeftStick,
+        9 => Button::RightStick,
+        _ => return None,
+    })
+}
+
+/// Wine's XInput mapping of a plain joystick's axis: SDL index order is
+/// the report's X Y Z RX RY RZ, xinput1_3 takes X/Y as the left stick,
+/// RX/RY as the right, Z/RZ as the triggers. A trigger is the full raw
+/// range scaled to 0..32767 (rest = mid-travel, as the game sees it).
+fn wine_pad_axis(index: u8, value: i16) -> Option<(Axis, i16)> {
+    Some(match index {
+        0 => (Axis::LeftX, value),
+        1 => (Axis::LeftY, value),
+        2 => (Axis::TriggerLeft, ((value as i32 + 32768) / 2) as i16),
+        3 => (Axis::RightX, value),
+        4 => (Axis::RightY, value),
+        5 => (Axis::TriggerRight, ((value as i32 + 32768) / 2) as i16),
+        _ => return None,
+    })
+}
+
+/// The D-pad buttons that change between two hat states (SDL hat bits: 1 up,
+/// 2 right, 4 down, 8 left), as (button, pressed).
+fn hat_dpad_changes(old: u8, new: u8) -> Vec<(Button, bool)> {
+    const BITS: [(u8, Button); 4] =
+        [(1, Button::DPadUp), (2, Button::DPadRight), (4, Button::DPadDown), (8, Button::DPadLeft)];
+    BITS.iter()
+        .filter(|(bit, _)| (old & bit) != (new & bit))
+        .map(|&(bit, button)| (button, new & bit != 0))
+        .collect()
+}
+
+/// A Wine-rule pad's raw joystick event as the controller events the pad
+/// path handles (the game sees the device through winexinput, never raw).
+/// `hats` keeps the last hat state per instance. Anything Wine's report
+/// drops (buttons past 10, a second hat, axes past 6) yields nothing.
+fn translate_wine_pad(event: Event, hats: &mut HashMap<u32, u8>) -> Vec<Event> {
+    match event {
+        Event::JoyButtonDown { timestamp, which, button_idx, .. } => wine_pad_button(button_idx)
+            .map(|button| vec![Event::ControllerButtonDown { timestamp, which, button }])
+            .unwrap_or_default(),
+        Event::JoyButtonUp { timestamp, which, button_idx, .. } => wine_pad_button(button_idx)
+            .map(|button| vec![Event::ControllerButtonUp { timestamp, which, button }])
+            .unwrap_or_default(),
+        Event::JoyAxisMotion { timestamp, which, axis_idx, value, .. } => wine_pad_axis(axis_idx, value)
+            .map(|(axis, value)| vec![Event::ControllerAxisMotion { timestamp, which, axis, value }])
+            .unwrap_or_default(),
+        Event::JoyHatMotion { timestamp, which, hat_idx: 0, state, .. } => {
+            let new = state.to_raw();
+            let old = hats.insert(which, new).unwrap_or(0);
+            hat_dpad_changes(old, new)
+                .into_iter()
+                .map(|(button, pressed)| {
+                    if pressed {
+                        Event::ControllerButtonDown { timestamp, which, button }
+                    } else {
+                        Event::ControllerButtonUp { timestamp, which, button }
+                    }
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The joystick instance a raw `Joy*` event belongs to.
+fn joy_instance(event: &Event) -> Option<u32> {
+    match event {
+        Event::JoyButtonDown { which, .. }
+        | Event::JoyButtonUp { which, .. }
+        | Event::JoyAxisMotion { which, .. }
+        | Event::JoyHatMotion { which, .. } => Some(*which),
+        _ => None,
+    }
 }
 
 /// The SDL context, with SDL's own joystick thread switched on. On Windows,
@@ -623,7 +840,10 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
         sticks: Vec::new(),
         pads: Vec::new(),
         pad_instances: HashSet::new(),
+        wine_pads: HashSet::new(),
     };
+    // instance_id -> last hat state of a Wine-rule pad (its D-pad)
+    let mut hats: HashMap<u32, u8> = HashMap::new();
     // instance_id -> SDL GUID, to tag outgoing events
     let mut guids: HashMap<u32, String> = HashMap::new();
     // (instance_id, axis) -> last forwarded value and its time, for throttling
@@ -664,191 +884,205 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
             }
         }
         let Some(event) = event_pump.wait_event_timeout(LOOP_TICK_MS) else { continue };
-        // A pad reports every input twice — raw and named. Only the named one
-        // carries SC's vocabulary, so the raw copy is dropped (the
-        // `!opened.pad_instances.contains(..)` guards below).
-        match event {
-            Event::JoyDeviceAdded { .. } | Event::JoyDeviceRemoved { .. } => {
-                last_axis.clear();
-                raw_axis.clear();
-                derived.clear();
-                waiting.clear();
-                reopen_all(&joystick, &controllers, &mut opened, &mut guids, &app, &devices, false)?;
-            }
-            Event::JoyButtonDown { timestamp, which, button_idx, .. } if !opened.pad_instances.contains(&which) => {
-                if let Some(guid) = guids.get(&which) {
-                    let _ = app.emit(
-                        "joy-input",
-                        InputEvent::Button { guid: guid.clone(), index: button_idx, pressed: true, timestamp, instance_id: which },
-                    );
+        // A Wine-rule pad's raw events become controller events first, so
+        // the pad path below (names, deadzones, derived buttons) is the one
+        // path for every gamepad.
+        let events = match joy_instance(&event) {
+            Some(which) if opened.wine_pads.contains(&which) => translate_wine_pad(event, &mut hats),
+            _ => vec![event],
+        };
+        let mut quit = false;
+        for event in events {
+            // A pad reports every input twice — raw and named. Only the named one
+            // carries SC's vocabulary, so the raw copy is dropped (the
+            // `!opened.pad_instances.contains(..)` guards below).
+            match event {
+                Event::JoyDeviceAdded { .. } | Event::JoyDeviceRemoved { .. } => {
+                    last_axis.clear();
+                    raw_axis.clear();
+                    derived.clear();
+                    waiting.clear();
+                    hats.clear();
+                    reopen_all(&joystick, &controllers, &mut opened, &mut guids, &app, &devices, false)?;
                 }
-            }
-            Event::JoyButtonUp { timestamp, which, button_idx, .. } if !opened.pad_instances.contains(&which) => {
-                if let Some(guid) = guids.get(&which) {
-                    let _ = app.emit(
-                        "joy-input",
-                        InputEvent::Button { guid: guid.clone(), index: button_idx, pressed: false, timestamp, instance_id: which },
-                    );
-                }
-            }
-            Event::JoyHatMotion { timestamp, which, hat_idx, state, .. } if !opened.pad_instances.contains(&which) => {
-                if let Some(guid) = guids.get(&which) {
-                    let _ = app.emit(
-                        "joy-input",
-                        InputEvent::Hat {
-                            guid: guid.clone(),
-                            index: hat_idx,
-                            direction: hat_direction(state),
-                            raw: state.to_raw(),
-                            timestamp,
-                            instance_id: which,
-                        },
-                    );
-                }
-            }
-            Event::JoyAxisMotion { timestamp, which, axis_idx, value, .. } if !opened.pad_instances.contains(&which) => {
-                let value = apply_deadzone(value, JOYSTICK_DEADZONE);
-                raw_axis.insert((which, axis_idx), value);
-                let partner = opened
-                    .infos
-                    .iter()
-                    .find(|d| d.sdl_instance_id == which)
-                    .and_then(|d| joystick_stick_partner(&d.axes, axis_idx))
-                    .and_then(|p| raw_axis.get(&(which, p)).copied());
-                if !leads_stick(value, partner) {
-                    continue;
-                }
-                let last = last_axis.get(&(which, axis_idx)).copied();
-                if axis_due(value, last.map_or(0, |l| l.0), timestamp, last.map(|l| l.1)) {
-                    last_axis.insert((which, axis_idx), (value, timestamp));
+                Event::JoyButtonDown { timestamp, which, button_idx, .. } if !opened.pad_instances.contains(&which) => {
                     if let Some(guid) = guids.get(&which) {
                         let _ = app.emit(
                             "joy-input",
-                            InputEvent::Axis { guid: guid.clone(), index: axis_idx, value, timestamp, instance_id: which },
+                            InputEvent::Button { guid: guid.clone(), index: button_idx, pressed: true, timestamp, instance_id: which },
                         );
                     }
                 }
-            }
-            Event::ControllerButtonDown { timestamp, which, button } => {
-                if let Some(guid) = guids.get(&which) {
-                    let _ = app.emit(
-                        "joy-input",
-                        InputEvent::PadButton {
-                            guid: guid.clone(),
-                            name: pad_button_name(button).to_string(),
-                            pressed: true,
-                            timestamp,
-                            instance_id: which,
-                        },
-                    );
-                }
-            }
-            Event::ControllerButtonUp { timestamp, which, button } => {
-                if let Some(guid) = guids.get(&which) {
-                    let _ = app.emit(
-                        "joy-input",
-                        InputEvent::PadButton {
-                            guid: guid.clone(),
-                            name: pad_button_name(button).to_string(),
-                            pressed: false,
-                            timestamp,
-                            instance_id: which,
-                        },
-                    );
-                }
-            }
-            Event::ControllerAxisMotion { timestamp, which, axis, value } => {
-                let Some(guid) = guids.get(&which).cloned() else { continue };
-                let value = apply_deadzone(value, pad_axis_deadzone(axis));
-                // SC's trigger/thumb-direction "buttons" have no axis, so they
-                // are derived here and reported only when they change.
-                for (name, travel) in derived_pad_buttons(axis, value) {
-                    let key = (which, name);
-                    let pressed = derived.get(&key).copied().unwrap_or(false);
-                    match derived_step(travel, pressed) {
-                        DerivedStep::Release => {
-                            derived.insert(key, false);
-                            let _ = app.emit(
-                                "joy-input",
-                                InputEvent::PadButton {
-                                    guid: guid.clone(),
-                                    name: name.to_string(),
-                                    pressed: false,
-                                    timestamp,
-                                    instance_id: which,
-                                },
-                            );
-                        }
-                        DerivedStep::Wait if presses_at_once(name) => {
-                            derived.insert(key, true);
-                            let _ = app.emit(
-                                "joy-input",
-                                InputEvent::PadButton {
-                                    guid: guid.clone(),
-                                    name: name.to_string(),
-                                    pressed: true,
-                                    timestamp,
-                                    instance_id: which,
-                                },
-                            );
-                        }
-                        DerivedStep::Wait => {
-                            waiting.entry(key).or_insert(timestamp);
-                        }
-                        DerivedStep::Idle => {
-                            waiting.remove(&key);
-                        }
-                        DerivedStep::Hold => {}
-                    }
-                }
-                // A trigger is only ever its derived button: SC labels the
-                // axis token (`gp1_triggerl`) like the button and ships no
-                // default on it, so the app does not know the axis at all.
-                // Both buttons together are a third one, `triggerl_r_btn`.
-                if matches!(axis, Axis::TriggerLeft | Axis::TriggerRight) {
-                    let both = both_triggers(&derived, which);
-                    // The first trigger event only sets the state; unknown
-                    // counts as released, not as a change.
-                    if derived.insert((which, "triggerl_r_btn"), both).unwrap_or(false) != both {
+                Event::JoyButtonUp { timestamp, which, button_idx, .. } if !opened.pad_instances.contains(&which) => {
+                    if let Some(guid) = guids.get(&which) {
                         let _ = app.emit(
                             "joy-input",
-                            InputEvent::PadButton {
+                            InputEvent::Button { guid: guid.clone(), index: button_idx, pressed: false, timestamp, instance_id: which },
+                        );
+                    }
+                }
+                Event::JoyHatMotion { timestamp, which, hat_idx, state, .. } if !opened.pad_instances.contains(&which) => {
+                    if let Some(guid) = guids.get(&which) {
+                        let _ = app.emit(
+                            "joy-input",
+                            InputEvent::Hat {
                                 guid: guid.clone(),
-                                name: "triggerl_r_btn".to_string(),
-                                pressed: both,
+                                index: hat_idx,
+                                direction: hat_direction(state),
+                                raw: state.to_raw(),
                                 timestamp,
                                 instance_id: which,
                             },
                         );
                     }
-                    continue;
                 }
-                // The axis itself is throttled like a joystick axis. SDL
-                // controller axes are numbered 0..5, so they share the map
-                // without colliding with the raw axes (which are dropped).
-                let idx = axis as u8;
-                raw_axis.insert((which, idx), value);
-                let partner = pad_stick_partner(axis).and_then(|p| raw_axis.get(&(which, p as u8)).copied());
-                if !leads_stick(value, partner) {
-                    continue;
+                Event::JoyAxisMotion { timestamp, which, axis_idx, value, .. } if !opened.pad_instances.contains(&which) => {
+                    let value = apply_deadzone(value, JOYSTICK_DEADZONE);
+                    raw_axis.insert((which, axis_idx), value);
+                    let partner = opened
+                        .infos
+                        .iter()
+                        .find(|d| d.sdl_instance_id == which)
+                        .and_then(|d| joystick_stick_partner(&d.axes, axis_idx))
+                        .and_then(|p| raw_axis.get(&(which, p)).copied());
+                    if !leads_stick(value, partner) {
+                        continue;
+                    }
+                    let last = last_axis.get(&(which, axis_idx)).copied();
+                    if axis_due(value, last.map_or(0, |l| l.0), timestamp, last.map(|l| l.1)) {
+                        last_axis.insert((which, axis_idx), (value, timestamp));
+                        if let Some(guid) = guids.get(&which) {
+                            let _ = app.emit(
+                                "joy-input",
+                                InputEvent::Axis { guid: guid.clone(), index: axis_idx, value, timestamp, instance_id: which },
+                            );
+                        }
+                    }
                 }
-                let last = last_axis.get(&(which, idx)).copied();
-                if axis_due(value, last.map_or(0, |l| l.0), timestamp, last.map(|l| l.1)) {
-                    last_axis.insert((which, idx), (value, timestamp));
-                    let _ = app.emit(
-                        "joy-input",
-                        InputEvent::PadAxis {
-                            guid,
-                            name: pad_axis_name(axis).to_string(),
-                            value,
-                            timestamp,
-                            instance_id: which,
-                        },
-                    );
+                Event::ControllerButtonDown { timestamp, which, button } => {
+                    if let Some(guid) = guids.get(&which) {
+                        let _ = app.emit(
+                            "joy-input",
+                            InputEvent::PadButton {
+                                guid: guid.clone(),
+                                name: pad_button_name(button).to_string(),
+                                pressed: true,
+                                timestamp,
+                                instance_id: which,
+                            },
+                        );
+                    }
                 }
+                Event::ControllerButtonUp { timestamp, which, button } => {
+                    if let Some(guid) = guids.get(&which) {
+                        let _ = app.emit(
+                            "joy-input",
+                            InputEvent::PadButton {
+                                guid: guid.clone(),
+                                name: pad_button_name(button).to_string(),
+                                pressed: false,
+                                timestamp,
+                                instance_id: which,
+                            },
+                        );
+                    }
+                }
+                Event::ControllerAxisMotion { timestamp, which, axis, value } => {
+                    let Some(guid) = guids.get(&which).cloned() else { continue };
+                    let value = apply_deadzone(value, pad_axis_deadzone(axis));
+                    // SC's trigger/thumb-direction "buttons" have no axis, so they
+                    // are derived here and reported only when they change.
+                    for (name, travel) in derived_pad_buttons(axis, value) {
+                        let key = (which, name);
+                        let pressed = derived.get(&key).copied().unwrap_or(false);
+                        match derived_step(travel, pressed) {
+                            DerivedStep::Release => {
+                                derived.insert(key, false);
+                                let _ = app.emit(
+                                    "joy-input",
+                                    InputEvent::PadButton {
+                                        guid: guid.clone(),
+                                        name: name.to_string(),
+                                        pressed: false,
+                                        timestamp,
+                                        instance_id: which,
+                                    },
+                                );
+                            }
+                            DerivedStep::Wait if presses_at_once(name) => {
+                                derived.insert(key, true);
+                                let _ = app.emit(
+                                    "joy-input",
+                                    InputEvent::PadButton {
+                                        guid: guid.clone(),
+                                        name: name.to_string(),
+                                        pressed: true,
+                                        timestamp,
+                                        instance_id: which,
+                                    },
+                                );
+                            }
+                            DerivedStep::Wait => {
+                                waiting.entry(key).or_insert(timestamp);
+                            }
+                            DerivedStep::Idle => {
+                                waiting.remove(&key);
+                            }
+                            DerivedStep::Hold => {}
+                        }
+                    }
+                    // A trigger is only ever its derived button: SC labels the
+                    // axis token (`gp1_triggerl`) like the button and ships no
+                    // default on it, so the app does not know the axis at all.
+                    // Both buttons together are a third one, `triggerl_r_btn`.
+                    if matches!(axis, Axis::TriggerLeft | Axis::TriggerRight) {
+                        let both = both_triggers(&derived, which);
+                        // The first trigger event only sets the state; unknown
+                        // counts as released, not as a change.
+                        if derived.insert((which, "triggerl_r_btn"), both).unwrap_or(false) != both {
+                            let _ = app.emit(
+                                "joy-input",
+                                InputEvent::PadButton {
+                                    guid: guid.clone(),
+                                    name: "triggerl_r_btn".to_string(),
+                                    pressed: both,
+                                    timestamp,
+                                    instance_id: which,
+                                },
+                            );
+                        }
+                        continue;
+                    }
+                    // The axis itself is throttled like a joystick axis. SDL
+                    // controller axes are numbered 0..5, so they share the map
+                    // without colliding with the raw axes (which are dropped).
+                    let idx = axis as u8;
+                    raw_axis.insert((which, idx), value);
+                    let partner = pad_stick_partner(axis).and_then(|p| raw_axis.get(&(which, p as u8)).copied());
+                    if !leads_stick(value, partner) {
+                        continue;
+                    }
+                    let last = last_axis.get(&(which, idx)).copied();
+                    if axis_due(value, last.map_or(0, |l| l.0), timestamp, last.map(|l| l.1)) {
+                        last_axis.insert((which, idx), (value, timestamp));
+                        let _ = app.emit(
+                            "joy-input",
+                            InputEvent::PadAxis {
+                                guid,
+                                name: pad_axis_name(axis).to_string(),
+                                value,
+                                timestamp,
+                                instance_id: which,
+                            },
+                        );
+                    }
+                }
+                Event::Quit { .. } => quit = true,
+                _ => {}
             }
-            Event::Quit { .. } => break,
-            _ => {}
+        }
+        if quit {
+            break;
         }
     }
 
@@ -930,6 +1164,59 @@ fn hat_direction(state: HatState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wine_pad_buttons_follow_xinputs_usage_order() {
+        let names: Vec<&str> = (0..10).map(|i| pad_button_name(wine_pad_button(i).unwrap())).collect();
+        assert_eq!(names, ["a", "b", "x", "y", "shoulderl", "shoulderr", "back", "start", "thumbl", "thumbr"]);
+        // Usages past 10 are not in winexinput's report: the K2 HE's buttons 10-15 vanish.
+        assert_eq!(wine_pad_button(10), None);
+        assert_eq!(wine_pad_button(15), None);
+    }
+
+    #[test]
+    fn wine_pad_axes_are_sticks_and_scaled_triggers() {
+        assert_eq!(wine_pad_axis(0, -1234), Some((Axis::LeftX, -1234)));
+        assert_eq!(wine_pad_axis(1, 32767), Some((Axis::LeftY, 32767)));
+        assert_eq!(wine_pad_axis(3, 5), Some((Axis::RightX, 5)));
+        assert_eq!(wine_pad_axis(4, -5), Some((Axis::RightY, -5)));
+        // Z / RZ are the triggers, the raw range mapped onto 0..32767: rest is mid-travel.
+        assert_eq!(wine_pad_axis(2, -32768), Some((Axis::TriggerLeft, 0)));
+        assert_eq!(wine_pad_axis(2, 0), Some((Axis::TriggerLeft, 16384)));
+        assert_eq!(wine_pad_axis(5, 32767), Some((Axis::TriggerRight, 32767)));
+        assert_eq!(wine_pad_axis(6, 0), None);
+    }
+
+    #[test]
+    fn hat_becomes_dpad_presses_and_releases() {
+        // centred -> up
+        assert_eq!(hat_dpad_changes(0, 1), vec![(Button::DPadUp, true)]);
+        // up -> right-up: right pressed, up stays
+        assert_eq!(hat_dpad_changes(1, 3), vec![(Button::DPadRight, true)]);
+        // right-up -> centred: both released
+        assert_eq!(hat_dpad_changes(3, 0), vec![(Button::DPadUp, false), (Button::DPadRight, false)]);
+        assert_eq!(hat_dpad_changes(4, 4), vec![]);
+    }
+
+    #[test]
+    fn translate_wine_pad_yields_controller_events_only() {
+        let mut hats = HashMap::new();
+        let ev = translate_wine_pad(Event::JoyButtonDown { timestamp: 7, which: 3, button_idx: 4 }, &mut hats);
+        assert!(matches!(ev.as_slice(), [Event::ControllerButtonDown { timestamp: 7, which: 3, button: Button::LeftShoulder }]));
+        let ev = translate_wine_pad(Event::JoyButtonUp { timestamp: 8, which: 3, button_idx: 12 }, &mut hats);
+        assert!(ev.is_empty());
+        let ev = translate_wine_pad(Event::JoyAxisMotion { timestamp: 9, which: 3, axis_idx: 5, value: 32767 }, &mut hats);
+        assert!(matches!(ev.as_slice(), [Event::ControllerAxisMotion { which: 3, axis: Axis::TriggerRight, value: 32767, .. }]));
+        // The hat is the D-pad; a second hat is not in the report.
+        let ev = translate_wine_pad(Event::JoyHatMotion { timestamp: 10, which: 3, hat_idx: 0, state: HatState::LeftUp }, &mut hats);
+        assert_eq!(ev.len(), 2);
+        assert!(ev.iter().all(|e| matches!(e, Event::ControllerButtonDown { .. })));
+        let ev = translate_wine_pad(Event::JoyHatMotion { timestamp: 11, which: 3, hat_idx: 1, state: HatState::Up }, &mut hats);
+        assert!(ev.is_empty());
+        let ev = translate_wine_pad(Event::JoyHatMotion { timestamp: 12, which: 3, hat_idx: 0, state: HatState::Centered }, &mut hats);
+        assert!(ev.iter().all(|e| matches!(e, Event::ControllerButtonUp { .. })));
+        assert_eq!(ev.len(), 2);
+    }
 
     #[test]
     fn deadzone_flattens_rest_and_keeps_travel() {

@@ -179,10 +179,22 @@ presentational components:
   `Game.log`). `DeviceInfo` carries `kind` (`joystick` / `gamepad` /
   `keyboard`), `hardware_id` (image-map key: SC Product GUID, `gamepad`, or
   `keyboard`), `sc_name` (hidapi) + `sdl_name` (debug), `axes` /
-  `axes_error`. A gamepad is what SDL's GameController API recognises; its
-  raw `Joy*` events are dropped in favour of `padbutton` / `padaxis` with
-  SC's names (`a`, `shoulderl`, `thumblx`, …). Only the first pad (SDL
-  index order) holds the slot `gp1`, further pads get `gamepad_slot: None`.
+  `axes_error`. A gamepad is what the game takes as its XInput device:
+  on Windows what SDL's GameController API recognises, on Linux what
+  winebus's rule says (`wineorder::sdl_is_gamepad`: an SDL-fed device —
+  not a `hidraw_preferred` one — that SDL maps as a controller unless it
+  is a wheel / flight stick, or that has exactly 6 axes and 14+ buttons;
+  a Keychron K2 HE keyboard is one). Its raw `Joy*` events are dropped in
+  favour of `padbutton` / `padaxis` with SC's names (`a`, `shoulderl`,
+  `thumblx`, …); a Linux gamepad without an SDL mapping (`wine_gamepad`)
+  has its raw events translated first, the way Wine + xinput map a
+  generic report (`translate_wine_pad`: buttons 0–9 = A B X Y LB RB Back
+  Start LS RS, the rest dropped; axes 0–5 = left stick, LT, right stick,
+  RT with the triggers rescaled to 0..32767; hat 0 = D-pad — derived
+  from Wine 11.7's source, not verified in-game). The slot `gp1` goes to
+  the first pad in SDL index order on Windows and to the first in Wine's
+  key order (XInput user 0) on Linux; further pads get `gamepad_slot:
+  None`.
   The keyboard is one synthetic entry appended last (`sdl_guid` `keyboard`).
   **Axis rules, all here so every consumer sees one stream**: a fixed
   resting zone per axis (joysticks 4000, pad sticks 8000, pad triggers

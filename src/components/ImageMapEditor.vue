@@ -19,7 +19,7 @@ import ConfirmDialog, { type ConfirmButton, type ConfirmIcon } from "./ConfirmDi
 import Splitter from "./Splitter.vue";
 import ColumnHead from "./ColumnHead.vue";
 import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
-import type { ClashReport, DeviceInfo, JoyInput, LoggedInput, ToastType } from "../types";
+import type { ClashReport, DeviceInfo, HidOnlyDevice, JoyInput, LoggedInput, ToastType, WineKey } from "../types";
 import { deviceIcon, deviceName, inputIdentity, recordEdge } from "../devices";
 import { KEY_COUNT, MOUSE_INPUTS, recording } from "../keyboard";
 import { persistedRef } from "../persist";
@@ -57,6 +57,12 @@ const props = defineProps<{
   isUnseen: (d: DeviceInfo) => boolean;
   // The device-order report: which jsN the game gives each joystick.
   clash: ClashReport | null;
+  // The HID interfaces Wine registers, in its order (empty off Linux): the
+  // keys the game's device order is sorted by.
+  wineKeys: WineKey[];
+  // Joystick-class HID devices SDL does not list: shown after the SDL
+  // devices, so the user sees why they are in no Monitor.
+  hidOnly: HidOnlyDevice[];
   // App version, OS, toolkit versions and keyboard layout, the head of every dump.
   systemLine: string;
 }>();
@@ -2074,10 +2080,59 @@ function gameSlotText(d: DeviceInfo): string {
   if (r.order_error) return "order unknown";
   const guid = d.sc_product_guid?.toLowerCase();
   const slot = r.connected.find((s) => !!guid && s.sc_product_guid?.toLowerCase() === guid);
-  if (!slot) return "not in the game's device list";
-  if (slot.stored_instance === null) return `js${slot.effective_instance} · not saved in the bindings`;
-  if (slot.stored_instance !== slot.effective_instance) return `js${slot.effective_instance} · saved as js${slot.stored_instance} (clash)`;
+  if (!slot) return "not enumerated";
+  if (slot.stored_instance === null) return `js${slot.effective_instance} · not saved`;
+  if (slot.stored_instance !== slot.effective_instance) return `js${slot.effective_instance} · saved as js${slot.stored_instance} · clash`;
   return `js${slot.effective_instance} · saved`;
+}
+
+// The interfaces Wine registers for a device, matched by Product GUID
+// (several for identical devices): position in Wine's order (what the game
+// enumerates), the key and whether Wine files it as a gamepad (no slot).
+// Off Linux there are none and the row is left out.
+function wineRows(productGuid: string | null): [string, string][] {
+  if (!props.wineKeys.length) return [];
+  const guid = productGuid?.toLowerCase();
+  const mine = props.wineKeys
+    .map((k, i) => ({ ...k, pos: i + 1 }))
+    .filter((k) => !!guid && k.product_guid.toLowerCase() === guid);
+  if (!mine.length) return [["wine", "not enumerated"]];
+  return mine.map((k, i): [string, string] => [
+    mine.length > 1 ? `wine #${i}` : "wine",
+    `#${k.pos} of ${props.wineKeys.length} · ${k.key}${k.is_gamepad ? " · gamepad" : ""}`,
+  ]);
+}
+
+// The `hid #i` rows of a device's hidapi interfaces.
+function hidRows(interfaces: DeviceInfo["hid_interfaces"]): [string, string][] {
+  return interfaces.map(
+    (h, i): [string, string] => [
+      `hid #${i}`,
+      `if ${h.interface_number} · usage ${h.usage_page}/${h.usage} · ${h.bus_type} · release ${hex4(h.release)}` +
+        ` · mfr ${h.manufacturer ?? "—"} · product ${h.product ?? "—"} · serial ${h.serial ?? "—"} · ${h.path}`,
+    ],
+  );
+}
+
+// Rows of a joystick-class HID device SDL does not list (so no input
+// reaches the app from it); the `wine` row says whether the game
+// enumerates it.
+function hidOnlyRows(h: HidOnlyDevice): [string, string][] {
+  const usage = h.usage === 4 ? "joystick" : h.usage === 5 ? "gamepad" : h.usage === 8 ? "multi-axis" : `usage ${h.usage}`;
+  return [
+    ["kind", `hid ${usage} interface`],
+    ["hardware id", h.product_guid],
+    ...wineRows(h.product_guid),
+    ["usb", `vid ${hex4(h.vid)} · pid ${hex4(h.pid)}`],
+    ...hidRows(h.interfaces),
+  ];
+}
+
+// Whether the game enumerates the device: a joystick in its order, or a
+// gamepad (the kind follows the game's rule, see `input.rs`).
+function seenByGame(d: DeviceInfo): string {
+  if (props.isUnseen(d)) return "no";
+  return d.kind === "gamepad" ? "yes · gamepad" : "yes · joystick";
 }
 
 // Key/value rows of everything known about a device. The keyboard is a
@@ -2094,15 +2149,19 @@ function deviceRows(d: DeviceInfo): [string, string][] {
     ];
   }
   return [
-    ["kind", d.kind === "gamepad" ? `gamepad · slot ${d.gamepad_slot ?? "—"} · ${d.controller_name ?? "—"}` : d.kind],
-    ["game slot", d.kind === "gamepad" ? (d.gamepad_slot !== null ? `gp${d.gamepad_slot}` : "none (a further pad)") : gameSlotText(d)],
-    ["seen by game", props.isUnseen(d) ? "no (SDL lists it, the game's enumeration does not)" : "yes"],
-    ["game name", d.sc_name ?? "— (no HID product string)"],
+    [
+      "kind",
+      d.kind === "gamepad"
+        ? `gamepad · slot ${d.gamepad_slot ?? "—"} · ${d.controller_name ?? "—"}${d.wine_gamepad ? " · wine" : ""}`
+        : d.kind,
+    ],
+    ["game slot", d.kind === "gamepad" ? (d.gamepad_slot !== null ? `gp${d.gamepad_slot}` : "none") : gameSlotText(d)],
+    ["seen by game", seenByGame(d)],
     ["sdl name", d.sdl_name],
     ["sdl guid", d.sdl_guid],
-    ["game product", d.sc_product_guid ?? "—"],
     ["hardware id", d.hardware_id ?? "—"],
     ["sdl", `index ${d.index} · instance ${d.sdl_instance_id} · type ${d.sdl_type} · path ${d.sdl_path ?? "—"}`],
+    ...wineRows(d.sc_product_guid),
     ["usb", `vid ${hex4(d.sdl_vendor)} · pid ${hex4(d.sdl_product)} · version ${hex4(d.sdl_product_version)} · serial ${d.sdl_serial || "—"} · power ${d.power_level}`],
     [
       "io",
@@ -2110,13 +2169,7 @@ function deviceRows(d: DeviceInfo): [string, string][] {
     ],
     ["game axes", axesText(d)],
     ["hid usages", d.hid_usages.length ? compactUsages(d.hid_usages) : "—"],
-    ...d.hid_interfaces.map(
-      (h, i): [string, string] => [
-        `hid #${i}`,
-        `if ${h.interface_number} · usage ${h.usage_page}/${h.usage} · ${h.bus_type} · release ${hex4(h.release)}` +
-          ` · mfr ${h.manufacturer ?? "—"} · product ${h.product ?? "—"} · serial ${h.serial ?? "—"} · ${h.path}`,
-      ],
-    ),
+    ...hidRows(d.hid_interfaces),
     ["hid descriptor", d.hid_descriptor ?? "—"],
   ];
 }
@@ -2138,10 +2191,14 @@ function eventLine(ev: LoggedInput): string {
 function listText(): string {
   const lines = [`BindSight device list ${new Date().toISOString()}`, props.systemLine, ""];
   for (const d of props.devices) {
-    lines.push(`#${d.index} ${deviceName(d)}`);
+    lines.push(`sdl #${d.index} ${deviceName(d)}`);
     for (const [k, v] of deviceRows(d)) lines.push(`    ${k.padEnd(15)} ${v}`);
   }
-  if (!props.devices.length) lines.push("    none");
+  for (const h of props.hidOnly) {
+    lines.push(`hid ${h.name ?? "?"}`);
+    for (const [k, v] of hidOnlyRows(h)) lines.push(`    ${k.padEnd(15)} ${v}`);
+  }
+  if (!props.devices.length && !props.hidOnly.length) lines.push("    none");
   return lines.join("\n") + "\n";
 }
 
@@ -2385,7 +2442,7 @@ function noMaps(d: DeviceInfo): boolean {
           <div class="head">
             <Icon name="list" :size="15" />
             <span class="head-title">Device List</span>
-            <span class="head-count">{{ props.devices.length }}</span>
+            <span class="head-count">{{ props.devices.length + props.hidOnly.length }}</span>
             <div class="grow" />
             <button
               type="button"
@@ -2399,7 +2456,7 @@ function noMaps(d: DeviceInfo): boolean {
           <div class="log mono">
             <div v-for="d in props.devices" :key="d.index" class="log-dev">
               <div class="log-line">
-                <span class="log-key">#{{ d.index }}</span>
+                <span class="log-key">sdl #{{ d.index }}</span>
                 <span class="log-name">{{ deviceName(d) }}</span>
               </div>
               <div v-for="[k, v] in deviceRows(d)" :key="k" class="log-kv">
@@ -2407,7 +2464,17 @@ function noMaps(d: DeviceInfo): boolean {
                 <span class="log-val">{{ v }}</span>
               </div>
             </div>
-            <div v-if="!props.devices.length" class="log-line log-dim">None</div>
+            <div v-for="h in props.hidOnly" :key="h.path" class="log-dev">
+              <div class="log-line">
+                <span class="log-key">hid</span>
+                <span class="log-name">{{ h.name ?? "?" }}</span>
+              </div>
+              <div v-for="[k, v] in hidOnlyRows(h)" :key="k" class="log-kv">
+                <span class="log-dim">{{ k }}</span>
+                <span class="log-val">{{ v }}</span>
+              </div>
+            </div>
+            <div v-if="!props.devices.length && !props.hidOnly.length" class="log-line log-dim">None</div>
           </div>
         </section>
 

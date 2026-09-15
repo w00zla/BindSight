@@ -44,6 +44,8 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+use serde::Serialize;
+
 use crate::order::DeviceOrder;
 use crate::scdata::JoystickDevice;
 
@@ -139,22 +141,8 @@ fn wine_key_cmp(a: &str, b: &str) -> Ordering {
 /// `js2`, … by Wine's key order. No timestamp — the caller stamps it when
 /// the order changes.
 pub fn rank(devices: &[WineDevice]) -> DeviceOrder {
-    // winebus's `index`: per (vid, pid, interface) in creation order, which
-    // is udev's enumeration — sorted by sysfs path.
-    let mut creation: Vec<usize> = (0..devices.len()).collect();
-    creation.sort_by(|&a, &b| devices[a].syspath.cmp(&devices[b].syspath));
-    let mut counts: HashMap<(u16, u16, Option<u32>), u32> = HashMap::new();
-    let mut keyed: Vec<(String, usize)> = Vec::with_capacity(devices.len());
-    for i in creation {
-        let d = &devices[i];
-        let index = counts.entry((d.vid, d.pid, d.interface)).or_default();
-        keyed.push((interface_key(d, *index), i));
-        *index += 1;
-    }
-    keyed.sort_by(|a, b| wine_key_cmp(&a.0, &b.0));
-
     let mut joysticks: Vec<JoystickDevice> = Vec::new();
-    for (_, i) in keyed {
+    for (_, i) in keyed(devices) {
         let d = &devices[i];
         if d.is_gamepad {
             continue;
@@ -168,14 +156,60 @@ pub fn rank(devices: &[WineDevice]) -> DeviceOrder {
     DeviceOrder { joysticks, timestamp: None }
 }
 
+/// Every device's interface key with its position in `devices`, in Wine's
+/// key order — the list `rank` walks.
+fn keyed(devices: &[WineDevice]) -> Vec<(String, usize)> {
+    // winebus's `index`: per (vid, pid, interface) in creation order, which
+    // is udev's enumeration — sorted by sysfs path.
+    let mut creation: Vec<usize> = (0..devices.len()).collect();
+    creation.sort_by(|&a, &b| devices[a].syspath.cmp(&devices[b].syspath));
+    let mut counts: HashMap<(u16, u16, Option<u32>), u32> = HashMap::new();
+    let mut keyed: Vec<(String, usize)> = Vec::with_capacity(devices.len());
+    for i in creation {
+        let d = &devices[i];
+        let index = counts.entry((d.vid, d.pid, d.interface)).or_default();
+        keyed.push((interface_key(d, *index), i));
+        *index += 1;
+    }
+    keyed.sort_by(|a, b| wine_key_cmp(&a.0, &b.0));
+    keyed
+}
+
+/// Position in `devices` of the gamepad XInput lists first (user 0, the
+/// game's `gp1`): the first `is_gamepad` device in Wine's key order.
+pub fn first_gamepad(devices: &[WineDevice]) -> Option<usize> {
+    keyed(devices).into_iter().map(|(_, i)| i).find(|&i| devices[i].is_gamepad)
+}
+
+/// One registered interface as the Device List shows it: the key Wine
+/// ranks by and the device it belongs to (`product_guid` matches
+/// `DeviceInfo::sc_product_guid`; a gamepad is listed with no slot).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct WineKey {
+    pub product_guid: String,
+    pub key: String,
+    pub is_gamepad: bool,
+}
+
+/// The interface keys in Wine's order, joysticks and gamepads alike.
+pub fn keys(devices: &[WineDevice]) -> Vec<WineKey> {
+    keyed(devices)
+        .into_iter()
+        .map(|(key, i)| {
+            let d = &devices[i];
+            WineKey { product_guid: product_guid(d.vid, d.pid), key, is_gamepad: d.is_gamepad }
+        })
+        .collect()
+}
+
 #[cfg(target_os = "linux")]
-pub use linux::{enumerate, wine_devices};
+pub use linux::{enumerate, live_keys, syspath, wine_devices};
 
 #[cfg(target_os = "linux")]
 mod linux {
     use log::warn;
 
-    use super::{hidraw_preferred, rank, sdl_is_gamepad, WineDevice};
+    use super::{hidraw_preferred, rank, sdl_is_gamepad, WineDevice, WineKey};
     use crate::input::DeviceInfo;
     use crate::order::DeviceOrder;
     use crate::scdata::DeviceKind;
@@ -183,7 +217,7 @@ mod linux {
     /// The sysfs path behind a device node (`/dev/hidraw3` ->
     /// `/sys/devices/…/hidraw/hidraw3`), the node itself when sysfs has no
     /// entry for it.
-    fn syspath(class: &str, node: &str) -> String {
+    pub fn syspath(class: &str, node: &str) -> String {
         let name = node.rsplit('/').next().unwrap_or(node);
         std::fs::canonicalize(format!("/sys/class/{class}/{name}"))
             .map(|p| p.display().to_string())
@@ -251,6 +285,11 @@ mod linux {
     /// SDL lists (`devices`) and the hidraw interfaces hidapi lists.
     pub fn enumerate(devices: &[DeviceInfo]) -> Result<DeviceOrder, String> {
         wine_devices(devices).map(|d| rank(&d)).map_err(|e| format!("Wine order: {e}"))
+    }
+
+    /// The interface keys Wine registers for the listed devices, in its order.
+    pub fn live_keys(devices: &[DeviceInfo]) -> Result<Vec<WineKey>, String> {
+        wine_devices(devices).map(|d| super::keys(&d)).map_err(|e| format!("Wine order: {e}"))
     }
 }
 
@@ -374,6 +413,45 @@ mod tests {
         let o = rank(&devices);
         let names: Vec<_> = o.joysticks.iter().map(|j| (j.instance, j.product_name.as_str())).collect();
         assert_eq!(names, [(1, "stick"), (2, "R")]);
+    }
+
+    #[test]
+    fn keys_list_every_interface_in_wines_order() {
+        // The Device List's view: gamepads included, each with the key Wine
+        // ranks by and the Product GUID that names its `DeviceInfo`.
+        let devices = [
+            hidraw(0x231d, 0x0200, "R", "/a"),
+            sdl(0x3434, 0x0e21, "Keychron K2 HE", true, "/b"),
+            sdl(0x1234, 0x0001, "stick", false, "/d"),
+        ];
+        let keys = keys(&devices);
+        let rows: Vec<(&str, &str, bool)> =
+            keys.iter().map(|k| (k.product_guid.as_str(), k.key.as_str(), k.is_gamepad)).collect();
+        assert_eq!(
+            rows,
+            [
+                ("{00011234-0000-0000-0000-504944564944}", "HID#VID_1234&PID_0001#273&0000&0&0&0", false),
+                (VKB_R, "HID#VID_231D&PID_0200&MI_00#8465&0000&0&0&0", false),
+                (K2HE, "HID#VID_3434&PID_0E21&IG_00#273&0000&0&0&1", true),
+            ]
+        );
+        // Same walk as the ranking: the joysticks' keys in this order are js1, js2.
+        let o = rank(&devices);
+        assert_eq!(o.joysticks.iter().map(|j| j.product_guid.as_deref().unwrap()).collect::<Vec<_>>(), [rows[0].0, rows[1].0]);
+    }
+
+    #[test]
+    fn first_gamepad_is_xinput_user_0() {
+        // The game's gp1 is XInput's user 0: the first gamepad in key order,
+        // not SDL's order and not a joystick. Xbox (045E) before Keychron (3434).
+        let devices = [
+            sdl(0x3434, 0x0e21, "Keychron K2 HE", true, "/a"),
+            hidraw(0x231d, 0x0200, "R", "/b"),
+            sdl(0x045e, 0x028e, "Xbox", true, "/c"),
+        ];
+        assert_eq!(first_gamepad(&devices), Some(2));
+        assert_eq!(first_gamepad(&devices[..2]), Some(0));
+        assert_eq!(first_gamepad(&devices[1..2]), None);
     }
 
     #[test]

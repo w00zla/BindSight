@@ -19,6 +19,8 @@ fn main() -> Result<(), String> {
         println!("    kind:       {:?} (SDL type {})", d.kind, d.sdl_type);
         if let Some(name) = &d.controller_name {
             println!("    controller: {name}, slot {:?}", d.gamepad_slot);
+        } else if d.wine_gamepad {
+            println!("    controller: (Wine rule, mapped like Wine), slot {:?}", d.gamepad_slot);
         }
         println!("    SDL GUID:   {}", d.sdl_guid);
         println!(

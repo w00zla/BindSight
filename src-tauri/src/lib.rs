@@ -120,6 +120,30 @@ fn list_devices(devices: State<input::DeviceList>) -> Vec<input::DeviceInfo> {
     devices.lock().map(|d| d.clone()).unwrap_or_default()
 }
 
+/// The hidapi joystick-class devices SDL does not list (Device List only).
+#[tauri::command]
+fn hid_only_devices(devices: State<input::DeviceList>) -> Vec<input::HidOnlyDevice> {
+    let devices = devices.lock().map(|d| d.clone()).unwrap_or_default();
+    input::hid_only_devices(&devices)
+}
+
+/// The HID interface keys Wine registers for the listed devices, in Wine's
+/// order (Device Info only): empty where the order does not come from Wine
+/// (Windows) or its enumeration fails.
+#[tauri::command]
+fn wine_keys(devices: State<input::DeviceList>) -> Vec<wineorder::WineKey> {
+    #[cfg(target_os = "linux")]
+    {
+        let devices = devices.lock().map(|d| d.clone()).unwrap_or_default();
+        wineorder::live_keys(&devices).unwrap_or_default()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = devices;
+        Vec::new()
+    }
+}
+
 /// Return the SC action master list of the configured install.
 #[tauri::command]
 fn get_actions(data: State<Mutex<AppData>>) -> Vec<scdata::ActionMap> {
@@ -169,11 +193,13 @@ fn clash_report(
     devices: &input::DeviceList,
     live: Option<Result<order::DeviceOrder, String>>,
 ) -> bindings::ClashReport {
-    if data.bindings_file.is_none() {
-        return bindings::ClashReport::default();
-    }
     refresh_device_order(data, live);
-    let profile = data.bindings_file.as_ref().expect("checked above");
+    // Without a bindings file (no install configured, or it failed to load)
+    // the order still says which joysticks the game sees: the report is
+    // taken against an empty file, so `connected` and `unseen` are right
+    // and nothing is saved anywhere (no clash, nothing to resort).
+    let empty = scdata::ActionMapsFile { joysticks: Vec::new(), rebinds: Vec::new() };
+    let profile = data.bindings_file.as_ref().unwrap_or(&empty);
     let devices = devices.lock().map(|d| d.clone()).unwrap_or_default();
     let mut report = bindings::analyze_clash(profile, &devices, data.device_order.as_ref().map_err(Clone::clone));
     // "Game devices update": when the game last listed its joysticks.
@@ -1128,6 +1154,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_devices,
+            wine_keys,
+            hid_only_devices,
             ack_close,
             kblayout::keyboard_layout,
             system_info,

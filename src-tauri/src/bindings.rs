@@ -705,6 +705,30 @@ mod tests {
     }
 
     #[test]
+    fn empty_file_still_tells_which_devices_the_game_sees() {
+        // No bindings file loaded (no install configured): the report is
+        // taken against an empty file. The order still says which joysticks
+        // the game sees (and which it does not), nothing is saved anywhere,
+        // so there is no clash and nothing to resort.
+        let empty = ActionMapsFile { joysticks: Vec::new(), rebinds: Vec::new() };
+        let sdl = [dev(KEYCHRON_K2HE, "K2 HE"), dev(VKB_R, "VKB R"), dev(VKB_L, "VKB L")];
+        let report = analyze_clash(&empty, &sdl, Ok(&linux_log()));
+
+        assert_eq!(report.order_error, None);
+        assert!(!report.has_clash);
+        assert!(report.missing.is_empty());
+        assert!(report.resort.is_empty());
+        let slots: Vec<(u32, Option<u32>, Option<&str>)> = report
+            .connected
+            .iter()
+            .map(|s| (s.effective_instance, s.stored_instance, s.sc_product_guid.as_deref()))
+            .collect();
+        assert_eq!(slots, [(1, None, Some(VKB_R)), (2, None, Some(VKB_L))]);
+        assert_eq!(report.unseen.len(), 1);
+        assert_eq!(report.unseen[0].sc_product_guid.as_deref(), Some(KEYCHRON_K2HE));
+    }
+
+    #[test]
     fn no_order_yields_nothing_but_the_error() {
         let xml = r#"<ActionMaps>
           <options type="joystick" instance="1" Product=" VKB L {0201231D-0000-0000-0000-504944564944}"/>

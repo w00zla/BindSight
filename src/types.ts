@@ -29,6 +29,9 @@ export interface DeviceInfo {
   gamepad_slot: number | null;
   // SDL_GameControllerName, for pads only.
   controller_name: string | null;
+  // Linux: a gamepad by winebus's rule (the game's XInput device) that SDL
+  // has no controller mapping for; its input is mapped like Wine maps it.
+  wine_gamepad: boolean;
   num_buttons: number;
   num_axes: number;
   num_hats: number;
@@ -236,6 +239,28 @@ export interface ResortMove {
   from: number;
   to: number;
   name: string | null;
+}
+
+// A device hidapi lists with a joystick-class interface that SDL does not
+// list (Device List only, `input.rs::HidOnlyDevice`).
+export interface HidOnlyDevice {
+  vid: number;
+  pid: number;
+  product_guid: string;
+  name: string | null;
+  // 4 joystick, 5 gamepad, 8 multi-axis.
+  usage: number;
+  path: string;
+  interfaces: HidInterface[];
+}
+
+// One HID interface as Wine registers it (Linux, Device List only): the key
+// Wine's device order sorts by, and the device it belongs to (its Product
+// GUID, `DeviceInfo.sc_product_guid`). A gamepad is registered without a slot.
+export interface WineKey {
+  product_guid: string;
+  key: string;
+  is_gamepad: boolean;
 }
 
 // A joystick as the game's order has it: its jsN, name and GUID.

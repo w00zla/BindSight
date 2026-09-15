@@ -27,6 +27,8 @@ import type {
   ActionMap,
   BoundAction,
   ClashReport,
+  HidOnlyDevice,
+  WineKey,
   Config,
   CurrentInput,
   DeviceInfo,
@@ -133,6 +135,10 @@ const currentHeld = computed(() => {
 });
 // The last captured key event, handed to the editor (only the webview sees keys).
 const clash = ref<ClashReport | null>(null);
+// The HID interfaces Wine registers (Linux): the Device List's "wine" row.
+const wineKeys = ref<WineKey[]>([]);
+// Joystick-class HID devices SDL does not list: the Device List's tail.
+const hidOnly = ref<HidOnlyDevice[]>([]);
 // The install's version and game-data load state (updated via `scdata-changed`).
 const scStatus = ref<ScStatus | null>(null);
 // The first game-data load after start is still running: the startup tile
@@ -1095,6 +1101,19 @@ async function refreshDevices(announce = false) {
     console.error("device list failed", e);
     error.value = String(e);
   }
+  // Wine's registered interfaces for the Device List; empty off Linux.
+  try {
+    wineKeys.value = await invoke<WineKey[]>("wine_keys");
+  } catch (e) {
+    console.warn("wine keys failed", e);
+    wineKeys.value = [];
+  }
+  try {
+    hidOnly.value = await invoke<HidOnlyDevice[]>("hid_only_devices");
+  } catch (e) {
+    console.warn("hid-only devices failed", e);
+    hidOnly.value = [];
+  }
   await loadClash(announce);
 }
 
@@ -1400,6 +1419,8 @@ onUnmounted(() => {
       :tokenLabel="tokenLabel"
       :isUnseen="deviceUnseen"
       :clash="clash"
+      :wineKeys="wineKeys"
+      :hidOnly="hidOnly"
       :systemLine="systemLine"
       @choose="setMapChoice"
       @notify="notify"

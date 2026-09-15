@@ -28,7 +28,10 @@ quick-xml = "0.37"
 uuid = { version = "1.26.0", features = ["v4"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 base64 = "0.23.1"
-tauri-plugin-dialog = "2.7.3"
+# File dialogs via xdg-desktop-portal on Linux (the host's native dialog,
+# right theme and icons; the plugin's default is rfd's own GTK3 dialog, which
+# the AppImage's bundled GTK paints in forced Adwaita). Windows is unaffected.
+tauri-plugin-dialog = { version = "2.7.3", default-features = false, features = ["xdg-portal"] }
 tauri-plugin-log = "2"
 log = "0.4"
 os_info = { version = "3", default-features = false }
