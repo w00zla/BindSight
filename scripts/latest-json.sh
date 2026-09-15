@@ -9,7 +9,7 @@
 #
 # Upload latest.json to the GitHub release `v<version>` next to the assets;
 # the app reads it from releases/latest/download/latest.json (stable) or via
-# the beta-version release (beta).
+# the prerelease-version release (prerelease channel).
 set -eu
 
 if [ $# -lt 2 ]; then

@@ -67,7 +67,7 @@ const updateCheck = ref(props.updateCheck);
 const updateChannel = ref<string>(props.updateChannel);
 const CHANNELS: DropdownOption[] = [
   { value: "stable", label: "Stable" },
-  { value: "beta", label: "Beta" },
+  { value: "prerelease", label: "Pre-Release" },
 ];
 
 // Immediate, not part of Save: opens the folder in the file manager.
@@ -162,10 +162,10 @@ async function browseIni(slug: string) {
           <div class="panel-title">Updates</div>
           <div class="row between">
             <label class="check"><input v-model="updateCheck" type="checkbox" /> Check for updates at startup</label>
-            <label class="channel">
+            <span class="channel">
               Channel
               <Dropdown v-model="updateChannel" :options="CHANNELS" variant="outline" up />
-            </label>
+            </span>
           </div>
         </section>
       </div>

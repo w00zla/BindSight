@@ -60,7 +60,7 @@ function choose(value: string) {
 <template>
   <ConfirmDialog
     title="App Update"
-    :badge="channel === 'stable' ? undefined : channel"
+    :badge="channel === 'stable' ? undefined : 'Pre-Release'"
     icon="download"
     :buttons="buttons"
     @choose="choose"

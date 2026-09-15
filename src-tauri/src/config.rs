@@ -80,14 +80,14 @@ pub struct Config {
     pub update_channel: UpdateChannel,
 }
 
-/// The updater's channel: stable = GitHub's latest full release, beta =
-/// the newest published release including pre-releases.
+/// The updater's channel: stable = GitHub's latest full release,
+/// prerelease = the newest published release including pre-releases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum UpdateChannel {
     #[default]
     Stable,
-    Beta,
+    Prerelease,
 }
 
 fn default_auto_backup() -> bool {
@@ -241,9 +241,9 @@ mod tests {
         assert!(c.update_check);
         assert!(!serde_json::from_str::<Config>(r#"{"update_check":false}"#).unwrap().update_check);
         assert_eq!(c.update_channel, UpdateChannel::Stable);
-        assert_eq!(serde_json::from_str::<Config>(r#"{"update_channel":"beta"}"#).unwrap().update_channel, UpdateChannel::Beta);
+        assert_eq!(serde_json::from_str::<Config>(r#"{"update_channel":"prerelease"}"#).unwrap().update_channel, UpdateChannel::Prerelease);
         assert!(serde_json::from_str::<Config>(r#"{"update_channel":"nightly"}"#).is_err());
-        assert_eq!(serde_json::to_value(UpdateChannel::Beta).unwrap(), "beta");
+        assert_eq!(serde_json::to_value(UpdateChannel::Prerelease).unwrap(), "prerelease");
 
         // An unknown active slug falls back to LIVE; an override that is off
         // or has no path is none.

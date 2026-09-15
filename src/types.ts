@@ -90,9 +90,9 @@ export type JoyInput =
 export type LoggedInput = JoyInput & { id: number; at: number; token: string | null };
 
 // The backend's environment facts (app version, OS, toolkit versions).
-// The updater's channel: stable = the latest full release, beta = the
-// newest published release including pre-releases.
-export type UpdateChannel = "stable" | "beta";
+// The updater's channel: stable = the latest full release, prerelease =
+// the newest published release including pre-releases.
+export type UpdateChannel = "stable" | "prerelease";
 
 export interface SystemInfo {
   app_version: string;

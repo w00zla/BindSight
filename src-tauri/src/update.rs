@@ -4,11 +4,11 @@
 //! and the channel is a setting (`Config::update_channel`).
 //!
 //! Feeds: the stable channel reads GitHub's `latest` release (never a
-//! pre-release); the beta channel reads the rolling `beta-version` release,
-//! whose `latest.json` CI points at the newest published release, beta or
-//! stable (`.github/workflows/release.yml`). A beta is the same binary and
-//! version number as the stable it may become: publishing it as a full
-//! release promotes it, no rebuild.
+//! pre-release); the prerelease channel reads the rolling
+//! `prerelease-version` release, whose `latest.json` CI points at the newest
+//! published release, pre-release or stable (`.github/workflows/release.yml`).
+//! A pre-release is the same binary and version number as the stable it may
+//! become: publishing it as a full release promotes it, no rebuild.
 
 use std::sync::Mutex;
 
@@ -20,13 +20,13 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 use crate::config::UpdateChannel;
 
 pub const STABLE_FEED: &str = "https://github.com/w00zla/BindSight/releases/latest/download/latest.json";
-pub const BETA_FEED: &str = "https://github.com/w00zla/BindSight/releases/download/beta-version/latest.json";
+pub const PRERELEASE_FEED: &str = "https://github.com/w00zla/BindSight/releases/download/prerelease-version/latest.json";
 
 /// The feed a channel reads.
 pub fn feed_url(channel: UpdateChannel) -> &'static str {
     match channel {
         UpdateChannel::Stable => STABLE_FEED,
-        UpdateChannel::Beta => BETA_FEED,
+        UpdateChannel::Prerelease => PRERELEASE_FEED,
     }
 }
 
@@ -119,9 +119,9 @@ mod tests {
     #[test]
     fn feeds_per_channel() {
         assert!(feed_url(UpdateChannel::Stable).ends_with("/releases/latest/download/latest.json"));
-        assert!(feed_url(UpdateChannel::Beta).ends_with("/releases/download/beta-version/latest.json"));
-        assert_ne!(feed_url(UpdateChannel::Stable), feed_url(UpdateChannel::Beta));
-        for url in [STABLE_FEED, BETA_FEED] {
+        assert!(feed_url(UpdateChannel::Prerelease).ends_with("/releases/download/prerelease-version/latest.json"));
+        assert_ne!(feed_url(UpdateChannel::Stable), feed_url(UpdateChannel::Prerelease));
+        for url in [STABLE_FEED, PRERELEASE_FEED] {
             assert!(url.starts_with("https://"), "{url}");
         }
     }

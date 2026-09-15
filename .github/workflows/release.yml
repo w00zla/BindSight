@@ -1,8 +1,8 @@
 # After a release is published (a draft made public, as a pre-release or a
 # full one) or a pre-release is promoted to a full release:
-# - the beta feed: the rolling `beta-version` release gets the published
-#   release's latest.json, so the beta channel points at the newest
-#   published version, beta or stable;
+# - the prerelease feed: the rolling `prerelease-version` release gets the
+#   published release's latest.json, so the prerelease channel points at the
+#   newest published version, pre-release or stable;
 # - the README (full releases only): its release tags point at it.
 # Only `v*` tags: the feed release itself is skipped.
 name: Release published
@@ -19,22 +19,22 @@ env:
   GH_TOKEN: ${{ github.token }}
 
 jobs:
-  beta-feed:
-    name: Beta feed
+  prerelease-feed:
+    name: Prerelease feed
     if: startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-24.04
     steps:
-      - name: Point beta-version at ${{ github.event.release.tag_name }}
+      - name: Point prerelease-version at ${{ github.event.release.tag_name }}
         run: |
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir feed
-          if gh release view beta-version --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload beta-version feed/latest.json --repo "$GITHUB_REPOSITORY" --clobber
+          if gh release view prerelease-version --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload prerelease-version feed/latest.json --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create beta-version --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
-              --title "Beta feed" --notes "The beta channel's update feed: points at the newest published release, beta or stable. Not a download." \
+            gh release create prerelease-version --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
+              --title "Prerelease feed" --notes "The prerelease channel's update feed: points at the newest published release, pre-release or stable. Not a download." \
               feed/latest.json
           fi
-          echo "beta feed now points at $TAG"
+          echo "prerelease feed now points at $TAG"
 
   readme:
     name: README release links

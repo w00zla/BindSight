@@ -363,7 +363,7 @@ presentational components:
   `global.ini` override; Windows default paths), the active one
   (`Config::base_path()` / `global_ini_override()`), the image-map choice
   per device, the auto-backup, debug-logging and startup update-check
-  switches, the update channel (`UpdateChannel`: `stable` / `beta`). An
+  switches, the update channel (`UpdateChannel`: `stable` / `prerelease`). An
   older file's
   `ignored_devices` (the Exclude feature of 0.10 – 0.12) is ignored.
   `load` fills missing environments with defaults; no migration of older
@@ -503,17 +503,18 @@ All of it lives in the Devices mode's Device Info view instead.
   switch.
 - **Channels** (`update.rs`, the plugin's JS commands are not used: only
   the Rust side can pick the endpoint per check): **stable** reads GitHub's
-  `releases/latest/download/latest.json` (never a pre-release); **beta**
-  reads `releases/download/beta-version/latest.json`, the rolling
-  `beta-version` release whose only asset CI replaces with the `latest.json`
-  of every published release, beta or stable, so beta users get betas and
-  the finals. **A beta is the finished binary under its final version
-  number**: `bump-version.sh 0.14.0`, tag, draft, then publish it ticked as
+  `releases/latest/download/latest.json` (never a pre-release);
+  **prerelease** reads `releases/download/prerelease-version/latest.json`,
+  the rolling `prerelease-version` release whose only asset CI replaces
+  with the `latest.json` of every published release, pre-release or stable,
+  so prerelease users get the pre-releases and the finals. **A pre-release
+  is the finished binary under its final version number**: `bump-version.sh 0.14.0`, tag, draft, then publish it ticked as
   pre-release; if it holds, untick the box (GitHub's `released` event) and
   it is the stable 0.14.0 — same files, same signatures, no rebuild. If it
   does not, the next candidate is 0.14.1. No version suffixes anywhere:
   the version is compiled into the binary and compared with the feed, a
-  promoted `-beta` build would offer itself forever.
+  promoted `-beta` build would offer itself forever. The GUI says
+  "Pre-Release" (Settings channel, dialog badge).
 - **Updater config** (`tauri.conf.json` `plugins.updater`): the minisign
   `pubkey` and the stable endpoint (the plugin's default; `update.rs` sets
   the channel's feed per check).
@@ -544,14 +545,14 @@ All of it lives in the Devices mode's Device Info view instead.
   build**: artifacts only, no release, nothing the updater can see. A
   `v*` tag makes a **draft** release with every bundle, the `.sig` files
   and `latest.json` — nothing is live until the draft is published by
-  hand: ticked as pre-release it feeds the beta channel, as a full release
+  hand: ticked as pre-release it feeds the prerelease channel, as a full release
   everyone. Secrets: `TAURI_SIGNING_PRIVATE_KEY`,
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. A release created by a workflow
   token never triggers another workflow (GitHub's loop guard), so the feed
   and README jobs only ever run on a publish by hand.
 - **After a publish** (`.github/workflows/release.yml`, events
-  `prereleased` + `released`, tags `v*` only): `beta-feed` copies the
-  release's `latest.json` onto the `beta-version` release (created on first
+  `prereleased` + `released`, tags `v*` only): `prerelease-feed` copies the
+  release's `latest.json` onto the `prerelease-version` release (created on first
   use); `readme` (full releases only, promotions included) runs
   `scripts/readme-updater.sh <version>`, which fills the README's tags —
   `<span id="release_v">…</span>` (the version, `v0.13.0`) and
