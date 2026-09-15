@@ -43,6 +43,7 @@ import type {
   SlotStatus,
   SystemInfo,
   ToastType,
+  UpdateChannel,
 } from "./types";
 import {
   inputKey,
@@ -162,6 +163,8 @@ const debugLogging = ref(false);
 // Check for an update at startup (Settings); the dialog's manual check is
 // always available.
 const updateCheck = ref(true);
+// Which release feed the updater reads (Settings).
+const updateChannel = ref<UpdateChannel>("stable");
 
 // --- image-maps --------------------------------------------------------
 
@@ -694,6 +697,7 @@ async function applySettings(s: {
   autoBackup: boolean;
   debugLogging: boolean;
   updateCheck: boolean;
+  updateChannel: UpdateChannel;
 }) {
   // A changed active environment means another bindings file: settle the
   // pending rebinds first.
@@ -709,6 +713,8 @@ async function applySettings(s: {
     setDebugLogging(s.debugLogging);
     await invoke("set_update_check", { enabled: s.updateCheck });
     updateCheck.value = s.updateCheck;
+    await invoke("set_update_channel", { channel: s.updateChannel });
+    updateChannel.value = s.updateChannel;
     const reloading = await invoke<boolean>("set_environments", { environments: s.environments });
     environments.value = s.environments;
     if (reloading) {
@@ -1150,7 +1156,7 @@ onMounted(async () => {
   if (systemInfo.value?.updater || import.meta.env.DEV) {
     try {
       const { createUpdater } = await import("./update");
-      updater.value = createUpdater(!systemInfo.value?.updater);
+      updater.value = createUpdater(() => updateChannel.value, !systemInfo.value?.updater);
     } catch (e) {
       console.error("updater unavailable", e);
     }
@@ -1233,6 +1239,7 @@ onMounted(async () => {
     debugLogging.value = cfg.debug_logging;
     setDebugLogging(cfg.debug_logging);
     updateCheck.value = cfg.update_check;
+    updateChannel.value = cfg.update_channel;
     mapChoices.value = cfg.imagemap_choices ?? {};
     // The outcome of a load that ended before the listener was up: bindings,
     // whether the profile parsed, and its error.
@@ -1293,6 +1300,7 @@ onUnmounted(() => {
       :autoBackup="autoBackup"
       :debugLogging="debugLogging"
       :updateCheck="updateCheck"
+      :updateChannel="updateChannel"
       @close="showSettings = false"
       @save="applySettings"
       @notify="notify"
@@ -1408,6 +1416,7 @@ onUnmounted(() => {
       v-if="showVersion"
       :version="systemInfo?.app_version ?? ''"
       :updater="updater"
+      :channel="updateChannel"
       @close="showVersion = false"
     />
     <Toasts :toasts="toasts" />

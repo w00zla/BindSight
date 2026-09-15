@@ -90,6 +90,10 @@ export type JoyInput =
 export type LoggedInput = JoyInput & { id: number; at: number; token: string | null };
 
 // The backend's environment facts (app version, OS, toolkit versions).
+// The updater's channel: stable = the latest full release, beta = the
+// newest published release including pre-releases.
+export type UpdateChannel = "stable" | "beta";
+
 export interface SystemInfo {
   app_version: string;
   os: string;
@@ -131,6 +135,8 @@ export interface Config {
   debug_logging: boolean;
   // Check for an update at startup (never installs anything unasked).
   update_check: boolean;
+  // Which release feed the updater reads.
+  update_channel: UpdateChannel;
 }
 
 export interface Action {

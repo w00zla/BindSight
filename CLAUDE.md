@@ -124,20 +124,24 @@ presentational components:
   Update chip = the found version / "Checking…" / a dash, then download
   progress, an error line, the dev toggle; without an updater only the
   Current row; the updater's buttons after Close).
-- **Updater** (`update.ts`, `UpdateMark.vue`): loaded by `App.vue` via
-  dynamic import only when `system_info.updater` is true (see Releases), or
-  in a dev build as the simulated one (`createUpdater(true)`: a toggle in
-  the dialog fakes an available update and a download, so the GUI parts
-  can be looked at; the simulation code sits behind `import.meta.env.DEV`
-  and is not in a release). `createUpdater()` returns reactive state
-  (`idle` / `checking` / `current` / `available` / `downloading` /
-  `installing` / `error`), `check()`, `install()` (download with progress,
-  then `relaunch()`), the footer `mark` and the dialog `buttons()` (Check
-  Update until one is found, then Install). The startup check runs last in
-  `onMounted` unless Settings switched it off (`Config::update_check`); a
-  found update opens the dialog and puts the mark in the footer —
-  **nothing is downloaded or installed without the user's click**. A
-  failed startup check only logs.
+- **Updater** (`update.ts`, `UpdateMark.vue`; backend `update.rs`):
+  loaded by `App.vue` via dynamic import only when `system_info.updater`
+  is true (see Releases), or in a dev build as the simulated one
+  (`createUpdater(channel, true)`: a toggle in the dialog fakes an
+  available update and a download, so the GUI parts can be looked at; the
+  simulation code sits behind `import.meta.env.DEV` and is not in a
+  release). `createUpdater(channel)` returns reactive state (`idle` /
+  `checking` / `current` / `available` / `downloading` / `installing` /
+  `error`), `check()` (`check_update` with the Settings channel),
+  `install()` (`install_update`, progress via `update-progress` events,
+  the backend restarts the app), the footer `mark` and the dialog
+  `buttons()` (Check Update until one is found, then Install). The startup
+  check runs last in `onMounted` unless Settings switched it off
+  (`Config::update_check`); a found update opens the dialog and puts the
+  mark in the footer — **nothing is downloaded or installed without the
+  user's click**. A failed startup check only logs. The dialog shows the
+  channel as a `ConfirmDialog` `badge` next to the title unless it is
+  stable.
 - Shared modules: `imagemap.ts` (image-map types/helpers incl. token <->
   input key, `arcArrowPath`), `keyboard.ts` (webview keyboard capture,
   `KeyboardEvent.code` -> SC key name, feeds the same handler as
@@ -359,7 +363,8 @@ presentational components:
   `global.ini` override; Windows default paths), the active one
   (`Config::base_path()` / `global_ini_override()`), the image-map choice
   per device, the auto-backup, debug-logging and startup update-check
-  switches. An older file's
+  switches, the update channel (`UpdateChannel`: `stable` / `beta`). An
+  older file's
   `ignored_devices` (the Exclude feature of 0.10 – 0.12) is ignored.
   `load` fills missing environments with defaults; no migration of older
   shapes.
@@ -496,9 +501,22 @@ All of it lives in the Devices mode's Device Info view instead.
   from `target/release/`) and the deb / rpm packages (the package manager's
   business) never load the updater module. No feature flags, no runtime
   switch.
+- **Channels** (`update.rs`, the plugin's JS commands are not used: only
+  the Rust side can pick the endpoint per check): **stable** reads GitHub's
+  `releases/latest/download/latest.json` (never a pre-release); **beta**
+  reads `releases/download/beta-version/latest.json`, the rolling
+  `beta-version` release whose only asset CI replaces with the `latest.json`
+  of every published release, beta or stable, so beta users get betas and
+  the finals. **A beta is the finished binary under its final version
+  number**: `bump-version.sh 0.14.0`, tag, draft, then publish it ticked as
+  pre-release; if it holds, untick the box (GitHub's `released` event) and
+  it is the stable 0.14.0 — same files, same signatures, no rebuild. If it
+  does not, the next candidate is 0.14.1. No version suffixes anywhere:
+  the version is compiled into the binary and compared with the feed, a
+  promoted `-beta` build would offer itself forever.
 - **Updater config** (`tauri.conf.json` `plugins.updater`): the minisign
-  `pubkey` and the endpoint
-  `https://github.com/w00zla/BindSight/releases/latest/download/latest.json`.
+  `pubkey` and the stable endpoint (the plugin's default; `update.rs` sets
+  the channel's feed per check).
   `bundle.createUpdaterArtifacts` is on, so `tauri build` needs the private
   key as **content** in `TAURI_SIGNING_PRIVATE_KEY` (the `_PATH` variant is
   not honoured by the CLI, verified 2026-09-14) plus
@@ -527,10 +545,13 @@ All of it lives in the Devices mode's Device Info view instead.
   bundle, the `.sig` files and `latest.json` — nothing is live until the
   draft is published by hand. Secrets: `TAURI_SIGNING_PRIVATE_KEY`,
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
-- **README downloads** (`.github/workflows/readme.yml`): on a published,
-  non-pre-release release, `scripts/readme-updater.sh <version>` fills the
-  README's tags — `<span id="release_v">…</span>` (the version, `v0.13.0`)
-  and `<div id="release_dls">` … `</div>` (the download table, blank lines
+- **After a publish** (`.github/workflows/release.yml`, events
+  `prereleased` + `released`, tags `v*` only): `beta-feed` copies the
+  release's `latest.json` onto the `beta-version` release (created on first
+  use); `readme` (full releases only, promotions included) runs
+  `scripts/readme-updater.sh <version>`, which fills the README's tags —
+  `<span id="release_v">…</span>` (the version, `v0.13.0`) and
+  `<div id="release_dls">` … `</div>` (the download table, blank lines
   inside the div or GitHub renders it raw), both optional, any number of
   times — and commits to main as github-actions[bot]. HTML tags, not
   comments: MarkText strips comments.

@@ -20,7 +20,7 @@ The intention of this app is to be an add-on utility for the game [Star Citizen]
 
 You always forget what input which action was? You always get lost in the game's huge and impractical bindings list? You have issues with the game breaking your device bindings? Then this app is for you!
 
-## Latest Downloads
+### Latest Downloads
 
 <div id="release_dls">
 </div>
@@ -151,7 +151,7 @@ The app supports **Windows** and **Linux**!
    cd src-tauri && cargo test --lib   # backend tests, no hardware needed
    ```
 
-# Under the Hood
+## Under the Hood
 
 | Part           | What                                                                                                                                                      |
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |

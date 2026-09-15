@@ -75,6 +75,19 @@ pub struct Config {
     /// switched it off; a manual check stays possible either way.
     #[serde(default = "default_update_check")]
     pub update_check: bool,
+    /// Which release feed the updater reads (see `update.rs`).
+    #[serde(default)]
+    pub update_channel: UpdateChannel,
+}
+
+/// The updater's channel: stable = GitHub's latest full release, beta =
+/// the newest published release including pre-releases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    #[default]
+    Stable,
+    Beta,
 }
 
 fn default_auto_backup() -> bool {
@@ -94,6 +107,7 @@ impl Default for Config {
             auto_backup: default_auto_backup(),
             debug_logging: false,
             update_check: default_update_check(),
+            update_channel: UpdateChannel::Stable,
         }
     }
 }
@@ -226,6 +240,10 @@ mod tests {
         assert!(serde_json::from_str::<Config>(r#"{"debug_logging":true}"#).unwrap().debug_logging);
         assert!(c.update_check);
         assert!(!serde_json::from_str::<Config>(r#"{"update_check":false}"#).unwrap().update_check);
+        assert_eq!(c.update_channel, UpdateChannel::Stable);
+        assert_eq!(serde_json::from_str::<Config>(r#"{"update_channel":"beta"}"#).unwrap().update_channel, UpdateChannel::Beta);
+        assert!(serde_json::from_str::<Config>(r#"{"update_channel":"nightly"}"#).is_err());
+        assert_eq!(serde_json::to_value(UpdateChannel::Beta).unwrap(), "beta");
 
         // An unknown active slug falls back to LIVE; an override that is off
         // or has no path is none.

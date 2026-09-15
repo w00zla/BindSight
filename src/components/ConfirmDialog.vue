@@ -23,11 +23,13 @@ import Icon from "./Icon.vue";
 // `captureKeys`: the keyboard capture stays on while this dialog is open
 // (see keyboard.ts) — for a dialog that waits for a key press.
 // `subtitle`: a dim second line under the title (the rebind dialog's category).
+// `badge`: a small chip next to the title (the App Update dialog's channel).
 // `width`: dialog width in px when the default (420, or 560 with body
 // content) is not enough.
 const props = defineProps<{
   title: string;
   subtitle?: string;
+  badge?: string;
   icon: ConfirmIcon;
   buttons: ConfirmButton[];
   captureKeys?: boolean;
@@ -66,7 +68,10 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
       <div class="head">
         <Icon :name="icon" :size="18" />
         <div class="titles">
-          <span class="title">{{ title }}</span>
+          <span class="title-line">
+            <span class="title">{{ title }}</span>
+            <span v-if="badge" class="badge">{{ badge }}</span>
+          </span>
           <span v-if="subtitle" class="subtitle">{{ subtitle }}</span>
         </div>
       </div>
@@ -149,9 +154,27 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
   min-width: 0;
 }
 
+.title-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .title {
   font-weight: 600;
   font-size: 18px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-control);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
 }
 
 .subtitle {

@@ -4,13 +4,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
-import { ENVIRONMENTS, type Environment } from "../types";
+import Dropdown, { type DropdownOption } from "./Dropdown.vue";
+import { ENVIRONMENTS, type Environment, type UpdateChannel } from "../types";
 
 const props = defineProps<{
   environments: Record<string, Environment>;
   autoBackup: boolean;
   debugLogging: boolean;
   updateCheck: boolean;
+  updateChannel: UpdateChannel;
 }>();
 // Escape closes without saving, like the Cancel button.
 function onKey(e: KeyboardEvent) {
@@ -22,7 +24,13 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 const emit = defineEmits<{
   close: [];
   save: [
-    settings: { environments: Record<string, Environment>; autoBackup: boolean; debugLogging: boolean; updateCheck: boolean },
+    settings: {
+      environments: Record<string, Environment>;
+      autoBackup: boolean;
+      debugLogging: boolean;
+      updateCheck: boolean;
+      updateChannel: UpdateChannel;
+    },
   ];
   notify: [message: string, type: "ok" | "error"];
 }>();
@@ -56,6 +64,11 @@ function onNoBackupChoose(value: string) {
 }
 const debugLogging = ref(props.debugLogging);
 const updateCheck = ref(props.updateCheck);
+const updateChannel = ref<string>(props.updateChannel);
+const CHANNELS: DropdownOption[] = [
+  { value: "stable", label: "Stable" },
+  { value: "beta", label: "Beta" },
+];
 
 // Immediate, not part of Save: opens the folder in the file manager.
 async function openLogDir() {
@@ -149,13 +162,17 @@ async function browseIni(slug: string) {
           <div class="panel-title">Updates</div>
           <div class="row between">
             <label class="check"><input v-model="updateCheck" type="checkbox" /> Check for updates at startup</label>
+            <label class="channel">
+              Channel
+              <Dropdown v-model="updateChannel" :options="CHANNELS" variant="outline" up />
+            </label>
           </div>
         </section>
       </div>
 
       <div class="foot">
         <button type="button" class="btn outline" @click="emit('close')">Cancel</button>
-        <button type="button" class="btn primary" @click="emit('save', { environments: envs, autoBackup, debugLogging, updateCheck })">
+        <button type="button" class="btn primary" @click="emit('save', { environments: envs, autoBackup, debugLogging, updateCheck, updateChannel: updateChannel as UpdateChannel })">
           <Icon name="save" :size="14" />
           Save
         </button>
@@ -274,6 +291,15 @@ async function browseIni(slug: string) {
 }
 
 .check {
+  white-space: nowrap;
+}
+
+/* The channel picker, parked at the row's right edge like the buttons. */
+.channel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
   white-space: nowrap;
 }
 

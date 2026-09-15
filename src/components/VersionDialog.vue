@@ -6,8 +6,10 @@
 import { computed } from "vue";
 import ConfirmDialog, { type ConfirmButton } from "./ConfirmDialog.vue";
 import type { Updater } from "../update";
+import type { UpdateChannel } from "../types";
 
-const props = defineProps<{ version: string; updater: Updater | null }>();
+// `channel`: shown as a chip next to the title unless it is the stable one.
+const props = defineProps<{ version: string; updater: Updater | null; channel: UpdateChannel }>();
 const emit = defineEmits<{ close: [] }>();
 
 const buttons = computed<ConfirmButton[]>(() => [
@@ -56,7 +58,13 @@ function choose(value: string) {
 </script>
 
 <template>
-  <ConfirmDialog title="App Update" icon="download" :buttons="buttons" @choose="choose">
+  <ConfirmDialog
+    title="App Update"
+    :badge="channel === 'stable' ? undefined : channel"
+    icon="download"
+    :buttons="buttons"
+    @choose="choose"
+  >
     <div class="rows">
       <div class="row">
         <span class="label">Current Version:</span>

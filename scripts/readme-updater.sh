@@ -27,7 +27,7 @@ base="https://github.com/w00zla/BindSight/releases/download/v$version"
 
 table="| Windows | Linux |
 | --- | --- |
-| [Installer]($base/BindSight_${version}_x64-setup.exe) · [Standalone]($base/BindSight_${version}_x64-standalone.zip) | [AppImage]($base/BindSight_${version}_amd64.AppImage) · [deb]($base/BindSight_${version}_amd64.deb) · [rpm]($base/BindSight-${version}-1.x86_64.rpm) |"
+| **[Installer]($base/BindSight_${version}_x64-setup.exe)** · [Standalone]($base/BindSight_${version}_x64-standalone.zip) | **[AppImage]($base/BindSight_${version}_amd64.AppImage)** · [deb]($base/BindSight_${version}_amd64.deb) · [rpm]($base/BindSight-${version}-1.x86_64.rpm) |"
 
 if ! grep -q 'id="release_v"\|id="release_dls"' "$readme"; then
 	echo "README.md has no release_v / release_dls tags, nothing to do"

@@ -1,21 +1,25 @@
-// The in-app updater: the check against the release feed, the download +
+// The in-app updater: the check against the channel's feed, the download +
 // install the user asked for, the footer mark and the App Update dialog's
 // buttons (VersionDialog.vue reads the state). Nothing is downloaded or
-// installed without a click. App.vue loads this module on demand, only
-// when the backend says the install is one the updater can replace
-// (`SystemInfo.updater`: the Windows installer and the AppImage; the bare
-// executable and deb / rpm never call any of this).
+// installed without a click. The work happens in the backend (`update.rs`:
+// `check_update`, `install_update` with `update-progress` events), because
+// only that side can pick the channel's feed per check. App.vue loads this
+// module on demand, only when the backend says the install is one the
+// updater can replace (`SystemInfo.updater`: the Windows installer and the
+// AppImage; the bare executable and deb / rpm never call any of this).
 import { markRaw, reactive, type Component } from "vue";
-import { check, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import UpdateMark from "./components/UpdateMark.vue";
 import type { ConfirmButton } from "./components/ConfirmDialog.vue";
+import type { UpdateChannel } from "./types";
 
 // idle: no check yet; current: up to date; available: an update waits for
 // the user's click; downloading / installing: after it; error: the last
 // check or install failed (`error` says which).
 export type UpdateState = "idle" | "checking" | "current" | "available" | "downloading" | "installing" | "error";
 
+// `check_update`'s answer for a found update.
 export interface UpdateInfo {
   version: string;
   // Release date as `YYYY-MM-DD`, empty when the feed has none.
@@ -23,6 +27,9 @@ export interface UpdateInfo {
   // Release notes, as the feed carries them.
   notes: string;
 }
+
+// `update-progress` event payload.
+type Progress = { kind: "download"; downloaded: number; total: number | null } | { kind: "installing" };
 
 export interface Updater {
   state: UpdateState;
@@ -36,9 +43,9 @@ export interface Updater {
   error: string;
   // The footer's mark while an update waits (UpdateMark.vue).
   mark: Component;
-  // Check the feed; true when an update is available.
+  // Check the channel's feed; true when an update is available.
   check(): Promise<boolean>;
-  // Download and install the available update, then relaunch.
+  // Download and install the available update; the app restarts after.
   install(): Promise<void>;
   // The version dialog's update buttons for the current state.
   buttons(): ConfirmButton[];
@@ -46,11 +53,10 @@ export interface Updater {
   simulate(on: boolean): void;
 }
 
-// `simulate`: a dev-only stand-in (never talks to the plugin) instead of
-// the real thing; a release build drops the simulation code.
-export function createUpdater(simulate = false): Updater {
-  // The plugin's handle on the update found by the last check.
-  let update: Update | null = null;
+// `channel`: the Settings choice, read at every check. `simulate`: a
+// dev-only stand-in (never talks to the backend) instead of the real thing;
+// a release build drops the simulation code.
+export function createUpdater(channel: () => UpdateChannel, simulate = false): Updater {
   let fakeTimer: ReturnType<typeof setInterval> | null = null;
 
   const u: Updater = reactive({
@@ -74,18 +80,14 @@ export function createUpdater(simulate = false): Updater {
       u.state = "checking";
       u.error = "";
       try {
-        const found = await check();
-        await update?.close();
-        update = found;
+        const found = await invoke<UpdateInfo | null>("check_update", { channel: channel() });
         if (!found) {
           u.info = null;
           u.state = "current";
-          console.info("update check: up to date");
           return false;
         }
-        u.info = { version: found.version, date: (found.date ?? "").slice(0, 10), notes: found.body ?? "" };
+        u.info = found;
         u.state = "available";
-        console.info(`update check: v${found.version} available (running v${found.currentVersion})`);
         return true;
       } catch (e) {
         u.error = `Check failed: ${e}`;
@@ -111,30 +113,23 @@ export function createUpdater(simulate = false): Updater {
         }, 60);
         return;
       }
-      if (!update) return;
       u.state = "downloading";
       u.progress = null;
       u.error = "";
-      let total = 0;
-      let done = 0;
+      const unlisten = await listen<Progress>("update-progress", (e) => {
+        const p = e.payload;
+        if (p.kind === "download") u.progress = p.total ? Math.min(1, p.downloaded / p.total) : null;
+        else u.state = "installing";
+      });
       try {
-        await update.downloadAndInstall((ev) => {
-          if (ev.event === "Started") {
-            total = ev.data.contentLength ?? 0;
-            u.progress = total ? 0 : null;
-          } else if (ev.event === "Progress") {
-            done += ev.data.chunkLength;
-            if (total) u.progress = Math.min(1, done / total);
-          } else if (ev.event === "Finished") {
-            u.state = "installing";
-          }
-        });
-        console.info(`update v${update.version} installed, relaunching`);
-        await relaunch();
+        // Returns only on failure: success ends in a restart.
+        await invoke("install_update");
       } catch (e) {
         u.error = `Install failed: ${e}`;
         u.state = "error";
         console.error("update install failed", e);
+      } finally {
+        unlisten();
       }
     },
 

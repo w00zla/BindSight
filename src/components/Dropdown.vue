@@ -14,11 +14,15 @@ const props = withDefaults(
     placeholder?: string;
     // chip: a full-height chip with a bold name (Compare); small: a compact
     // chip (stage caption); dashed: a transparent, dashed "add" chip; mono:
-    // an uppercase mono slug (the top bar's environment).
-    variant?: "chip" | "small" | "dashed" | "mono";
+    // an uppercase mono slug (the top bar's environment); outline: a
+    // button-high field, filled surface with a border (Settings rows).
+    variant?: "chip" | "small" | "dashed" | "mono" | "outline";
     title?: string;
+    // Open the list above the button (a dropdown at the bottom of a
+    // scrolling container would otherwise grow the container).
+    up?: boolean;
   }>(),
-  { placeholder: "", variant: "chip", title: undefined },
+  { placeholder: "", variant: "chip", title: undefined, up: false },
 );
 const emit = defineEmits<{ "update:modelValue": [value: string] }>();
 
@@ -56,7 +60,7 @@ onUnmounted(() => {
       <span class="dd-name" :class="{ empty: !current, mono: variant === 'mono' }">{{ current?.label ?? placeholder }}</span>
       <Icon name="chevron-down" :size="variant === 'mono' ? 14 : 12" />
     </button>
-    <div v-if="open" class="dd-menu">
+    <div v-if="open" class="dd-menu" :class="{ up }">
       <button
         v-for="o in options"
         :key="o.value"
@@ -133,6 +137,27 @@ onUnmounted(() => {
   background: var(--bg-surface-2);
 }
 
+.outline {
+  min-width: 96px;
+}
+
+.outline .dd-btn {
+  height: var(--h-control);
+  padding: 0 12px 0 16px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface-2);
+  font-size: 14px;
+}
+
+.outline .dd-btn:hover {
+  border-color: var(--accent);
+  background: var(--bg-surface-3);
+}
+
+.outline .dd-name {
+  font-weight: 500;
+}
+
 .mono .dd-btn {
   gap: 6px;
   padding: 0 10px 0 12px;
@@ -163,6 +188,11 @@ onUnmounted(() => {
   border-radius: var(--radius-control);
   background: var(--bg-surface);
   z-index: 20;
+}
+
+.dd-menu.up {
+  top: auto;
+  bottom: calc(100% + 4px);
 }
 
 .dd-item {

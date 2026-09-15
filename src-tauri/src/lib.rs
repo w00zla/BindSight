@@ -31,6 +31,7 @@ pub mod resort;
 pub mod scdata;
 pub mod scinstall;
 pub mod textpath;
+pub mod update;
 pub mod wineorder;
 pub mod xmltext;
 
@@ -421,6 +422,20 @@ fn set_update_check(enabled: bool, app: AppHandle, data: State<Mutex<AppData>>) 
     }
     data.config.update_check = enabled;
     info!("update check at startup set: {enabled}");
+    if let Err(e) = config::save(&app, &data.config) {
+        error!("failed to save config: {e}");
+    }
+}
+
+/// Persist the updater's channel (Settings Save).
+#[tauri::command]
+fn set_update_channel(channel: config::UpdateChannel, app: AppHandle, data: State<Mutex<AppData>>) {
+    let mut data = data.lock().unwrap();
+    if data.config.update_channel == channel {
+        return;
+    }
+    data.config.update_channel = channel;
+    info!("update channel set: {channel:?}");
     if let Err(e) = config::save(&app, &data.config) {
         error!("failed to save config: {e}");
     }
@@ -964,11 +979,12 @@ fn log_startup(app: &AppHandle, config: &config::Config) {
         );
     }
     info!(
-        "config: active_env={} auto_backup={} debug_logging={} update_check={} environments={:?} imagemap_choices={:?}",
+        "config: active_env={} auto_backup={} debug_logging={} update_check={} update_channel={:?} environments={:?} imagemap_choices={:?}",
         config.active_env,
         config.auto_backup,
         config.debug_logging,
         config.update_check,
+        config.update_channel,
         config.environments,
         config.imagemap_choices
     );
@@ -1070,11 +1086,11 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        // The updater and the relaunch it needs (see `updater_available`).
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init());
+        // The updater's plugin side; the checks go through `update.rs`.
+        .plugin(tauri_plugin_updater::Builder::new().build());
     builder
         .setup(|app| {
+            app.manage(update::UpdateState::default());
             // A panic still ends the app (release builds abort), but this way
             // the reason reaches the log file first.
             std::panic::set_hook(Box::new(|info| error!("panic: {info}")));
@@ -1163,6 +1179,9 @@ pub fn run() {
             set_auto_backup,
             set_debug_logging,
             set_update_check,
+            set_update_channel,
+            update::check_update,
+            update::install_update,
             diff::compare_bindings
         ])
         .run(tauri::generate_context!())
