@@ -291,7 +291,7 @@ pub(crate) fn delete_binding_profile(file: String, data: State<Mutex<AppData>>) 
 pub(crate) fn open_binding_profiles_dir(data: State<Mutex<AppData>>) -> Result<(), String> {
     let dir = binding_profiles_dir(&data);
     fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(|e| format!("open {}: {e}", dir.display()))
+    crate::open_dir(&dir)
 }
 
 #[tauri::command]

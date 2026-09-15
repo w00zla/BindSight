@@ -313,7 +313,7 @@ pub(crate) fn restore_backup(id: String, app: AppHandle, data: State<Mutex<AppDa
 pub(crate) fn open_backup_dir(id: String, app: AppHandle) -> Result<(), String> {
     let file = path_of(&backups_root(&app)?, &id)?;
     let dir = file.parent().ok_or_else(|| format!("{}: no parent", file.display()))?;
-    tauri_plugin_opener::open_path(dir, None::<&str>).map_err(|e| format!("open {}: {e}", dir.display()))
+    crate::open_dir(dir)
 }
 
 /// Open the backups folder in the system file manager (Settings), creating it
@@ -322,7 +322,7 @@ pub(crate) fn open_backup_dir(id: String, app: AppHandle) -> Result<(), String> 
 pub(crate) fn open_backups_dir(app: AppHandle) -> Result<(), String> {
     let root = backups_root(&app)?;
     fs::create_dir_all(&root).map_err(|e| format!("{}: {e}", root.display()))?;
-    tauri_plugin_opener::open_path(&root, None::<&str>).map_err(|e| format!("open {}: {e}", root.display()))
+    crate::open_dir(&root)
 }
 
 #[cfg(test)]

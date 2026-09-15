@@ -467,11 +467,33 @@ fn set_update_channel(channel: config::UpdateChannel, app: AppHandle, data: Stat
     }
 }
 
+/// Open a folder in the system file manager. Inside an AppImage the child
+/// process must not inherit the bundle's `LD_LIBRARY_PATH`, or the file
+/// manager loads the bundled glib and dies (`undefined symbol …`); so when the
+/// app runs packaged (`APPDIR` / `APPIMAGE` set) `xdg-open` is launched with
+/// that variable cleared. Everywhere else — dev build, other platforms, or a
+/// missing `xdg-open` — it falls back to the opener plugin, the old behaviour.
+pub(crate) fn open_dir(dir: &std::path::Path) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("APPDIR").is_some() || std::env::var_os("APPIMAGE").is_some() {
+        match std::process::Command::new("xdg-open")
+            .arg(dir)
+            .env_remove("LD_LIBRARY_PATH")
+            .env_remove("LD_PRELOAD")
+            .spawn()
+        {
+            Ok(_) => return Ok(()),
+            Err(e) => log::warn!("xdg-open failed ({e}); falling back to the opener plugin"),
+        }
+    }
+    tauri_plugin_opener::open_path(dir, None::<&str>).map_err(|e| format!("open {}: {e}", dir.display()))
+}
+
 /// Open the app's log folder in the system file manager (Settings).
 #[tauri::command]
 fn open_log_dir(app: AppHandle) -> Result<(), String> {
     let dir = app.path().app_log_dir().map_err(|e| format!("app log dir: {e}"))?;
-    tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(|e| format!("open {}: {e}", dir.display()))
+    open_dir(&dir)
 }
 
 /// Write a text file to a path the user picked in a save dialog (the Devices
