@@ -552,8 +552,12 @@ All of it lives in the Devices mode's Device Info view instead.
   and README jobs only ever run on a publish by hand.
 - **After a publish** (`.github/workflows/release.yml`, events
   `prereleased` + `released`, tags `v*` only): `prerelease-feed` copies the
-  release's `latest.json` onto the `prerelease-version` release (created on first
-  use); `readme` (full releases only, promotions included) runs
+  release's `latest.json` onto the `prerelease-version` release, which
+  **exists once, made by hand** (`gh release create prerelease-version
+  --prerelease --title "Prerelease feed" --notes "…" latest.json`; the
+  Actions token uploads fine but was refused creating it, HTTP 403,
+  2026-09-15) and the job fails with a clear message if it is missing;
+  `readme` (full releases only, promotions included) runs
   `scripts/readme-updater.sh <version>`, which fills the README's tags —
   `<span id="release_v">…</span>` (the version, `v0.13.0`) and
   `<div id="release_dls">` … `</div>` (the download table, blank lines

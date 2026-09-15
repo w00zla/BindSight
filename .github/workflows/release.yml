@@ -2,7 +2,10 @@
 # full one) or a pre-release is promoted to a full release:
 # - the prerelease feed: the rolling `prerelease-version` release gets the
 #   published release's latest.json, so the prerelease channel points at the
-#   newest published version, pre-release or stable;
+#   newest published version, pre-release or stable. That release exists
+#   once, made by hand (the Actions token may upload to it but was refused
+#   creating it): gh release create prerelease-version --prerelease
+#   --title "Prerelease feed" --notes "…" latest.json
 # - the README (full releases only): its release tags point at it.
 # Only `v*` tags: the feed release itself is skipped.
 name: Release published
@@ -26,14 +29,12 @@ jobs:
     steps:
       - name: Point prerelease-version at ${{ github.event.release.tag_name }}
         run: |
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir feed
-          if gh release view prerelease-version --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload prerelease-version feed/latest.json --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            gh release create prerelease-version --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
-              --title "Prerelease feed" --notes "The prerelease channel's update feed: points at the newest published release, pre-release or stable. Not a download." \
-              feed/latest.json
+          if ! gh release view prerelease-version --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "The prerelease-version feed release does not exist; create it once by hand (see the header of this workflow)." >&2
+            exit 1
           fi
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir feed
+          gh release upload prerelease-version feed/latest.json --repo "$GITHUB_REPOSITORY" --clobber
           echo "prerelease feed now points at $TAG"
 
   readme:
