@@ -467,23 +467,34 @@ fn set_update_channel(channel: config::UpdateChannel, app: AppHandle, data: Stat
     }
 }
 
-/// Open a folder in the system file manager. Inside an AppImage the child
-/// process must not inherit the bundle's `LD_LIBRARY_PATH`, or the file
-/// manager loads the bundled glib and dies (`undefined symbol …`); so when the
-/// app runs packaged (`APPDIR` / `APPIMAGE` set) `xdg-open` is launched with
-/// that variable cleared. Everywhere else — dev build, other platforms, or a
-/// missing `xdg-open` — it falls back to the opener plugin, the old behaviour.
+/// Open a folder in the system file manager. Inside an AppImage the bundle
+/// ships its own (build-host) `xdg-open` and puts `$APPDIR/usr/bin` first on
+/// `PATH`; that `xdg-open`, and the file manager it launches, then load the
+/// bundled glib and die (`undefined symbol …`), so "Open Folder" does nothing
+/// — worse from a CI-built bundle than a locally built one. Bypass it: run the
+/// *system* `xdg-open` (`PATH` with the `$APPDIR` entries dropped) with the
+/// bundle's library paths cleared, so the file manager loads the host's
+/// libraries. Everywhere else — dev build, other platforms, or a missing
+/// `xdg-open` — fall back to the opener plugin, the old behaviour.
 pub(crate) fn open_dir(dir: &std::path::Path) -> Result<(), String> {
     #[cfg(target_os = "linux")]
-    if std::env::var_os("APPDIR").is_some() || std::env::var_os("APPIMAGE").is_some() {
+    if let Some(appdir) = std::env::var_os("APPDIR") {
+        let appdir = appdir.to_string_lossy();
+        let system_path = std::env::var("PATH")
+            .unwrap_or_default()
+            .split(':')
+            .filter(|p| !p.is_empty() && !p.starts_with(&*appdir))
+            .collect::<Vec<_>>()
+            .join(":");
         match std::process::Command::new("xdg-open")
             .arg(dir)
+            .env("PATH", &system_path)
             .env_remove("LD_LIBRARY_PATH")
             .env_remove("LD_PRELOAD")
             .spawn()
         {
             Ok(_) => return Ok(()),
-            Err(e) => log::warn!("xdg-open failed ({e}); falling back to the opener plugin"),
+            Err(e) => log::warn!("system xdg-open failed ({e}); falling back to the opener plugin"),
         }
     }
     tauri_plugin_opener::open_path(dir, None::<&str>).map_err(|e| format!("open {}: {e}", dir.display()))
