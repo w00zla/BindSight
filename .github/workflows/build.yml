@@ -1,11 +1,11 @@
 # Build BindSight for Windows and Linux.
 #
-# - Manual run (any branch): tests, then the installers as workflow
-#   artifacts (14 days). With `prerelease` ticked they also land in a GitHub
-#   pre-release `test-<sha>` — never `latest`, invisible to the updater.
+# - Manual run (any branch): a test build — tests, then the installers as
+#   workflow artifacts (14 days). No release, nothing the updater can see.
 # - Tag `v*`: tests, then a *draft* release with every bundle, the updater
 #   signatures and latest.json. Nothing goes live until the draft is
-#   published by hand.
+#   published by hand — as a pre-release for the beta channel, or as a
+#   full release for everyone (see release.yml).
 #
 # Secrets: TAURI_SIGNING_PRIVATE_KEY (the minisign key, one line),
 # TAURI_SIGNING_PRIVATE_KEY_PASSWORD (empty if the key has none).
@@ -15,11 +15,6 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      prerelease:
-        description: "Also publish a GitHub pre-release (test-<sha>)"
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -143,9 +138,9 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Release
+    name: Draft release
     needs: [test, build]
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.prerelease
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     env:
       VERSION: ${{ needs.test.outputs.version }}
@@ -157,18 +152,9 @@ jobs:
           pattern: bindsight-*
           path: assets
           merge-multiple: true
-      - name: Draft release (tag)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Draft release
         run: |
           scripts/latest-json.sh "$VERSION" assets > assets/latest.json
           cat assets/latest.json
           gh release create "v$VERSION" --draft --title "BindSight $VERSION" --notes "" assets/*
-          echo "Draft release v$VERSION created — publish it on GitHub to go live."
-      - name: Pre-release (manual run)
-        if: inputs.prerelease
-        run: |
-          tag="test-${GITHUB_SHA::7}"
-          RELEASE_TAG="$tag" scripts/latest-json.sh "$VERSION" assets > assets/latest.json
-          gh release create "$tag" --prerelease --target "$GITHUB_SHA" \
-            --title "Test build $VERSION ($tag)" --notes "Test build, not a release." assets/*
-          echo "Pre-release $tag created."
+          echo "Draft release v$VERSION created — publish it on GitHub (pre-release = beta channel)."

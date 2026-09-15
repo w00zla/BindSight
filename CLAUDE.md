@@ -528,8 +528,8 @@ All of it lives in the Devices mode's Device Info view instead.
   update again.
 - **Release feed**: `scripts/latest-json.sh <version> <assets dir> [notes]`
   assembles `latest.json` from the signed installer + AppImage (both
-  platforms' files collected into one folder; `RELEASE_TAG` overrides the
-  tag in the URLs) — it goes to the GitHub release next to the assets.
+  platforms' files collected into one folder) — it goes to the GitHub
+  release next to the assets.
   Windows and Linux updates are keyed `windows-x86_64` / `linux-x86_64`.
 - **The version lives in `src-tauri/Cargo.toml` only** (`tauri.conf.json`
   has none, Tauri takes the crate's; `package.json` and `Cargo.lock` just
@@ -540,12 +540,15 @@ All of it lives in the Devices mode's Device Info view instead.
   then `build` on ubuntu-24.04 (AppImage, deb, rpm; `NO_STRIP`; 22.04 ships SDL
   2.0.20, `input.rs` needs 2.24+) and
   windows-latest (NSIS + the bare exe zipped as `_x64-standalone.zip`),
-  bundles as workflow artifacts (14 days). A manual run with `prerelease`
-  ticked also makes a GitHub pre-release `test-<sha>` (never `latest`, the
-  updater ignores it). A `v*` tag makes a **draft** release with every
-  bundle, the `.sig` files and `latest.json` — nothing is live until the
-  draft is published by hand. Secrets: `TAURI_SIGNING_PRIVATE_KEY`,
-  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+  bundles as workflow artifacts (14 days). A manual run is a **test
+  build**: artifacts only, no release, nothing the updater can see. A
+  `v*` tag makes a **draft** release with every bundle, the `.sig` files
+  and `latest.json` — nothing is live until the draft is published by
+  hand: ticked as pre-release it feeds the beta channel, as a full release
+  everyone. Secrets: `TAURI_SIGNING_PRIVATE_KEY`,
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. A release created by a workflow
+  token never triggers another workflow (GitHub's loop guard), so the feed
+  and README jobs only ever run on a publish by hand.
 - **After a publish** (`.github/workflows/release.yml`, events
   `prereleased` + `released`, tags `v*` only): `beta-feed` copies the
   release's `latest.json` onto the `beta-version` release (created on first

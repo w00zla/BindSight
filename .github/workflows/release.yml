@@ -4,7 +4,7 @@
 #   release's latest.json, so the beta channel points at the newest
 #   published version, beta or stable;
 # - the README (full releases only): its release tags point at it.
-# Manual `test-<sha>` builds and the feed release itself are skipped.
+# Only `v*` tags: the feed release itself is skipped.
 name: Release published
 
 on:
