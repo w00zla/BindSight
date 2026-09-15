@@ -156,5 +156,5 @@ jobs:
         run: |
           scripts/latest-json.sh "$VERSION" assets > assets/latest.json
           cat assets/latest.json
-          gh release create "v$VERSION" --draft --title "BindSight $VERSION" --notes "" assets/*
+          gh release create "v$VERSION" --draft --title "BindSight v$VERSION" --notes "" assets/*
           echo "Draft release v$VERSION created — publish it on GitHub (pre-release = prerelease channel)."
