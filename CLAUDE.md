@@ -537,7 +537,8 @@ All of it lives in the Devices mode's Device Info view instead.
   "Bump version to x.y.z", tags `vx.y.z` and asks before pushing.
 - **CI** (`.github/workflows/build.yml`): `test` (typecheck + build, cargo
   test, clippy `-D warnings`, on a tag also tag == Cargo.toml version),
-  then `build` on ubuntu-22.04 (AppImage, deb, rpm; `NO_STRIP`) and
+  then `build` on ubuntu-24.04 (AppImage, deb, rpm; `NO_STRIP`; 22.04 ships SDL
+  2.0.20, `input.rs` needs 2.24+) and
   windows-latest (NSIS + the bare exe zipped as `_x64-standalone.zip`),
   bundles as workflow artifacts (14 days). A manual run with `prerelease`
   ticked also makes a GitHub pre-release `test-<sha>` (never `latest`, the

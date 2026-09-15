@@ -22,7 +22,7 @@ jobs:
   beta-feed:
     name: Beta feed
     if: startsWith(github.event.release.tag_name, 'v')
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Point beta-version at ${{ github.event.release.tag_name }}
         run: |
@@ -39,7 +39,7 @@ jobs:
   readme:
     name: README release links
     if: github.event.action == 'released' && startsWith(github.event.release.tag_name, 'v')
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
