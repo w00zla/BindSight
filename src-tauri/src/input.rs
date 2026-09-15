@@ -639,6 +639,18 @@ fn open_all(joystick: &JoystickSubsystem, controllers: &GameControllerSubsystem,
                     sdl_type_name(sdl2::sys::SDL_JoystickGetDeviceType(i)),
                 )
             };
+            // winebus reaches a device through its HID joystick / gamepad
+            // interface; a node it cannot open read-write does not exist to the
+            // game (`wine_devices` applies the same rule to the hidraw path).
+            // SDL still lists such a device, but SC does not see it, so it must
+            // not become a device here — it shows only as an hid-only row in the
+            // Device List. A device with no HID joystick interface is kept: SDL
+            // reaches it through evdev, without hidraw.
+            if let Some(path) = hid.get((vid, pid)).and_then(|h| h.joystick_path.as_ref()) {
+                if std::fs::OpenOptions::new().read(true).write(true).open(&*path.to_string_lossy()).is_err() {
+                    continue;
+                }
+            }
             let buttons = stick.num_buttons();
             !crate::wineorder::hidraw_preferred(vid, pid, buttons)
                 && crate::wineorder::sdl_is_gamepad(is_controller, t, stick.num_axes(), buttons)
