@@ -61,6 +61,41 @@ git commit -q -m "Bump version to $version"
 git tag -a "v$version" -m "BindSight $version"
 echo "Committed and tagged v$version."
 
+# Watch the build run the v-tag triggers and, on success, print the draft
+# release URL. Offered only after a push (nothing runs otherwise), like the
+# push itself.
+watch_build() {
+	if ! command -v gh >/dev/null 2>&1; then
+		echo "gh not found; watch manually: gh run watch && gh release view v$version --json url -q .url" >&2
+		return
+	fi
+	echo "Waiting for the build run to appear..."
+	run_id=""
+	i=0
+	while [ "$i" -lt 20 ]; do
+		run_id=$(gh run list --workflow build.yml --event push \
+			--json databaseId,headBranch \
+			--jq "map(select(.headBranch == \"v$version\")) | .[0].databaseId // empty" 2>/dev/null || true)
+		[ -n "$run_id" ] && break
+		i=$((i + 1))
+		sleep 3
+	done
+	if [ -z "$run_id" ]; then
+		echo "Could not find the build run for v$version; check it with: gh run list" >&2
+		return
+	fi
+	if gh run watch "$run_id" --exit-status; then
+		url=$(gh release view "v$version" --json url --jq .url 2>/dev/null || true)
+		if [ -n "$url" ]; then
+			echo "Draft release: $url"
+		else
+			echo "Run succeeded, but the draft release is not visible yet: gh release view v$version --web" >&2
+		fi
+	else
+		echo "The build run failed; see: gh run view $run_id --web" >&2
+	fi
+}
+
 printf 'Push main and v%s to origin now? [y/N] ' "$version"
 read -r answer
 case $answer in
@@ -68,6 +103,16 @@ y | Y | yes | YES)
 	git push origin HEAD
 	git push origin "v$version"
 	echo "Pushed. The release workflow builds a draft release; publish it on GitHub."
+	printf 'Watch the build run and print the draft release URL when it succeeds? [y/N] '
+	read -r watch
+	case $watch in
+	y | Y | yes | YES)
+		watch_build
+		;;
+	*)
+		echo "Not watching. Later: gh run watch && gh release view v$version --json url -q .url"
+		;;
+	esac
 	;;
 *)
 	echo "Not pushed. Later: git push origin HEAD && git push origin v$version"
