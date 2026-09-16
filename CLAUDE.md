@@ -276,9 +276,10 @@ presentational components:
   Game data (`ScData`: action master list + token labels): the three files
   read straight out of `Data.p4k` (`p4k.rs` + `cryxml.rs`, `P4K_FILES`,
   ~150 ms), `scdata::parse_*` (unlabeled actions dropped), cached as JSON
-  under `<app_cache_dir>/<label>/` (Windows: `<app_cache_dir>/cache/<label>/`,
-  `lib.rs::sc_cache_root` — LocalAppData also holds the logs and the
-  WebView2 profile). `scdata.json`
+  under `<app_cache_dir>/cache/<label>/` (`lib.rs::sc_cache_root`; on Windows
+  LocalAppData also holds the logs and the WebView2 profile, so the version
+  folders keep their own `cache` folder — Linux uses the same layout).
+  `scdata.json`
   carries a `format` stamp (`CACHE_FORMAT`): bump it whenever the cached
   shape changes meaning, the cache is then re-extracted once. Loaded in a
   background thread at start and on environment change
@@ -605,8 +606,8 @@ scripts/readme-updater.sh <x.y.z>             # README release tokens (CI runs i
 ```
 
 The game data cache lives per version under `~/.cache/com.w00zla.bindsight/
-<label>/` on Linux and `%LOCALAPPDATA%\com.w00zla.bindsight\cache\<label>\` on
-Windows; delete it to force a re-extract.
+cache/<label>/` on Linux and `%LOCALAPPDATA%\com.w00zla.bindsight\cache\<label>\`
+on Windows; delete it to force a re-extract.
 
 ## Prerequisites
 
