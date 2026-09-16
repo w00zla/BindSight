@@ -237,4 +237,67 @@ mod tests {
         // Identical rebinds produce no change.
         assert!(plan_apply(&live, &live, &[sel(DeviceKind::Joystick, 1), sel(DeviceKind::Keyboard, 1)]).is_empty());
     }
+
+    // An SC-shaped live file (LF, one-space indent, an <options> slot).
+    const LIVE_XML: &str = concat!(
+        "<ActionMaps>\n",
+        " <ActionProfiles version=\"1\" optionsVersion=\"2\" rebindVersion=\"2\" profileName=\"default\">\n",
+        "  <options type=\"joystick\" instance=\"1\" Product=\" VKB R {0200231D-0000-0000-0000-504944564944}\"/>\n",
+        "  <actionmap name=\"spaceship_general\">\n",
+        "   <action name=\"v_eject\">\n",
+        "    <rebind input=\"js1_button1\"/>\n",
+        "    <rebind input=\"kb1_e\"/>\n",
+        "   </action>\n",
+        "   <action name=\"v_boost\">\n",
+        "    <rebind input=\"js1_button2\"/>\n",
+        "   </action>\n",
+        "  </actionmap>\n",
+        "  <actionmap name=\"spaceship_movement\">\n",
+        "   <action name=\"v_brake\">\n",
+        "    <rebind input=\"js2_button1\"/>\n",
+        "   </action>\n",
+        "  </actionmap>\n",
+        " </ActionProfiles>\n",
+        "</ActionMaps>\n",
+    );
+
+    /// One rebind as (actionmap, action, input, attributes), comparable.
+    type RebindRow = (String, String, String, Vec<(String, String)>);
+
+    /// A device's rebinds in a parsed file, comparable across two files.
+    fn js_set(file: &ActionMapsFile, kind: DeviceKind, instance: u32) -> Vec<RebindRow> {
+        let mut v: Vec<_> = rebinds_of(file, kind, instance)
+            .into_values()
+            .map(|r| (r.actionmap.clone(), r.action.clone(), r.input.clone(), r.attrs.clone()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn plan_then_rewrite_makes_the_live_file_match_the_source() {
+        // Source js1: eject moves (with an activationMode), lights is new,
+        // and it has no boost — so live's js1 boost must go.
+        let mut source = file(&[("spaceship_general", "v_eject", "js1_button9"), ("spaceship_general", "v_lights", "js1_button3")]);
+        source.rebinds[0] = attr(source.rebinds[0].clone(), "activationMode", "hold");
+
+        let live = parse_actionmaps(LIVE_XML).unwrap();
+        let changes = plan_apply(&live, &source, &[sel(DeviceKind::Joystick, 1)]);
+
+        // The plan's changes are the exact ones apply_rebinds accepts, and the
+        // output re-parses: the two tested halves compose.
+        let rewritten = rebind::apply_rebinds(LIVE_XML, &changes).unwrap();
+        let after = parse_actionmaps(&rewritten).unwrap();
+
+        // js1 now equals the source, input and attributes alike.
+        assert_eq!(js_set(&after, DeviceKind::Joystick, 1), js_set(&source, DeviceKind::Joystick, 1));
+        // The other kind (kb1) and the other slot (js2) are untouched.
+        assert!(after.rebinds.iter().any(|r| r.action == "v_eject" && r.input == "kb1_e"));
+        assert!(after.rebinds.iter().any(|r| r.action == "v_brake" && r.input == "js2_button1"));
+        // The dropped boost is really gone.
+        assert!(!after.rebinds.iter().any(|r| r.input == "js1_button2"));
+
+        // Applying the same source again is now a no-op: the file matches.
+        assert!(plan_apply(&after, &source, &[sel(DeviceKind::Joystick, 1)]).is_empty());
+    }
 }
