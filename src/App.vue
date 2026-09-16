@@ -148,8 +148,19 @@ const starting = ref(true);
 const STARTUP_MIN_MS = 3000;
 const startedAt = Date.now();
 
-// End the startup tile, but not before it has been up STARTUP_MIN_MS.
+// The startup image-map load is done (the tile waits for it, so the maps do
+// not pop in after the stage is already showing); a game-data load that
+// finishes earlier is remembered and ends the tile once the maps are in.
+let mapsReady = false;
+let startupPending = false;
+
+// End the startup tile, but not before it has been up STARTUP_MIN_MS and the
+// image-maps are loaded.
 function endStartup() {
+  if (!mapsReady) {
+    startupPending = true;
+    return;
+  }
   const left = STARTUP_MIN_MS - (Date.now() - startedAt);
   if (left > 0) setTimeout(() => (starting.value = false), left);
   else starting.value = false;
@@ -319,20 +330,29 @@ const stagePlaceholders = computed<DeviceInfo[]>(() =>
   ),
 );
 
+// Map ids and `<map id>/<file>` keys whose load is in flight: two callers at
+// once (the startup step and a devices-changed right behind it) must not
+// fetch the same map twice.
+const mapLoading = new Set<string>();
+
 async function loadMapImage(id: string, file: string) {
   const key = `${id}/${file}`;
-  if (mapImages.value[key]) return;
+  if (mapImages.value[key] || mapLoading.has(key)) return;
+  mapLoading.add(key);
   try {
     mapImages.value[key] = await invoke<string>("read_imagemap_image", { id, file });
   } catch {
     /* a missing image just stays blank */
+  } finally {
+    mapLoading.delete(key);
   }
 }
 
 async function loadChosenMaps() {
   for (const d of devices.value) {
     const id = chosenMapId(d);
-    if (!id || loadedMaps.value[id]) continue;
+    if (!id || loadedMaps.value[id] || mapLoading.has(id)) continue;
+    mapLoading.add(id);
     try {
       const p = await invoke<ImageMap>("get_imagemap", { id });
       loadedMaps.value[id] = p;
@@ -340,6 +360,8 @@ async function loadChosenMaps() {
       for (const f of shapeImageFiles(p)) await loadMapImage(p.id, f);
     } catch {
       /* skip a map that will not load */
+    } finally {
+      mapLoading.delete(id);
     }
   }
 }
@@ -392,6 +414,7 @@ async function setMode(m: Mode) {
   // Inputs released while the editor was open were never seen here.
   activeInputs.value = {};
   if (m === "monitor") await reloadMaps();
+  if (m === "devices") await loadDeviceInfo();
 }
 
 async function setMapChoice(hardwareId: string | null, id: string) {
@@ -1091,16 +1114,34 @@ async function refresh() {
   await loadClash();
 }
 
+// What tells two device lists apart: the same devices on the same SDL
+// indices with the same slots.
+function deviceListKey(list: DeviceInfo[]): string {
+  return JSON.stringify(list.map((d) => [d.index, d.sdl_guid, d.kind, d.gamepad_slot ?? null]));
+}
+
 // Hot-plug (and startup): re-list the devices and redo the clash report on
-// top of them; actionmaps.xml and Game.log are not re-read (SDL raises one
-// devices-changed per device at startup, and the install did not change).
-async function refreshDevices(announce = false) {
+// top of them; actionmaps.xml and Game.log are not re-read (the install did
+// not change). Returns whether the list changed: SDL raises several
+// devices-changed at startup with nothing in them, and the clash report
+// (DirectInput on Windows) is too slow to redo for a list that is the same.
+async function refreshDevices(announce = false): Promise<boolean> {
+  const before = deviceListKey(devices.value);
   try {
     devices.value = await invoke<DeviceInfo[]>("list_devices");
   } catch (e) {
     console.error("device list failed", e);
     error.value = String(e);
   }
+  if (deviceListKey(devices.value) === before) return false;
+  await loadClash(announce);
+  return true;
+}
+
+// The Device List's extra facts (Wine's registered interfaces, hidapi's
+// joystick-class devices SDL lacks). The hidapi enumeration takes a while on
+// Windows, so this runs only for the Devices mode, never at startup.
+async function loadDeviceInfo() {
   // Wine's registered interfaces for the Device List; empty off Linux.
   try {
     wineKeys.value = await invoke<WineKey[]>("wine_keys");
@@ -1114,7 +1155,6 @@ async function refreshDevices(announce = false) {
     console.warn("hid-only devices failed", e);
     hidOnly.value = [];
   }
-  await loadClash(announce);
 }
 
 // SDL-side name of a live input, e.g. "button 5", "hat 0 up", "key lshift".
@@ -1223,8 +1263,9 @@ onMounted(async () => {
       await listen<DevicesChanged>("devices-changed", async (e) => {
         const changed = e.payload.added.length > 0 || e.payload.removed.length > 0;
         announceDevices(e.payload);
-        await refreshDevices(changed);
+        if (!(await refreshDevices(changed))) return;
         await reloadMaps();
+        if (mode.value === "devices") await loadDeviceInfo();
       }),
     );
   });
@@ -1243,14 +1284,13 @@ onMounted(async () => {
     );
   });
   // The backend reloads actionmaps.xml itself once the game data is in.
-  await step("Device list", refreshDevices);
-
-  try {
-    scStatus.value = await invoke<ScStatus>("get_sc_status");
-    // The first load may have ended before the scdata-changed listener was up.
-    if (!scStatus.value.loading) endStartup();
-    actionMaps.value = await invoke<ActionMap[]>("get_actions");
-    tokens.value = await invoke<Record<string, string>>("get_tokens");
+  await step("Device list", async () => {
+    await refreshDevices();
+  });
+  // The image-maps right behind the devices and the settings they need
+  // (the map choices), ahead of the bulkier game data: the startup tile
+  // waits for them (`endStartup`).
+  await step("Settings", async () => {
     const cfg = await invoke<Config>("get_config");
     environments.value = cfg.environments;
     activeEnv.value = cfg.active_env;
@@ -1260,16 +1300,26 @@ onMounted(async () => {
     updateCheck.value = cfg.update_check;
     updateChannel.value = cfg.update_channel;
     mapChoices.value = cfg.imagemap_choices ?? {};
+  });
+  await step("Image-maps", reloadMaps);
+  mapsReady = true;
+  if (startupPending) endStartup();
+
+  try {
+    scStatus.value = await invoke<ScStatus>("get_sc_status");
+    // The first load may have ended before the scdata-changed listener was up.
+    if (!scStatus.value.loading) endStartup();
+    actionMaps.value = await invoke<ActionMap[]>("get_actions");
+    tokens.value = await invoke<Record<string, string>>("get_tokens");
     // The outcome of a load that ended before the listener was up: bindings,
     // whether the profile parsed, and its error.
     takeStatus(await invoke<LoadStatus>("get_load_status"));
   } catch (e) {
-    console.error("startup: game data / config load failed", e);
+    console.error("startup: game data load failed", e);
     error.value = String(e);
     // Never leave the startup tile up: the other features work regardless.
     endStartup();
   }
-  await step("Image-maps", reloadMaps);
   // The startup check (Settings can switch it off): an update opens the
   // App Update dialog, the user decides.
   if (updater.value && updateCheck.value && (await updater.value.check())) showVersion.value = true;

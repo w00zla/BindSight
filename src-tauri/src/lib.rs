@@ -751,6 +751,17 @@ fn live_order(devices: &input::DeviceList) -> Option<Result<order::DeviceOrder, 
     order::live(&snapshot)
 }
 
+/// The root of the game data cache (one folder per game version below it).
+/// On Linux the app cache dir is already `~/.cache/<id>/`; on Windows it is
+/// `%LOCALAPPDATA%\<id>\`, shared with the logs and the WebView2 profile, so
+/// the version folders go into a `cache` folder of their own there.
+fn sc_cache_root(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let root = app.path().app_cache_dir().map_err(|e| format!("app cache dir: {e}"))?;
+    #[cfg(windows)]
+    let root = root.join("cache");
+    Ok(root)
+}
+
 /// Re-take SC's joystick order: `live` is [`live_order`] (taken by the
 /// caller, ideally before the lock) — only a changed outcome replaces the
 /// snapshot (stamped with the time of the change) and is logged, so a
@@ -907,7 +918,7 @@ fn spawn_sc_load(app: AppHandle) {
                 }
             }
             progress(1);
-            let cache_root = app.path().app_cache_dir().map_err(|e| format!("app cache dir: {e}"))?;
+            let cache_root = sc_cache_root(&app)?;
             scinstall::load(&cache_root, &base_path, version, global_ini.as_deref(), &progress)
         });
 
@@ -1019,7 +1030,7 @@ fn log_startup(app: &AppHandle, config: &config::Config) {
         "dirs: config={} data={} cache={} log={}",
         dir(app.path().app_config_dir()),
         dir(app.path().app_data_dir()),
-        dir(app.path().app_cache_dir()),
+        sc_cache_root(app).map(|p| p.display().to_string()).unwrap_or_else(|e| format!("<{e}>")),
         dir(app.path().app_log_dir())
     );
     info!(

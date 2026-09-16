@@ -1820,9 +1820,14 @@ async function compareWith(key: string) {
           <Icon name="target" :size="15" />
           {{ recording ? "Recording…" : "Record Input" }}
         </button>
-        <span v-if="recording && candidate" class="rec-chip mono">{{ inputText(candidate.token) }}</span>
-        <!-- the line is always there, so the dialog does not jump -->
-        <span class="rb-hint" :class="{ on: recording }">Esc to cancel</span>
+        <!-- one line of fixed height, always there, so the dialog does not jump -->
+        <div class="rb-status">
+          <template v-if="recording && candidate">
+            <span class="rec-chip mono">{{ inputText(candidate.token) }}</span>
+            <span class="rb-sep">·</span>
+          </template>
+          <span class="rb-hint" :class="{ on: recording }">Esc to cancel</span>
+        </div>
       </div>
     </ConfirmDialog>
 
@@ -2858,6 +2863,19 @@ async function compareWith(key: string) {
 .reorder-note {
   margin: 12px 0 0;
   font-size: 12px;
+  color: var(--text-3);
+}
+
+/* Candidate chip, separator and Esc hint on one line; the height is the
+   chip's, so the row neither grows when a chip appears nor collapses without one. */
+.rb-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+}
+
+.rb-sep {
   color: var(--text-3);
 }
 

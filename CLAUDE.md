@@ -83,7 +83,9 @@ presentational components:
   dropdown, version chip, Refresh, gear. It is also the title bar (see the
   undecorated-window gotcha).
 - `StartupTile` — covers every mode while the first game-data load after
-  start runs, whatever its outcome.
+  start runs, whatever its outcome, and until the startup image-map load
+  is done (`endStartup` waits for `mapsReady`, so the maps never pop in
+  after the stage is already showing).
 - Monitor: `DeviceTile`, `StatusPanel`, `ImageStage` (+ `Splitter`),
   `LastInputCard`, `BindingsDeck` (flat rows or one bucket per input, same
   head as the Bindings List).
@@ -274,7 +276,9 @@ presentational components:
   Game data (`ScData`: action master list + token labels): the three files
   read straight out of `Data.p4k` (`p4k.rs` + `cryxml.rs`, `P4K_FILES`,
   ~150 ms), `scdata::parse_*` (unlabeled actions dropped), cached as JSON
-  under `<app_cache_dir>/<label>/`. `scdata.json`
+  under `<app_cache_dir>/<label>/` (Windows: `<app_cache_dir>/cache/<label>/`,
+  `lib.rs::sc_cache_root` — LocalAppData also holds the logs and the
+  WebView2 profile). `scdata.json`
   carries a `format` stamp (`CACHE_FORMAT`): bump it whenever the cached
   shape changes meaning, the cache is then re-extracted once. Loaded in a
   background thread at start and on environment change
@@ -601,7 +605,8 @@ scripts/readme-updater.sh <x.y.z>             # README release tokens (CI runs i
 ```
 
 The game data cache lives per version under `~/.cache/com.w00zla.bindsight/
-<label>/` on Linux; delete it to force a re-extract.
+<label>/` on Linux and `%LOCALAPPDATA%\com.w00zla.bindsight\cache\<label>\` on
+Windows; delete it to force a re-extract.
 
 ## Prerequisites
 
