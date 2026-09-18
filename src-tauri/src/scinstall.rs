@@ -30,8 +30,9 @@ const TOKENS_FILE: &str = "tokens.json";
 /// token map change meaning, so an older cache is re-extracted instead of
 /// loading with silently missing fields (serde fills a missing `Option`
 /// with `None`). 2 = keyboard / gamepad defaults and `kb1_` / `gp1_` labels,
-/// 3 = the mouse default (`mouse_default`) and `kb1_mouse*` labels.
-const CACHE_FORMAT: u32 = 3;
+/// 3 = the mouse default (`mouse_default`) and `kb1_mouse*` labels, 4 = labels
+/// flatten a literal `\n` to a space.
+const CACHE_FORMAT: u32 = 4;
 
 /// `scdata.json`: the action master list behind its format stamp.
 #[derive(Serialize, Deserialize)]

@@ -756,9 +756,12 @@ async function applySettings(s: {
   }
 }
 
-// Top-bar chip: switch the environment the app reads.
+// Top-bar chip: switch the environment the app reads. Every view is keyed by
+// `activeEnv`, so setting it below forces a full remount (fresh profiles,
+// backups, filters, pending edits) — after the mounted view's unsaved changes
+// are settled.
 async function switchEnv(slug: string) {
-  if (slug === activeEnv.value || !(await bindingsSettled())) return;
+  if (slug === activeEnv.value || !(await allSettled())) return;
   try {
     const changed = await invoke<boolean>("set_active_env", { slug });
     activeEnv.value = slug;
@@ -1379,7 +1382,7 @@ onUnmounted(() => {
       <StartupTile :sc="scStatus" :version="systemInfo?.app_version ?? ''" />
     </div>
 
-    <div v-else-if="mode === 'monitor'" class="content">
+    <div v-else-if="mode === 'monitor'" :key="activeEnv" class="content">
       <div class="top-row">
       <div class="devices-panel">
         <div class="panel-title">Input Devices</div>
@@ -1446,6 +1449,7 @@ onUnmounted(() => {
 
     <BindingsView
       v-else-if="mode === 'bindings'"
+      :key="activeEnv"
       ref="bindingsView"
       :bindings="bindings"
       :actionMaps="actionMaps"
@@ -1462,6 +1466,7 @@ onUnmounted(() => {
 
     <ImageMapEditor
       v-else-if="mode === 'devices'"
+      :key="activeEnv"
       ref="editor"
       :devices="orderedDevices"
       :events="events"

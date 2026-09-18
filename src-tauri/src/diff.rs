@@ -70,6 +70,10 @@ pub struct DiffReport {
     pub removed: usize,
     pub changed: usize,
     pub same: usize,
+    /// The `<options>` joystick devices of each side (empty for `Current`),
+    /// so the Apply dialog can name the source's devices per slot.
+    pub a_joysticks: Vec<scdata::JoystickDevice>,
+    pub b_joysticks: Vec<scdata::JoystickDevice>,
 }
 
 /// One side of a comparison, as chosen in Bindings mode (Compare).
@@ -240,7 +244,7 @@ pub fn diff_bindings(a: &[ResolvedBinding], b: &[ResolvedBinding]) -> DiffReport
 
     rows.sort_by(|x, y| compare_tokens(&x.token, &y.token));
 
-    DiffReport { rows, added, removed, changed, same }
+    DiffReport { rows, added, removed, changed, same, ..DiffReport::default() }
 }
 
 /// The XML text of a non-current source (`Profile` from the binding profiles
@@ -271,9 +275,9 @@ fn load_source(
     base_path: &str,
     backups_root: &Path,
     actions: &[scdata::ActionMap],
-) -> Result<Vec<ResolvedBinding>, String> {
+) -> Result<(Vec<ResolvedBinding>, Vec<scdata::JoystickDevice>), String> {
     match source {
-        Source::Current => Ok(current.to_vec()),
+        Source::Current => Ok((current.to_vec(), Vec::new())),
         Source::Profile { file } => {
             if !binding_profiles::is_bare_xml_name(file) {
                 return Err(format!("{file:?} is not a valid binding profile file name"));
@@ -281,13 +285,13 @@ fn load_source(
             let path = config::binding_profiles_dir(base_path).join(file);
             let xml = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             let profile = scdata::parse_actionmaps(&xml)?;
-            Ok(bindings::resolve_bindings(actions, &profile))
+            Ok((bindings::resolve_bindings(actions, &profile), profile.joysticks))
         }
         Source::Backup { id } => {
             let path = backups::path_of(backups_root, id)?;
             let xml = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             let profile = scdata::parse_actionmaps(&xml)?;
-            Ok(bindings::resolve_bindings(actions, &profile))
+            Ok((bindings::resolve_bindings(actions, &profile), profile.joysticks))
         }
     }
 }
@@ -311,9 +315,9 @@ pub(crate) fn compare_bindings(
     let backups_root = backups::backups_root(&app)?;
     let actions = &data.sc.data.actions;
 
-    let a = load_source(&a, &current, base_path, &backups_root, actions)?;
-    let b = load_source(&b, &current, base_path, &backups_root, actions)?;
-    Ok(diff_bindings(&a, &b))
+    let (a, a_joysticks) = load_source(&a, &current, base_path, &backups_root, actions)?;
+    let (b, b_joysticks) = load_source(&b, &current, base_path, &backups_root, actions)?;
+    Ok(DiffReport { a_joysticks, b_joysticks, ..diff_bindings(&a, &b) })
 }
 
 #[cfg(test)]
@@ -479,10 +483,13 @@ mod tests {
         }];
 
         let source = Source::Profile { file: "layout_test_exported.xml".to_string() };
-        let resolved = load_source(&source, &[], dir.to_str().unwrap(), Path::new("/nonexistent"), &actions).unwrap();
+        let (resolved, joysticks) = load_source(&source, &[], dir.to_str().unwrap(), Path::new("/nonexistent"), &actions).unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].token, "js1_button1");
         assert_eq!(resolved[0].action, "v_eject");
+        // The source's <options> devices come back for the Apply dialog.
+        assert_eq!(joysticks.len(), 1);
+        assert_eq!(joysticks[0].product_name, "Stick");
 
         fs::remove_dir_all(&dir).ok();
     }

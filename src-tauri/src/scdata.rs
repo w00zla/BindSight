@@ -221,8 +221,10 @@ fn attribute_list(e: &BytesStart) -> Result<Vec<(String, String)>, String> {
 fn resolve(key: Option<&String>, loc: &HashMap<String, String>) -> Option<String> {
     let key = key.map(|k| k.trim()).filter(|k| !k.is_empty())?;
     let key = key.strip_prefix('@').unwrap_or(key);
-    // Case-insensitive: the localization table stores keys lowercased.
-    loc.get(&key.to_ascii_lowercase()).cloned()
+    // Case-insensitive: the localization table stores keys lowercased. Some
+    // labels carry a literal `\n` (global.ini's only line break); flatten it to
+    // a space so the label stays one line.
+    loc.get(&key.to_ascii_lowercase()).map(|v| v.replace("\\n", " "))
 }
 
 /// The token prefix a `<device name="...">` in `keybinding_localization.xml`
@@ -544,6 +546,17 @@ mod tests {
         </actionmap></profile>"#;
         let maps = parse_default_profile(xml, &loc).unwrap();
         assert_eq!(maps[0].actions[0].label.as_deref(), Some("Cycle Master Mode"));
+    }
+
+    #[test]
+    fn a_literal_newline_in_a_label_becomes_a_space() {
+        // global.ini encodes a line break as the two characters `\n`.
+        let loc = parse_localization("ui_two_lines=First\\nSecond\r\n");
+        let xml = r#"<profile><actionmap name="m">
+            <action name="a" UILabel="@ui_two_lines"/>
+        </actionmap></profile>"#;
+        let maps = parse_default_profile(xml, &loc).unwrap();
+        assert_eq!(maps[0].actions[0].label.as_deref(), Some("First Second"));
     }
 
     #[test]
