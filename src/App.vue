@@ -40,6 +40,7 @@ import type {
   LoadStatus,
   LoggedInput,
   Mode,
+  OverlayPosition,
   ResolvedBinding,
   ScStatus,
   SlotStatus,
@@ -55,6 +56,7 @@ import {
   shapeImageFiles,
   type ImageMap,
   type ImageMapSummary,
+  type OverlayTarget,
 } from "./imagemap";
 import { startKeyboardCapture, startMouseCapture } from "./keyboard";
 
@@ -182,6 +184,9 @@ const debugLogging = ref(false);
 const updateCheck = ref(true);
 // Which release feed the updater reads (Settings).
 const updateChannel = ref<UpdateChannel>("stable");
+// The input-preview overlay's size in px and where it appears (Settings).
+const overlaySize = ref(340);
+const overlayPosition = ref<OverlayPosition>("mouse-offset");
 
 // --- image-maps --------------------------------------------------------
 
@@ -493,6 +498,25 @@ function deviceForKind(b: ResolvedBinding): DeviceInfo | undefined {
   return guid ? devices.value.find((d) => sameHardware(d.hardware_id, guid)) : undefined;
 }
 
+// The image-map preview target for a device slot (Bindings tab overlay): the
+// resolved device, its chosen map, and the image resolvers — or null when the
+// slot has no connected device or no (loaded) map. Mirrors `deviceForKind`
+// but keyed by kind + instance, as the Bindings List columns are.
+function overlayFor(kind: DeviceKind, instance: number): OverlayTarget | null {
+  let device: DeviceInfo | undefined;
+  if (kind === "keyboard") device = devices.value.find((d) => d.kind === "keyboard");
+  else if (kind === "gamepad") device = devices.value.find((d) => d.kind === "gamepad" && d.gamepad_slot !== null);
+  else {
+    const guid = slotByInstance.value.get(instance)?.sc_product_guid;
+    device = guid ? devices.value.find((d) => sameHardware(d.hardware_id, guid)) : undefined;
+  }
+  if (!device) return null;
+  const id = chosenMapId(device);
+  const map = id ? loadedMaps.value[id] : null;
+  if (!id || !map) return null;
+  return { device, map, src: imgSrc(id, map.image.file), imageUrl: (file: string) => imgSrc(id, file) };
+}
+
 // Where a flashed binding lights up: the device and its input's key, plus
 // every key of the map that gets lit (a combo's modifiers too, when the
 // map has shapes for them).
@@ -727,6 +751,8 @@ async function applySettings(s: {
   debugLogging: boolean;
   updateCheck: boolean;
   updateChannel: UpdateChannel;
+  overlaySize: number;
+  overlayPosition: OverlayPosition;
 }) {
   // A changed active environment means another bindings file: settle the
   // pending rebinds first.
@@ -744,6 +770,10 @@ async function applySettings(s: {
     updateCheck.value = s.updateCheck;
     await invoke("set_update_channel", { channel: s.updateChannel });
     updateChannel.value = s.updateChannel;
+    await invoke("set_overlay_size", { size: s.overlaySize });
+    overlaySize.value = s.overlaySize;
+    await invoke("set_overlay_position", { position: s.overlayPosition });
+    overlayPosition.value = s.overlayPosition;
     const reloading = await invoke<boolean>("set_environments", { environments: s.environments });
     environments.value = s.environments;
     if (reloading) {
@@ -1302,6 +1332,8 @@ onMounted(async () => {
     setDebugLogging(cfg.debug_logging);
     updateCheck.value = cfg.update_check;
     updateChannel.value = cfg.update_channel;
+    overlaySize.value = cfg.overlay_size;
+    overlayPosition.value = cfg.overlay_position;
     mapChoices.value = cfg.imagemap_choices ?? {};
   });
   await step("Image-maps", reloadMaps);
@@ -1373,6 +1405,8 @@ onUnmounted(() => {
       :debugLogging="debugLogging"
       :updateCheck="updateCheck"
       :updateChannel="updateChannel"
+      :overlaySize="overlaySize"
+      :overlayPosition="overlayPosition"
       @close="showSettings = false"
       @save="applySettings"
       @notify="notify"
@@ -1457,6 +1491,9 @@ onUnmounted(() => {
       :hasCurrent="currentLoaded"
       :tokenLabel="tokenLabel"
       :inputToken="rebindToken"
+      :overlayFor="overlayFor"
+      :overlaySize="overlaySize"
+      :overlayPosition="overlayPosition"
       @notify="notify"
       @restored="onRestored"
       @applied="onApplied"

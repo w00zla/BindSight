@@ -11,9 +11,11 @@ import ConfirmDialog, { type ConfirmButton, type ConfirmIcon } from "./ConfirmDi
 import { AXIS_PRESS, KIND_RANK, inputIdentity, kindIcon, recordEdge } from "../devices";
 import Dropdown, { type DropdownOption } from "./Dropdown.vue";
 import ConsoleCommandDialog from "./ConsoleCommandDialog.vue";
+import InputOverlay from "./InputOverlay.vue";
 import { persistedRef } from "../persist";
 import { recording } from "../keyboard";
 import { NAME_MAX, sanitizeName, stripNameChars } from "../names";
+import { inputKeysForToken, type OverlayTarget } from "../imagemap";
 import type {
   ActionMap,
   ActionRef,
@@ -30,6 +32,7 @@ import type {
   JoyInput,
   LoadStatus,
   CurrentBindingsInfo,
+  OverlayPosition,
   RebindChange,
   ResolvedBinding,
 } from "../types";
@@ -47,6 +50,11 @@ const props = defineProps<{
   // SC's label for an input token; echoes the token when there is none.
   tokenLabel: (token: string) => string;
   inputToken: (p: JoyInput) => string | null;
+  // The input-preview overlay: resolve a device slot to its chosen map, and
+  // the overlay's persisted size (px) and placement.
+  overlayFor: (kind: DeviceKind, instance: number) => OverlayTarget | null;
+  overlaySize: number;
+  overlayPosition: OverlayPosition;
 }>();
 const emit = defineEmits<{
   notify: [message: string, type: "ok" | "error"];
@@ -1094,31 +1102,38 @@ interface RebindLine {
   changed: boolean;
 }
 
-// Current bindings of the action on every device (pending ones included).
+// Current bindings of the action on every device slot (pending ones included),
+// one line per slot — empty ones show too, so every device is always visible.
 const rebindBefore = computed<RebindLine[]>(() => {
   const r = rebind.value;
   if (!r) return [];
-  return deviceCols.value.flatMap((col) =>
-    cellTokens(r.row, col).tokens.map((t) => ({ device: col.key, kind: col.kind, text: inputText(t), changed: false })),
-  );
+  return deviceCols.value.map((col) => ({
+    device: col.key,
+    kind: col.kind,
+    text: cellTokens(r.row, col).tokens.map(inputText).join(", "),
+    changed: false,
+  }));
 });
 
 // The same once the dialog's changes apply: a kind with a change shows its
-// new token on its device (nothing for a clear), the other kinds stay.
+// new token on its device (empty for a clear, or on the kind's other slots
+// the rebind replaced), the other kinds stay.
 const rebindAfter = computed<RebindLine[]>(() => {
   const r = rebind.value;
   if (!r) return [];
-  return deviceCols.value.flatMap((col) => {
+  return deviceCols.value.map((col) => {
     const change = r.changes.get(col.kind);
-    if (change === undefined) return rebindBefore.value.filter((b) => b.device === col.key);
+    if (change === undefined) {
+      return { device: col.key, kind: col.kind, text: rebindBefore.value.find((b) => b.device === col.key)?.text ?? "", changed: false };
+    }
     const target = parseToken(change);
-    if (isBlank(change) || !target || deviceKeyOf(col.kind, target.instance) !== col.key) return [];
-    return [{ device: col.key, kind: col.kind, text: inputText(change), changed: true }];
+    const landsHere = !isBlank(change) && !!target && deviceKeyOf(col.kind, target.instance) === col.key;
+    return { device: col.key, kind: col.kind, text: landsHere ? inputText(change) : "", changed: landsHere };
   });
 });
 
 const rebindButtons = computed<ConfirmButton[]>(() => [
-  { label: "Clear All", kind: "danger", value: "clearall", side: "left", disabled: !rebindAfter.value.length },
+  { label: "Clear All", kind: "danger", value: "clearall", side: "left", disabled: !rebindAfter.value.some((l) => l.text) },
   { label: "Apply", kind: "primary", value: "apply", disabled: !rebind.value?.changes.size },
   { label: "Cancel", kind: "outline", value: "cancel" },
 ]);
@@ -1126,14 +1141,14 @@ const rebindButtons = computed<ConfirmButton[]>(() => [
 // Clear one kind: no binding on any of its devices. The blank goes on the
 // device that shows the binding (a joystick default sits on js1).
 function clearKind(kind: DeviceKind) {
-  const shown = rebindBefore.value.find((l) => l.kind === kind);
+  const shown = rebindBefore.value.find((l) => l.kind === kind && l.text);
   const instance = Number(/^js(\d+)$/.exec(shown?.device ?? "")?.[1] ?? 1);
   rebind.value?.changes.set(kind, blankToken(kind, instance));
 }
 
 // Clear every kind that still has a binding on show.
 function clearAll() {
-  for (const kind of new Set(rebindAfter.value.map((l) => l.kind))) clearKind(kind);
+  for (const kind of new Set(rebindAfter.value.filter((l) => l.text).map((l) => l.kind))) clearKind(kind);
 }
 
 // A recorded input becomes its kind's change.
@@ -1244,6 +1259,73 @@ watch(recording, (on) => {
     candidate.value = null;
     pendingPress = null;
   }
+});
+
+// --- input-preview overlay -------------------------------------------------
+
+interface OverlayState {
+  target: OverlayTarget;
+  active: Set<string>;
+  anchor: { x: number; y: number } | null;
+  position: OverlayPosition;
+}
+const overlay = ref<OverlayState | null>(null);
+
+// The map + highlight for a device slot and its SC tokens, or null when the
+// slot has no connected device / loaded map, or the tokens light nothing.
+function overlayContent(kind: DeviceKind, instance: number, tokens: string[]): Pick<OverlayState, "target" | "active"> | null {
+  const target = props.overlayFor(kind, instance);
+  if (!target || !target.src || !tokens.length) return null;
+  const active = new Set<string>();
+  for (const t of tokens) for (const k of inputKeysForToken(t, target.device)) active.add(k);
+  return active.size ? { target, active } : null;
+}
+
+// Hover a binding cell: the overlay appears once the pointer settles and
+// vanishes on the next move (or on leave), so it never covers the label.
+const HOVER_DELAY = 200;
+let hoverTimer: ReturnType<typeof setTimeout> | null = null;
+function clearHoverTimer() {
+  if (hoverTimer) clearTimeout(hoverTimer);
+  hoverTimer = null;
+}
+function onCellMove(e: MouseEvent, row: ListRow, col: DeviceCol) {
+  clearHoverTimer();
+  overlay.value = null;
+  const x = e.clientX;
+  const y = e.clientY;
+  hoverTimer = setTimeout(() => {
+    const s = overlayContent(col.kind, col.instance, cellTokens(row, col).tokens);
+    if (s) overlay.value = { ...s, anchor: { x, y }, position: props.overlayPosition };
+  }, HOVER_DELAY);
+}
+function onCellLeave() {
+  clearHoverTimer();
+  overlay.value = null;
+}
+onUnmounted(clearHoverTimer);
+
+// The last cursor position, so the record overlay can honour a "near cursor"
+// preference even though a recorded press carries no mouse move of its own.
+let lastMouse = { x: 0, y: 0 };
+function trackMouse(e: MouseEvent) {
+  lastMouse = { x: e.clientX, y: e.clientY };
+}
+onMounted(() => window.addEventListener("mousemove", trackMouse));
+onUnmounted(() => window.removeEventListener("mousemove", trackMouse));
+
+// Record mode: the overlay follows the record buffer's candidate, placed by
+// the same setting as the hover overlay (no cursor here, so "near cursor"
+// lands at the offset from the top-left origin).
+watch(candidate, (c) => {
+  if (!c) {
+    overlay.value = null;
+    return;
+  }
+  const parsed = parseToken(c.token);
+  const s = parsed ? overlayContent(parsed.kind, parsed.instance, [c.token]) : null;
+  const anchor = props.overlayPosition === "mouse-offset" ? { ...lastMouse } : null;
+  overlay.value = s ? { ...s, anchor, position: props.overlayPosition } : null;
 });
 
 function onRebindChoose(value: string) {
@@ -1627,9 +1709,10 @@ async function compareWith(key: string) {
                   :key="c.key"
                   class="bind-cell"
                   :class="{ pending: cellTokens(r, c).pending, empty: !bindText(r, c), live: liveOn && isLiveCell(r, c) }"
-                  :title="cellTokens(r, c).tokens.join(', ')"
                   @dblclick.stop="openRebind(r, g)"
-                ><Icon name="bolt" :size="12" class="live-mark" />{{ bindText(r, c) || "—" }}</span>
+                  @mousemove="onCellMove($event, r, c)"
+                  @mouseleave="onCellLeave"
+                ><Icon name="bolt" :size="12" class="live-mark" /><span class="bind-text">{{ bindText(r, c) || "—" }}</span></span>
               </div>
             </template>
           </template>
@@ -1654,9 +1737,10 @@ async function compareWith(key: string) {
               :key="c.key"
               class="bind-cell"
               :class="{ pending: cellTokens(fr.row, c).pending, empty: !bindText(fr.row, c), live: liveOn && isLiveCell(fr.row, c) }"
-              :title="cellTokens(fr.row, c).tokens.join(', ')"
               @dblclick.stop="openRebind(fr.row, fr.group)"
-            ><Icon name="bolt" :size="12" class="live-mark" />{{ bindText(fr.row, c) || "—" }}</span>
+              @mousemove="onCellMove($event, fr.row, c)"
+              @mouseleave="onCellLeave"
+            ><Icon name="bolt" :size="12" class="live-mark" /><span class="bind-text">{{ bindText(fr.row, c) || "—" }}</span></span>
           </div>
         </template>
         <div v-if="!shownGroups.length" class="empty-line">{{ groups.length ? "No matches" : "No game data" }}</div>
@@ -1877,10 +1961,10 @@ async function compareWith(key: string) {
         <div class="rb-side">
           <span class="rb-label">Before</span>
           <div class="rb-block">
-            <div v-for="b in rebindBefore" :key="`${b.device}:${b.text}`" class="rb-line">
+            <div v-for="b in rebindBefore" :key="b.device" class="rb-line">
               <span class="mono dim">{{ b.device }}</span>
-              <span class="rb-text">{{ b.text }}</span>
-              <button type="button" class="icon-btn rb-clear" title="Clear" @click="clearKind(b.kind)">
+              <span class="rb-text" :class="{ dim: !b.text }">{{ b.text || "—" }}</span>
+              <button v-if="b.text" type="button" class="icon-btn rb-clear" title="Clear" @click="clearKind(b.kind)">
                 <Icon name="close" :size="12" />
               </button>
             </div>
@@ -1891,9 +1975,9 @@ async function compareWith(key: string) {
         <div class="rb-side">
           <span class="rb-label">After</span>
           <div class="rb-block">
-            <div v-for="a in rebindAfter" :key="`${a.device}:${a.text}`" class="rb-line">
+            <div v-for="a in rebindAfter" :key="a.device" class="rb-line">
               <span class="mono dim">{{ a.device }}</span>
-              <span class="rb-text" :class="{ 'rb-new': a.changed }">{{ a.text }}</span>
+              <span class="rb-text" :class="{ 'rb-new': a.changed, dim: !a.text }">{{ a.text || "—" }}</span>
             </div>
             <div v-if="!rebindAfter.length" class="rb-line dim">—</div>
           </div>
@@ -1942,6 +2026,17 @@ async function compareWith(key: string) {
       :command="reorderCommand"
       @close="reorderCommand = null"
       @copy="emit('copy', $event)"
+    />
+
+    <InputOverlay
+      v-if="overlay"
+      :map="overlay.target.map"
+      :src="overlay.target.src"
+      :imageUrl="overlay.target.imageUrl"
+      :active="overlay.active"
+      :size="overlaySize"
+      :position="overlay.position"
+      :anchor="overlay.anchor"
     />
   </div>
 </template>
@@ -2798,7 +2893,20 @@ async function compareWith(key: string) {
 }
 
 .bind-cell {
+  /* Fill the whole grid cell (the row centres its items, so a bare span would
+     only be text-tall) so the hover preview triggers across the cell. */
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  min-width: 0;
   transition: color 600ms ease-out;
+}
+
+.bind-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .bind-cell.live {

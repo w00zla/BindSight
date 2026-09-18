@@ -467,6 +467,34 @@ fn set_update_channel(channel: config::UpdateChannel, app: AppHandle, data: Stat
     }
 }
 
+/// Persist the input-preview overlay's size in px (Settings Save).
+#[tauri::command]
+fn set_overlay_size(size: u32, app: AppHandle, data: State<Mutex<AppData>>) {
+    let mut data = data.lock().unwrap();
+    if data.config.overlay_size == size {
+        return;
+    }
+    data.config.overlay_size = size;
+    info!("overlay size set: {size}");
+    if let Err(e) = config::save(&app, &data.config) {
+        error!("failed to save config: {e}");
+    }
+}
+
+/// Persist the input-preview overlay's position (Settings Save).
+#[tauri::command]
+fn set_overlay_position(position: config::OverlayPosition, app: AppHandle, data: State<Mutex<AppData>>) {
+    let mut data = data.lock().unwrap();
+    if data.config.overlay_position == position {
+        return;
+    }
+    data.config.overlay_position = position;
+    info!("overlay position set: {position:?}");
+    if let Err(e) = config::save(&app, &data.config) {
+        error!("failed to save config: {e}");
+    }
+}
+
 /// Open a folder in the system file manager. Inside an AppImage the bundle
 /// ships its own (build-host) `xdg-open` and puts `$APPDIR/usr/bin` first on
 /// `PATH`; that `xdg-open`, and the file manager it launches, then load the
@@ -1251,6 +1279,8 @@ pub fn run() {
             set_debug_logging,
             set_update_check,
             set_update_channel,
+            set_overlay_size,
+            set_overlay_position,
             update::check_update,
             update::install_update,
             diff::compare_bindings

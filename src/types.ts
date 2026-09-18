@@ -97,6 +97,10 @@ export type LoggedInput = JoyInput & { id: number; at: number; token: string | n
 // the newest published release including pre-releases.
 export type UpdateChannel = "stable" | "prerelease";
 
+// Where the input-preview overlay appears: pinned to a screen corner, or
+// offset from the mouse pointer.
+export type OverlayPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right" | "mouse-offset";
+
 export interface SystemInfo {
   app_version: string;
   os: string;
@@ -140,6 +144,10 @@ export interface Config {
   update_check: boolean;
   // Which release feed the updater reads.
   update_channel: UpdateChannel;
+  // The input-preview overlay's size in px (its longer side).
+  overlay_size: number;
+  // Where the input-preview overlay appears.
+  overlay_position: OverlayPosition;
 }
 
 export interface Action {

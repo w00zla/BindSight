@@ -88,6 +88,15 @@ export interface ImageMapSummary {
   shape_count: number;
 }
 
+// Everything an input-preview overlay needs for one device slot: its resolved
+// device, the chosen map and the resolvers for its images (already loaded).
+export interface OverlayTarget {
+  device: DeviceInfo;
+  map: ImageMap;
+  src: string;
+  imageUrl: (file: string) => string;
+}
+
 // Files the image shapes of a map reference (the device image not included).
 export function shapeImageFiles(map: ImageMap): string[] {
   const out: string[] = [];
