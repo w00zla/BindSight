@@ -398,6 +398,10 @@ export interface DiffReport {
   removed: number;
   changed: number;
   same: number;
+  // The <options> joystick devices of each side (empty for Current); the
+  // Apply dialog names the source's devices per slot from a_joysticks.
+  a_joysticks: JoystickDevice[];
+  b_joysticks: JoystickDevice[];
 }
 
 // One device to take over when applying a profile or backup (apply.rs); a

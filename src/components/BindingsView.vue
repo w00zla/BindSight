@@ -428,6 +428,14 @@ function slotName(n: number): string {
   return info.value?.joysticks.find((j) => j.instance === n)?.product_name ?? "";
 }
 
+// The source profile/backup's own device on a joystick slot (from the diff's
+// A side); empty for keyboard/gamepad (SC names only one of each) or when the
+// source lists no name.
+function sourceName(d: ApplyDevice): string {
+  if (d.sel.kind !== "joystick") return "";
+  return report.value?.a_joysticks.find((j) => j.instance === d.sel.instance)?.product_name ?? "";
+}
+
 function openApply() {
   if (bKey.value === CURRENT) return;
   const devices = applyDeviceList();
@@ -822,10 +830,15 @@ const countSummary = computed(() => {
   return [`${props.bindings.length} total`, ...perDevice].join(" · ");
 });
 
-// The list is in the game's order and not sortable; the last visible device
-// column is the filler.
+// Grouped by category (the game's keybinding screen), or one flat, sortable
+// table. The device columns follow the game's order and never sort; the last
+// visible device column is the filler.
+const listGrouped = persistedRef<boolean>("bindsight.list.grouped", true);
 const listColumns = computed<ColumnSpec[]>(() => [
-  { key: "action", label: "ACTION", width: 320, sortable: false, icon: "target" },
+  // Both sortable in both views: flat sorts the whole list; grouped, ACTION
+  // sorts the rows inside each category and CATEGORY orders the groups.
+  { key: "category", label: "CATEGORY", width: 220, icon: "list" },
+  { key: "action", label: "ACTION", width: 320, icon: "target" },
   ...visibleCols.value.map((d, i, all) => ({
     key: d.key,
     label: d.label.toUpperCase(),
@@ -835,7 +848,7 @@ const listColumns = computed<ColumnSpec[]>(() => [
     icon: d.kind === "keyboard" ? "keyboard" : d.kind === "gamepad" ? "gamepad" : "devices",
   })),
 ]);
-const listCols = useTableColumns("bindsight.columns.bindingslist", listColumns, { key: "action", dir: "asc" });
+const listCols = useTableColumns("bindsight.columns.bindingslist", listColumns, { key: "category", dir: "asc" });
 
 interface ListRow {
   actionmap: string;
@@ -864,7 +877,8 @@ const groups = computed<ListGroup[]>(() => {
     }
     for (const a of m.actions) g.rows.push({ actionmap: m.name, action: a.name, label: a.label ?? a.name });
   }
-  return out;
+  // Categories listed A–Z (the game's own order is arbitrary).
+  return out.sort((a, b) => collator.compare(a.label, b.label));
 });
 
 // Expanded categories; everything starts collapsed like in the game.
@@ -907,6 +921,39 @@ function expandAll() {
 function collapseAll() {
   expanded.value = new Set();
 }
+
+// Flat view: every row across all (filtered) groups, sorted by the active
+// column. The group is kept so the row still knows its category and rebind
+// context.
+interface FlatListRow {
+  row: ListRow;
+  group: ListGroup;
+}
+const flatRows = computed<FlatListRow[]>(() => {
+  const rows: FlatListRow[] = [];
+  for (const g of shownGroups.value) for (const r of g.rows) rows.push({ row: r, group: g });
+  return sortRows(
+    rows,
+    listCols.sort.value,
+    (fr, key) => (key === "category" ? fr.group.label : fr.row.label),
+    (a, b) => collator.compare(a.row.label, b.row.label),
+  );
+});
+
+// Grouped view: ACTION sorts the rows inside each group; CATEGORY orders the
+// groups themselves (any other sort leaves them A–Z from `groups`).
+const sortedGroups = computed<ListGroup[]>(() => {
+  const s = listCols.sort.value;
+  const list = shownGroups.value.map((g) => ({
+    ...g,
+    rows: sortRows(g.rows, s, (r, key) => (key === "category" ? g.label : r.label), (a, b) => collator.compare(a.label, b.label)),
+  }));
+  if (s.key === "category") {
+    const dir = s.dir === "desc" ? -1 : 1;
+    list.sort((a, b) => dir * collator.compare(a.label, b.label));
+  }
+  return list;
+});
 
 function rowKey(actionmap: string, action: string): string {
   return `${actionmap}\u0000${action}`;
@@ -1433,6 +1480,15 @@ async function compareWith(key: string) {
       <div class="tile-btns">
         <span class="mono tile-facts">{{ countSummary }}</span>
         <div class="spacer" />
+        <button type="button" class="btn outline small" :disabled="busy || !hasCurrent" @click="openSaveProfile">
+          <Icon name="file" :size="14" />
+          Save Profile
+        </button>
+        <button type="button" class="btn outline small" :disabled="busy || !hasCurrent" @click="createBackup">
+          <Icon name="history" :size="14" />
+          Create Backup
+        </button>
+        <div class="tile-divider" />
         <button
           type="button"
           class="btn outline small"
@@ -1442,15 +1498,6 @@ async function compareWith(key: string) {
         >
           <Icon name="swap" :size="14" />
           Reorder Joysticks
-        </button>
-        <div class="tile-divider" />
-        <button type="button" class="btn outline small" :disabled="busy || !hasCurrent" @click="openSaveProfile">
-          <Icon name="file" :size="14" />
-          Save Profile
-        </button>
-        <button type="button" class="btn outline small" :disabled="busy || !hasCurrent" @click="createBackup">
-          <Icon name="history" :size="14" />
-          Create Backup
         </button>
         <div class="tile-divider" />
         <span v-if="dirty" class="tile-dirty">{{ changesText() }}</span>
@@ -1502,10 +1549,19 @@ async function compareWith(key: string) {
         <Icon name="bindings" :size="16" />
         <span class="head-title no-grow">Bindings List</span>
         <div class="divider" />
-        <button type="button" class="btn outline small square" title="Expand all" :disabled="allExpanded" @click="expandAll">
+        <button
+          type="button"
+          class="btn small square"
+          :class="listGrouped ? 'primary' : 'outline'"
+          title="Group by category"
+          @click="listGrouped = !listGrouped"
+        >
+          <Icon name="group" :size="14" />
+        </button>
+        <button type="button" class="btn outline small square" title="Expand all" :disabled="!listGrouped || allExpanded" @click="expandAll">
           <Icon name="unfold" :size="14" />
         </button>
-        <button type="button" class="btn outline small square" title="Collapse all" :disabled="!expanded.size" @click="collapseAll">
+        <button type="button" class="btn outline small square" title="Collapse all" :disabled="!listGrouped || !expanded.size" @click="collapseAll">
           <Icon name="fold" :size="14" />
         </button>
         <span class="head-hint">
@@ -1541,39 +1597,67 @@ async function compareWith(key: string) {
         <ColumnHead
           :columns="listColumns"
           :sort="listCols.sort.value"
-          @sort="() => {}"
+          @sort="listCols.toggleSort"
           @resize="listCols.startResize"
           @reset="listCols.resetWidth"
         />
-        <template v-for="g in shownGroups" :key="g.key">
-          <div class="group-row" :class="{ live: liveOn && g.rows.some(isLive) }" @click="toggleGroup(g.key)">
-            <Icon :name="isOpen(g) ? 'chevron-down' : 'chevron-right'" :size="14" />
-            <span class="group-label">{{ g.label }}</span>
-          </div>
-          <template v-if="isOpen(g)">
-            <div
-              v-for="r in g.rows"
-              :key="r.action"
-              class="row list-row"
-              :class="{ live: liveOn && isLive(r) }"
-              @dblclick="openRebind(r, g)"
-            >
-              <span class="action-cell">
-                <button type="button" class="icon-btn framed" title="Set binding" @click.stop="openRebind(r, g)" @dblclick.stop>
-                  <Icon name="target" :size="12" />
-                </button>
-                <span class="action-label" :title="r.action">{{ r.label }}</span>
-              </span>
-              <span
-                v-for="c in visibleCols"
-                :key="c.key"
-                class="bind-cell"
-                :class="{ pending: cellTokens(r, c).pending, empty: !bindText(r, c), live: liveOn && isLiveCell(r, c) }"
-                :title="cellTokens(r, c).tokens.join(', ')"
-                @dblclick.stop="openRebind(r, g)"
-              ><Icon name="bolt" :size="12" class="live-mark" />{{ bindText(r, c) || "—" }}</span>
+        <template v-if="listGrouped">
+          <template v-for="g in sortedGroups" :key="g.key">
+            <div class="group-row" :class="{ live: liveOn && g.rows.some(isLive) }" @click="toggleGroup(g.key)">
+              <Icon :name="isOpen(g) ? 'chevron-down' : 'chevron-right'" :size="14" />
+              <span class="group-label">{{ g.label }}</span>
             </div>
+            <template v-if="isOpen(g)">
+              <div
+                v-for="r in g.rows"
+                :key="r.action"
+                class="row list-row"
+                :class="{ live: liveOn && isLive(r) }"
+                @dblclick="openRebind(r, g)"
+              >
+                <span />
+                <span class="action-cell">
+                  <button type="button" class="icon-btn framed" title="Set binding" @click.stop="openRebind(r, g)" @dblclick.stop>
+                    <Icon name="target" :size="12" />
+                  </button>
+                  <span class="action-label" :title="r.action">{{ r.label }}</span>
+                </span>
+                <span
+                  v-for="c in visibleCols"
+                  :key="c.key"
+                  class="bind-cell"
+                  :class="{ pending: cellTokens(r, c).pending, empty: !bindText(r, c), live: liveOn && isLiveCell(r, c) }"
+                  :title="cellTokens(r, c).tokens.join(', ')"
+                  @dblclick.stop="openRebind(r, g)"
+                ><Icon name="bolt" :size="12" class="live-mark" />{{ bindText(r, c) || "—" }}</span>
+              </div>
+            </template>
           </template>
+        </template>
+        <template v-else>
+          <div
+            v-for="fr in flatRows"
+            :key="`${fr.row.actionmap} ${fr.row.action}`"
+            class="row list-row"
+            :class="{ live: liveOn && isLive(fr.row) }"
+            @dblclick="openRebind(fr.row, fr.group)"
+          >
+            <span class="bucket-category">{{ fr.group.label }}</span>
+            <span class="action-cell">
+              <button type="button" class="icon-btn framed" title="Set binding" @click.stop="openRebind(fr.row, fr.group)" @dblclick.stop>
+                <Icon name="target" :size="12" />
+              </button>
+              <span class="action-label" :title="fr.row.action">{{ fr.row.label }}</span>
+            </span>
+            <span
+              v-for="c in visibleCols"
+              :key="c.key"
+              class="bind-cell"
+              :class="{ pending: cellTokens(fr.row, c).pending, empty: !bindText(fr.row, c), live: liveOn && isLiveCell(fr.row, c) }"
+              :title="cellTokens(fr.row, c).tokens.join(', ')"
+              @dblclick.stop="openRebind(fr.row, fr.group)"
+            ><Icon name="bolt" :size="12" class="live-mark" />{{ bindText(fr.row, c) || "—" }}</span>
+          </div>
         </template>
         <div v-if="!shownGroups.length" class="empty-line">{{ groups.length ? "No matches" : "No game data" }}</div>
       </div>
@@ -1732,7 +1816,7 @@ async function compareWith(key: string) {
       :title="`${applyWord} ${nameFor(bKey)}`"
       icon="check"
       :buttons="applyButtons"
-      :width="720"
+      :width="800"
       @choose="onApplyChoose"
     >
       <!-- one row per device: take it over or not, and for a joystick the
@@ -1753,8 +1837,8 @@ async function compareWith(key: string) {
             <input type="checkbox" :checked="applyDialog.on.has(d.key)" @change="toggleApplyDevice(d.key)" />
           </label>
           <span class="apply-device">
-            <Icon :name="kindIcon(d.sel.kind)" :size="14" />
-            <span class="mono">{{ d.key }}</span>
+            <span class="mono dim">{{ d.key }}</span>
+            <span v-if="sourceName(d)" class="check-name">{{ sourceName(d) }}</span>
           </span>
           <span class="apply-slot">
             <template v-if="d.sel.kind === 'joystick'">
@@ -1926,7 +2010,7 @@ async function compareWith(key: string) {
 .apply-head,
 .apply-row {
   display: grid;
-  grid-template-columns: 24px 110px minmax(0, 1fr);
+  grid-template-columns: 24px minmax(240px, 1fr) minmax(0, 1fr);
   gap: 12px;
   align-items: center;
   padding: 8px 4px;
