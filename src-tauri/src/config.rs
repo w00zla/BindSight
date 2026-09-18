@@ -78,6 +78,29 @@ pub struct Config {
     /// Which release feed the updater reads (see `update.rs`).
     #[serde(default)]
     pub update_channel: UpdateChannel,
+    /// The input-preview overlay's size in px (its longer side).
+    #[serde(default = "default_overlay_size")]
+    pub overlay_size: u32,
+    /// Where the input-preview overlay appears.
+    #[serde(default)]
+    pub overlay_position: OverlayPosition,
+}
+
+/// Where the input-preview overlay is shown: pinned to a screen corner, or
+/// offset from the mouse pointer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OverlayPosition {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    #[default]
+    MouseOffset,
+}
+
+fn default_overlay_size() -> u32 {
+    340
 }
 
 /// The updater's channel: stable = GitHub's latest full release,
@@ -108,6 +131,8 @@ impl Default for Config {
             debug_logging: false,
             update_check: default_update_check(),
             update_channel: UpdateChannel::Stable,
+            overlay_size: default_overlay_size(),
+            overlay_position: OverlayPosition::default(),
         }
     }
 }
@@ -244,6 +269,15 @@ mod tests {
         assert_eq!(serde_json::from_str::<Config>(r#"{"update_channel":"prerelease"}"#).unwrap().update_channel, UpdateChannel::Prerelease);
         assert!(serde_json::from_str::<Config>(r#"{"update_channel":"nightly"}"#).is_err());
         assert_eq!(serde_json::to_value(UpdateChannel::Prerelease).unwrap(), "prerelease");
+        // Overlay defaults, and the position serializes kebab-case.
+        assert_eq!(c.overlay_size, 340);
+        assert_eq!(c.overlay_position, OverlayPosition::MouseOffset);
+        assert_eq!(serde_json::from_str::<Config>(r#"{"overlay_size":200}"#).unwrap().overlay_size, 200);
+        assert_eq!(
+            serde_json::from_str::<Config>(r#"{"overlay_position":"top-right"}"#).unwrap().overlay_position,
+            OverlayPosition::TopRight
+        );
+        assert_eq!(serde_json::to_value(OverlayPosition::BottomLeft).unwrap(), "bottom-left");
 
         // An unknown active slug falls back to LIVE; an override that is off
         // or has no path is none.

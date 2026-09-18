@@ -5,7 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import Dropdown, { type DropdownOption } from "./Dropdown.vue";
-import { ENVIRONMENTS, type Environment, type UpdateChannel } from "../types";
+import { ENVIRONMENTS, type Environment, type OverlayPosition, type UpdateChannel } from "../types";
 
 const props = defineProps<{
   environments: Record<string, Environment>;
@@ -13,6 +13,8 @@ const props = defineProps<{
   debugLogging: boolean;
   updateCheck: boolean;
   updateChannel: UpdateChannel;
+  overlaySize: number;
+  overlayPosition: OverlayPosition;
 }>();
 // Escape closes without saving, like the Cancel button.
 function onKey(e: KeyboardEvent) {
@@ -30,6 +32,8 @@ const emit = defineEmits<{
       debugLogging: boolean;
       updateCheck: boolean;
       updateChannel: UpdateChannel;
+      overlaySize: number;
+      overlayPosition: OverlayPosition;
     },
   ];
   notify: [message: string, type: "ok" | "error"];
@@ -68,6 +72,15 @@ const updateChannel = ref<string>(props.updateChannel);
 const CHANNELS: DropdownOption[] = [
   { value: "stable", label: "Stable" },
   { value: "prerelease", label: "Pre-Release" },
+];
+const overlaySize = ref(props.overlaySize);
+const overlayPosition = ref<string>(props.overlayPosition);
+const OVERLAY_POSITIONS: DropdownOption[] = [
+  { value: "mouse-offset", label: "Near Cursor" },
+  { value: "top-left", label: "Top Left" },
+  { value: "top-right", label: "Top Right" },
+  { value: "bottom-left", label: "Bottom Left" },
+  { value: "bottom-right", label: "Bottom Right" },
 ];
 
 // Immediate, not part of Save: opens the folder in the file manager.
@@ -143,6 +156,21 @@ async function browseIni(slug: string) {
         </section>
 
         <section>
+          <div class="panel-title">Input Preview Overlay</div>
+          <div class="row between">
+            <label class="slider">
+              Size
+              <input v-model.number="overlaySize" type="range" min="100" max="800" step="20" />
+              <span class="mono size-val">{{ overlaySize }}px</span>
+            </label>
+            <span class="channel">
+              Position
+              <Dropdown v-model="overlayPosition" :options="OVERLAY_POSITIONS" variant="outline" up />
+            </span>
+          </div>
+        </section>
+
+        <section>
           <div class="panel-title">Backups</div>
           <div class="row between">
             <label class="check"><input :checked="autoBackup" type="checkbox" @change="onAutoBackupChange" /> Enable auto-backups</label>
@@ -151,15 +179,7 @@ async function browseIni(slug: string) {
         </section>
 
         <section>
-          <div class="panel-title">Logging</div>
-          <div class="row between">
-            <label class="check"><input v-model="debugLogging" type="checkbox" /> Enable debug logging</label>
-            <button type="button" class="btn outline" @click="openLogDir">Open Log Folder</button>
-          </div>
-        </section>
-
-        <section>
-          <div class="panel-title">Updates</div>
+          <div class="panel-title">Application</div>
           <div class="row between">
             <label class="check"><input v-model="updateCheck" type="checkbox" /> Check for updates at startup</label>
             <span class="channel">
@@ -167,12 +187,16 @@ async function browseIni(slug: string) {
               <Dropdown v-model="updateChannel" :options="CHANNELS" variant="outline" up />
             </span>
           </div>
+          <div class="row between">
+            <label class="check"><input v-model="debugLogging" type="checkbox" /> Enable debug logging</label>
+            <button type="button" class="btn outline" @click="openLogDir">Open Log Folder</button>
+          </div>
         </section>
       </div>
 
       <div class="foot">
         <button type="button" class="btn outline" @click="emit('close')">Cancel</button>
-        <button type="button" class="btn primary" @click="emit('save', { environments: envs, autoBackup, debugLogging, updateCheck, updateChannel: updateChannel as UpdateChannel })">
+        <button type="button" class="btn primary" @click="emit('save', { environments: envs, autoBackup, debugLogging, updateCheck, updateChannel: updateChannel as UpdateChannel, overlaySize, overlayPosition: overlayPosition as OverlayPosition })">
           <Icon name="save" :size="14" />
           Save
         </button>
@@ -242,7 +266,7 @@ async function browseIni(slug: string) {
   padding: 20px 24px;
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 14px;
   max-height: 75vh;
   overflow-y: auto;
 }
@@ -294,6 +318,25 @@ async function browseIni(slug: string) {
   white-space: nowrap;
 }
 
+/* Size slider on the left of its row. */
+.slider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.slider input[type="range"] {
+  width: 160px;
+  accent-color: var(--accent);
+}
+
+.size-val {
+  width: 52px;
+  color: var(--text-2);
+}
+
 /* The channel picker, parked at the row's right edge like the buttons. */
 .channel {
   display: flex;
@@ -303,10 +346,29 @@ async function browseIni(slug: string) {
   white-space: nowrap;
 }
 
+/* Each settings group is its own tile with its title straddling the top edge,
+   like a fieldset legend, so the sections read apart at a glance. */
 section {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding: 18px 16px 14px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius-panel);
+}
+
+section > .panel-title {
+  position: absolute;
+  top: 0;
+  left: 12px;
+  transform: translateY(-50%);
+  padding: 0 8px;
+  /* The dialog's own ground, to break the tile's top border under the label. */
+  background: var(--bg-surface);
+  color: var(--text-2);
+  font-weight: 600;
 }
 
 .row {
