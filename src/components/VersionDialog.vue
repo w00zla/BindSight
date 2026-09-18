@@ -75,6 +75,12 @@ function choose(value: string) {
         <span class="chip mono" :class="update.kind">{{ update.text }}</span>
       </div>
     </div>
+    <!-- The GitHub release's changelog, shown as plain text. The box keeps its
+         height whether or not notes are loaded, so the dialog never jumps. -->
+    <template v-if="updater">
+      <div class="notes-title">Update Notes:</div>
+      <div class="notes" :class="{ empty: !updater.info?.notes }">{{ updater.info?.notes ?? "" }}</div>
+    </template>
     <template v-if="updater">
       <div class="status" :class="status.kind">
         <span class="status-text" :title="status.text">{{ status.text }}</span>
@@ -120,6 +126,33 @@ function choose(value: string) {
 .chip.accent {
   color: var(--accent);
   font-weight: 600;
+}
+
+.notes-title {
+  margin-top: 6px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.notes {
+  margin-top: 6px;
+  height: 120px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius-control);
+  background: var(--bg-surface-2);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* No update / no notes: hide the box but keep its space, so nothing jumps. */
+.notes.empty {
+  visibility: hidden;
 }
 
 .status {
