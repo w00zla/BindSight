@@ -21,6 +21,7 @@ use crate::config::UpdateChannel;
 
 pub const STABLE_FEED: &str = "https://github.com/w00zla/BindSight/releases/latest/download/latest.json";
 pub const PRERELEASE_FEED: &str = "https://github.com/w00zla/BindSight/releases/download/prerelease-version/latest.json";
+const GITHUB_REPO: &str = "w00zla/BindSight";
 
 /// The feed a channel reads.
 pub fn feed_url(channel: UpdateChannel) -> &'static str {
@@ -28,6 +29,44 @@ pub fn feed_url(channel: UpdateChannel) -> &'static str {
         UpdateChannel::Stable => STABLE_FEED,
         UpdateChannel::Prerelease => PRERELEASE_FEED,
     }
+}
+
+/// The GitHub release body (the changelog) for a version's `v<version>` tag,
+/// as plain text. Best-effort: any failure yields an empty string, because
+/// release notes are cosmetic and must never fail the update check. A
+/// pre-release lives under its real version tag too, so this works on both
+/// channels.
+async fn fetch_release_notes(version: &str) -> String {
+    let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/tags/v{version}");
+    match release_body(&url).await {
+        Ok(body) => body,
+        Err(e) => {
+            warn!("release notes fetch ({url}) failed: {e}");
+            String::new()
+        }
+    }
+}
+
+async fn release_body(url: &str) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        // GitHub rejects requests without a User-Agent.
+        .user_agent(concat!("BindSight/", env!("CARGO_PKG_VERSION")))
+        // Notes are cosmetic: never let a slow API stall the update check.
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(url)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    Ok(json.get("body").and_then(|b| b.as_str()).unwrap_or_default().trim().to_string())
 }
 
 /// The update the last check found, kept for `install_update`.
@@ -70,11 +109,18 @@ pub async fn check_update(
         warn!("update check ({channel:?}) failed: {e}");
         e.to_string()
     })?;
-    let info = found.as_ref().map(|u| UpdateInfo {
-        version: u.version.clone(),
-        date: u.date.map(|d| d.date().to_string()).unwrap_or_default(),
-        notes: u.body.clone().unwrap_or_default(),
-    });
+    let info = if let Some(u) = found.as_ref() {
+        // Prefer the GitHub release's changelog; fall back to the feed's own
+        // `notes` when it cannot be fetched.
+        let gh = fetch_release_notes(&u.version).await;
+        Some(UpdateInfo {
+            version: u.version.clone(),
+            date: u.date.map(|d| d.date().to_string()).unwrap_or_default(),
+            notes: if gh.is_empty() { u.body.clone().unwrap_or_default() } else { gh },
+        })
+    } else {
+        None
+    };
     match &info {
         Some(i) => info!("update check ({channel:?}): v{} available", i.version),
         None => info!("update check ({channel:?}): up to date"),
