@@ -119,7 +119,7 @@ async function browseIni(slug: string) {
 </script>
 
 <template>
-  <div class="backdrop" @click.self="emit('close')">
+  <div class="backdrop">
     <div class="dialog" role="dialog" aria-label="Settings">
       <div class="head">
         <Icon name="settings" :size="18" />

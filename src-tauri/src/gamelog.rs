@@ -167,4 +167,29 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         assert!(err.ends_with("no joystick lines"), "{err}");
     }
+
+    #[test]
+    fn parse_never_panics_on_garbage() {
+        // Pathological input must fail soft (None or a best effort), never panic
+        // (the log is SC's format and may hold anything after a patch).
+        let long = format!("Connected joystick0: {}", "x".repeat(50_000));
+        for input in [
+            "\0\0\0",
+            "Connected joystick",                                 // marker, no colon
+            "Connected joystick:",                                // no index
+            "Connected joystick99999999999999999999: X {G}",      // index overflows u32 -> skipped
+            "Connected joystick0:",                               // index, empty rest
+            "Connected joystick0: name without any brace",
+            "Connected joystick0: {unclosed brace",
+            "München joystick0: Grüße {ÜÖÄ}",                     // multibyte around the brace
+            long.as_str(),
+        ] {
+            let _ = parse(input); // reaching here (no panic) is the assertion
+        }
+        // A well-formed line is still found among binary noise and blank lines.
+        let mixed = "\0garbage\n\n<t> - Connected joystick0:  Stick {0200231D-0000-0000-0000-504944564944}\n\0\0";
+        let e = parse(mixed).unwrap();
+        assert_eq!(e.joysticks.len(), 1);
+        assert_eq!(e.joysticks[0].product_guid.as_deref(), Some("{0200231D-0000-0000-0000-504944564944}"));
+    }
 }

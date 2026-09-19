@@ -84,16 +84,15 @@ pub(crate) struct AppData {
     sc: ScState,
     bindings_file: Option<scdata::ActionMapsFile>,
     index: bindings::BindingIndex,
-    /// SC's joystick order — the one thing every `jsN` comes from: the
-    /// platform's live source (`order::live`, stamped when it changed).
-    /// Errors say why there is none.
+    /// SC's joystick order — the one thing every `jsN` comes from: a mirror of
+    /// [`AppData::game_log`] (see [`refresh_device_order`]). Errors carry a
+    /// player-facing reason ([`NO_ORDER_HINT`]), never a file name.
     device_order: Result<order::DeviceOrder, String>,
-    /// `Game.log` as of the last read: what the game started with — the
-    /// second opinion (`ClashReport::logged_order`), never the source.
+    /// `Game.log` as of the last read (the watch thread's business, read off
+    /// the lock): the order the game enumerated at its last start, and the
+    /// source `device_order` mirrors. The live DirectInput/Wine enumeration
+    /// does not reliably reproduce SC's order (Windows 11), so it is not used.
     game_log: Result<order::DeviceOrder, String>,
-    /// The SDL device list (the same `Arc` the input thread maintains), for
-    /// the live order source — taken briefly, never while it is slow.
-    devices: input::DeviceList,
     /// Why the last `reload_bindings` left `bindings_file` empty, for
     /// `get_load_status`.
     bindings_error: Option<String>,
@@ -185,15 +184,10 @@ pub(crate) fn current_bindings(data: &AppData) -> Vec<bindings::ResolvedBinding>
 }
 
 /// The clash report for the loaded actionmaps.xml against SC's joystick order
-/// (see [`AppData::device_order`]; `live` is [`live_order`], taken by the
-/// caller *before* the lock — DirectInput can take a while — so a hot-plug
-/// is in). `logged_order` carries the game's logged order when it differs.
-fn clash_report(
-    data: &mut AppData,
-    devices: &input::DeviceList,
-    live: Option<Result<order::DeviceOrder, String>>,
-) -> bindings::ClashReport {
-    refresh_device_order(data, live);
+/// (see [`AppData::device_order`], taken from the last `Game.log` read — no
+/// file is touched here, so this stays cheap under the lock).
+fn clash_report(data: &mut AppData, devices: &input::DeviceList) -> bindings::ClashReport {
+    refresh_device_order(data);
     // Without a bindings file (no install configured, or it failed to load)
     // the order still says which joysticks the game sees: the report is
     // taken against an empty file, so `connected` and `unseen` are right
@@ -204,13 +198,6 @@ fn clash_report(
     let mut report = bindings::analyze_clash(profile, &devices, data.device_order.as_ref().map_err(Clone::clone));
     // "Game devices update": when the game last listed its joysticks.
     report.log_timestamp = data.game_log.as_ref().ok().and_then(|l| l.timestamp.clone());
-    // The game keeps the order it started with: a live order ranking the
-    // devices differently means "restart the game".
-    if let (Ok(live), Ok(logged)) = (&data.device_order, &data.game_log) {
-        if !live.same_ranking(logged) {
-            report.logged_order = Some(logged.clone());
-        }
-    }
     // The report is recomputed on every Refresh, hot-plug and write; only a
     // changed outcome is worth a line. The unseen devices are named: SDL
     // lists them, the game's enumeration does not (the GUI says so only in
@@ -221,12 +208,11 @@ fn clash_report(
         .map(|u| format!("{} {}", u.name.as_deref().unwrap_or("?"), u.sc_product_guid.as_deref().unwrap_or("?")))
         .collect();
     let summary = format!(
-        "clash: has_clash={} connected={} missing={} unseen=[{}] log_differs={} resort=[{}]",
+        "clash: has_clash={} connected={} missing={} unseen=[{}] resort=[{}]",
         report.has_clash,
         report.connected.len(),
         report.missing.len(),
         unseen.join(", "),
-        report.logged_order.is_some(),
         report.resort_commands.join(" | ")
     );
     if summary != data.last_clash_log {
@@ -244,8 +230,7 @@ fn get_clash_report(
     devices: State<input::DeviceList>,
     data: State<Mutex<AppData>>,
 ) -> bindings::ClashReport {
-    let live = live_order(&devices);
-    clash_report(&mut data.lock().unwrap(), devices.inner(), live)
+    clash_report(&mut data.lock().unwrap(), devices.inner())
 }
 
 /// Apply the clash report's resort to the live `actionmaps.xml` — the
@@ -261,9 +246,8 @@ fn apply_resort(
     devices: State<input::DeviceList>,
     data: State<Mutex<AppData>>,
 ) -> Result<LoadStatus, String> {
-    let live = live_order(&devices);
     let mut data = data.lock().unwrap();
-    let report = clash_report(&mut data, devices.inner(), live);
+    let report = clash_report(&mut data, devices.inner());
     // GUI messages: the Status panel already names the order problem.
     if report.order_error.is_some() {
         return Err("No joystick order found".into());
@@ -739,10 +723,9 @@ pub(crate) fn reload_bindings(data: &mut AppData) -> LoadStatus {
             data.bindings_error = Some(e);
         }
     }
-    // Game.log is the watch thread's business (read outside the lock); the
-    // order is re-taken here so a reload never shows a stale one.
-    let live = live_order(&data.devices);
-    refresh_device_order(data, live);
+    // The order mirrors the last Game.log read (the watch thread's business,
+    // read outside the lock); re-take it so device_order tracks game_log.
+    refresh_device_order(data);
     status
 }
 
@@ -771,14 +754,6 @@ fn log_order(source: &str, result: &Result<order::DeviceOrder, String>) {
     }
 }
 
-/// The platform's live joystick order for the devices currently listed
-/// (`order::live`), to be taken before the `AppData` lock wherever possible:
-/// DirectInput can take a while, the Wine replication reads sysfs.
-fn live_order(devices: &input::DeviceList) -> Option<Result<order::DeviceOrder, String>> {
-    let snapshot = devices.lock().map(|d| d.clone()).unwrap_or_default();
-    order::live(&snapshot)
-}
-
 /// The root of the game data cache (one folder per game version below it):
 /// a `cache` folder inside the app cache dir. On Windows the app cache dir
 /// (`%LOCALAPPDATA%\<id>\`) is shared with the logs and the WebView2 profile,
@@ -789,15 +764,22 @@ fn sc_cache_root(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(root.join("cache"))
 }
 
-/// Re-take SC's joystick order: `live` is [`live_order`] (taken by the
-/// caller, ideally before the lock) — only a changed outcome replaces the
-/// snapshot (stamped with the time of the change) and is logged, so a
-/// hot-plug of a device without a slot leaves it alone. A platform without
-/// a live source (none built today) has no order.
-fn refresh_device_order(data: &mut AppData, live: Option<Result<order::DeviceOrder, String>>) {
-    let Some(fresh) = live else {
-        data.device_order = Err("no joystick order source on this platform".into());
-        return;
+/// Player-facing reason shown when SC's joystick order is not available (no
+/// readable `Game.log` yet). It never names the file — the GUI speaks the
+/// player's language (the file path stays in the app log via [`AppData::game_log`]).
+const NO_ORDER_HINT: &str = "Start the game once so it lists your joysticks.";
+
+/// Re-take SC's joystick order from the last `Game.log` read
+/// ([`AppData::game_log`], maintained by the watch thread): the game's own
+/// record of the order it enumerated at its last start, which is SC's order on
+/// every platform. The live DirectInput/Wine enumeration does not reliably
+/// reproduce it (Windows 11 in particular), so it is not the source. No usable
+/// log means no order — the clash report then carries [`NO_ORDER_HINT`]. Only a
+/// changed order is stored; the watch thread already logs the change.
+fn refresh_device_order(data: &mut AppData) {
+    let fresh = match &data.game_log {
+        Ok(order) => Ok(order.clone()),
+        Err(_) => Err(NO_ORDER_HINT.to_string()),
     };
     let same = match (&fresh, &data.device_order) {
         (Ok(a), Ok(b)) => a.joysticks == b.joysticks,
@@ -807,11 +789,6 @@ fn refresh_device_order(data: &mut AppData, live: Option<Result<order::DeviceOrd
     if same {
         return;
     }
-    let fresh = fresh.map(|mut o| {
-        o.timestamp = Some(backups::iso_utc(backups::now_secs()));
-        o
-    });
-    log_order("live", &fresh);
     data.device_order = fresh;
 }
 
@@ -873,13 +850,12 @@ fn spawn_game_log_watch(app: AppHandle) {
                 std::thread::sleep(logwatch::POLL);
                 continue;
             }
-            let live = live_order(&app.state::<input::DeviceList>());
             let mut data = state.lock().unwrap();
             if result != data.game_log {
                 info!("Game.log {}", if started { "replaced, re-read" } else { "read" });
                 log_order("Game.log", &result);
                 data.game_log = result;
-                refresh_device_order(&mut data, live);
+                refresh_device_order(&mut data);
                 drop(data);
                 let first = started && !announced;
                 announced = true;
@@ -1204,7 +1180,6 @@ pub fn run() {
             app.manage(Mutex::new(AppData {
                 device_order: Err("not read yet".into()),
                 game_log: Err("not read yet".into()),
-                devices: devices.clone(),
                 config,
                 sc: ScState::default(),
                 bindings_file: None,

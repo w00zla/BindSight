@@ -14,8 +14,6 @@
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
-<!-- screenshot: Monitor mode with a joystick image-map lit -->
-
 The intention of this app is to be an add-on utility for the game [Star Citizen](https://robertsspaceindustries.com/en/) with the goal to provide usable and powerful management features for input devices like **keyboard/mouse, joysticks and gamepads**, which the game is currently lacking.
 
 You always forget what input which action was? You always get lost in the game's huge and impractical bindings list? You have issues with the game breaking your device bindings? Then this app is for you!
@@ -29,9 +27,6 @@ You always forget what input which action was? You always get lost in the game's
 | **[Installer](https://github.com/w00zla/BindSight/releases/download/v0.15.0/BindSight_0.15.0_x64-setup.exe)** · [Standalone](https://github.com/w00zla/BindSight/releases/download/v0.15.0/BindSight_0.15.0_x64-standalone.zip) | **[AppImage](https://github.com/w00zla/BindSight/releases/download/v0.15.0/BindSight_0.15.0_amd64.AppImage)** · [deb](https://github.com/w00zla/BindSight/releases/download/v0.15.0/BindSight_0.15.0_amd64.deb) · [rpm](https://github.com/w00zla/BindSight/releases/download/v0.15.0/BindSight-0.15.0-1.x86_64.rpm) |
 
 </div>
-
-<!-- release_dls -->
-<!-- /release_dls -->
 
 # Main Features
 

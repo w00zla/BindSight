@@ -112,7 +112,9 @@ presentational components:
   icon, buttons — each may be `disabled` or parked `side: "left"` —
   optional body slot, `captureKeys` keeps the keyboard capture on; behind
   every unsaved-changes / delete / game-file-write question, the Fix via
-  config / Fix via console dialogs and the rebind dialog),
+  config / Fix via console dialogs and the rebind dialog. **Dialogs close only
+  via a button or Escape (the first `outline` button), never a backdrop click**
+  — same for `SettingsDialog`),
   `ConsoleCommandDialog` (how to open the game console, the command line, a
   Copy button; used by the order fix and Reorder), `Dropdown` (a select in
   the app's look — WebKitGTK paints a native popup no CSS reaches),
@@ -224,9 +226,13 @@ presentational components:
   type every order source yields: `instance_for_guid` is what the Monitor
   resolves against (`resolve_input`; without an order no joystick input
   resolves, keyboard and pad still do), `same_ranking` the log-vs-live
-  check. `order::live()` is the platform switch: `dinput.rs` on Windows,
-  `wineorder.rs` on Linux; `Game.log` is never the source, only the second
-  opinion.
+  check. **`Game.log` is the order source on every platform** (`gamelog.rs` /
+  `logwatch.rs`): SC's own record of the order it enumerated at its last start.
+  The live enumeration (`order::live()` — `dinput.rs` on Windows, `wineorder.rs`
+  on Linux) does not reliably reproduce it (Windows 11 in particular, verified
+  2026-09-19), so it is no longer the source; those modules stay only for the
+  `dinput_order` / `wine_order` diagnostics and `wine_keys`. No usable log means
+  no order — there is no live fallback.
 - `dinput.rs` — Windows: DirectInput 8 `EnumDevices(DI8DEVCLASS_GAMECTRL,
   DIEDFL_ATTACHEDONLY)` via `windows-sys` with hand-rolled COM vtables
   (windows-sys ships none). The rank is `jsN`, `guidProduct` is byte for
@@ -248,9 +254,9 @@ presentational components:
   hidapi + sysfs. Not replicated: registry overrides, the evdev backend,
   multi-collection devices (`&ColNN`).
 - `gamelog.rs` — parse `Connected joystickN: <Product {GUID}>` into a
-  `DeviceOrder` (gamepad lines are not read: no slot). The game keeps the
-  order it started with, so a live order that ranks differently means
-  "restart the game" (Status panel tile).
+  `DeviceOrder` (gamepad lines are not read: no slot). **This is the app's
+  joystick-order source**: `device_order` mirrors the last parsed log
+  (`lib.rs::refresh_device_order`). Parsing fails soft, never panics.
 - `logwatch.rs` — the `Game.log` watch (pure state machine; the thread is
   `lib.rs::spawn_game_log_watch`, **the only reader of the log**, always
   outside the `AppData` lock): a metadata poll every 2 s; the first poll and
@@ -311,10 +317,10 @@ presentational components:
   defaults per kind with a per-kind "touched" rule), `button_token` /
   `hat_token` (+1 offset), `instance_for_guid` (the saved `<options>` slot,
   used by the clash analysis and the Bindings List only), `resolve_bindings`,
-  `analyze_clash` (saved `<options>` vs. SC's joystick order, a
-  `DeviceOrder`; an empty order is an order, every saved slot then
-  "missing"; `ClashReport::logged_order` = the game's logged order when it
-  ranks differently from the live one), `plan_resort` / `resort_commands`.
+  `analyze_clash` (saved `<options>` vs. SC's joystick order from the Game.log,
+  a `DeviceOrder`; an empty order is an order, every saved slot then
+  "missing"), `plan_resort` / `resort_commands`. (`ClashReport::logged_order`
+  is vestigial — always `None` now that the log *is* the order.)
   A joystick SDL lists that the order lacks is `unseen`: the GUI drops it
   from Monitor, deck and image-map list without a word — only the Device
   List ("seen by game") and the clash line in the app log name it.
@@ -407,12 +413,13 @@ presentational components:
 - `lib.rs` — Tauri commands, state wiring and thread spawns, the Wayland
   DMABUF workaround, logging setup. `AppData` holds config, game data +
   load status, the bindings file + its load error, the binding index, the
-  joystick order (`device_order`, re-taken from the live source on every
-  clash report) + the Game.log snapshot, and the last logged clash summary.
+  joystick order (`device_order`, mirrored from the Game.log snapshot on every
+  clash report via `refresh_device_order`) + that Game.log snapshot, and the
+  last logged clash summary.
   **Nothing slow under the `AppData` lock**: `resolve_input` runs per input
-  event on the main thread and needs it, so `order::live()` (DirectInput)
-  is taken *before* locking (`get_clash_report`, `apply_resort`) and the
-  log is read only by the watch thread without the lock; the write
+  event on the main thread and needs it; the order now costs nothing there
+  (a clone of the Game.log snapshot — no enumeration), and the log is read
+  only by the watch thread without the lock; the write
   commands hold it for their backup + write + reload on purpose (user
   actions, consistency). `get_load_status` hands the last load outcome to
   a frontend that mounts after the first load already finished;
@@ -637,21 +644,20 @@ on Windows; delete it to force a re-extract.
   `Data.p4k` (e.g. `.../StarCitizen/LIVE`).
 - **Device identity is GUID, never name**: SDL's name (evdev) differs from
   SC's (HID product string).
-- **SC's joystick order is DirectInput's `EnumDevices` order** (verified
-  2026-09-12 against `Game.log` and a saved `actionmaps.xml`: rank and
-  `guidProduct` identical). **SDL order is not SC order**: SDL's Windows
-  DirectInput backend prepends every device to its list (the start
-  enumeration comes out reversed, a hot-plug lands on index 0); on Linux the
-  two are unrelated. `jsN` therefore comes from `order.rs` only — DirectInput
-  live on Windows, Wine's registry key order replicated on Linux
-  (`wineorder.rs`, verified 2026-09-13 against the prefix's `system.reg`,
-  sysfs and `Game.log`) — never from SDL's enumeration, and never from the
-  saved `<options>` slot either (that is what the file says, the order is
-  what the game does). `Game.log` is the second opinion on both platforms,
-  never the source. The Monitor, the deck and the Bindings List's column
-  names follow the order; without one the joysticks show "no joystick
-  order" and resolve nothing. A device plugged in or out shifts every slot
-  behind it — inherent to SC, that is what Apply / the order fix are for.
+- **SC's joystick order comes from `Game.log`, on every platform** (since
+  2026-09-19). SC logs `Connected joystickN: <Product {GUID}>` at start —
+  `joystickN` -> `js(N+1)` — its own record of what it enumerated. The live
+  enumeration was the source before but does not reliably match SC on Windows 11
+  (a user's DirectInput `EnumDevices` returned a different order than SC used —
+  it matched SDL's arrival order instead — and no derivable key reproduced SC's),
+  so `dinput.rs` (Windows) / `wineorder.rs` (Linux) are now diagnostics only, not
+  the source. **Neither SDL order nor the saved `<options>` slot is SC order**
+  (SDL's Windows backend even prepends, reversing its start enumeration; the
+  `<options>` slot is what the file says, the order is what the game did). No
+  usable `Game.log` = no order: the joysticks show "no joystick order" and
+  resolve nothing (no live fallback). The Monitor, the deck and the Bindings
+  List's column names follow the order; a device plugged in or out shifts every
+  slot behind it — inherent to SC, that is what Apply / the order fix are for.
 - **Joystick modifiers do not exist in SC** (no `modifier+jsN_` token in
   the data or a real file); keyboard and gamepad combos do (`kb1_lalt+x`,
   `gp1_shoulderl+thumbl_left`, `gp1_shoulderl+thumblx`), always with a real

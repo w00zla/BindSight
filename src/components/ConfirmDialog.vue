@@ -37,18 +37,14 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ choose: [value: string] }>();
 
-// A click on the backdrop or Escape answers with the first outline button
-// (the way out), or does nothing when there is none. A `captureKeys` dialog
-// owns its keys, Escape included.
+// Escape answers with the first outline button (the way out), or does nothing
+// when there is none. A click on the backdrop does NOT close the dialog — only
+// Escape or a button does. A `captureKeys` dialog owns its keys, Escape included.
 const dismiss = computed(() => props.buttons.find((b) => b.kind === "outline")?.value ?? null);
-
-function onBackdrop() {
-  if (dismiss.value !== null) emit("choose", dismiss.value);
-}
 
 function onKey(e: KeyboardEvent) {
   if (e.key !== "Escape" || props.captureKeys) return;
-  onBackdrop();
+  if (dismiss.value !== null) emit("choose", dismiss.value);
 }
 
 onMounted(() => window.addEventListener("keydown", onKey));
@@ -56,7 +52,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 </script>
 
 <template>
-  <div class="backdrop" @click.self="onBackdrop">
+  <div class="backdrop">
     <div
       class="dialog"
       :class="{ wide: !!$slots.default }"
