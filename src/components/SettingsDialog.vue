@@ -208,7 +208,7 @@ async function browseIni(slug: string) {
       icon="warning"
       :buttons="[
         { label: 'Disable', kind: 'danger', value: 'disable' },
-        { label: 'Keep Backups', kind: 'primary', value: 'keep' },
+        { label: 'Keep Backups', kind: 'outline', value: 'keep' },
       ]"
       @choose="onNoBackupChoose"
     >

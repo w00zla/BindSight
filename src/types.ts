@@ -284,24 +284,21 @@ export interface DeviceOrder {
   timestamp: string | null;
 }
 
-// The saved slots held against the game's joystick order (live from
-// DirectInput on Windows, from Game.log on Linux). With order_error set,
-// everything else is empty and nothing is said about the order.
+// The saved slots held against the game's joystick order (from the game's own
+// Game.log record). With order_error set, everything else is empty and nothing
+// is said about the order.
 export interface ClashReport {
   connected: SlotStatus[];
   missing: MissingSlot[];
   unseen: UnseenDevice[];
   // When the game last listed its joysticks (the Game.log's own time).
   log_timestamp: string | null;
-  // Why there is no order (source failed, environment not loaded, …).
+  // Why there is no order (no readable log, environment not loaded, …).
   order_error: string | null;
   has_clash: boolean;
   resort: ResortMove[];
   // In-game equivalent of `resort`: pp_resortdevices swaps, in order.
   resort_commands: string[];
-  // The order the game logged at its last start, when it ranks the devices
-  // differently from the live one: a running game keeps it until restarted.
-  logged_order: DeviceOrder | null;
 }
 
 // Last Input card colour: "unseen" (SC does not see the device), "noorder"

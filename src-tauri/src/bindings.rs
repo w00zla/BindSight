@@ -346,11 +346,6 @@ pub struct ClashReport {
     /// order: `pp_resortdevices joystick A B` moves the bindings of `jsA` to
     /// `jsB` (and B's to A), so each cycle becomes a chain of swaps.
     pub resort_commands: Vec<String>,
-    /// The order the game logged at its last start, when it ranks the
-    /// devices differently from the live order: a running game keeps it
-    /// until it restarts. `None` when they agree, when the log is unusable,
-    /// or where the log is the order source itself.
-    pub logged_order: Option<DeviceOrder>,
 }
 
 /// Case-insensitive SC Product GUID equality; `None` never matches.
@@ -429,7 +424,6 @@ pub fn analyze_clash(
         has_clash,
         resort,
         resort_commands,
-        logged_order: None,
     }
 }
 

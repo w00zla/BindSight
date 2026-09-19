@@ -49,31 +49,11 @@ const orderTitle = computed(() => {
   return t ? `${explain}\n${t.toLocaleString()}` : explain;
 });
 
-// The devices behind the order difference: what the game had at its start
-// and no longer has (missing), and what it did not have (new). Matched by
-// GUID against the live order.
-const orderChanges = computed(() => {
-  const logged = props.report?.logged_order;
-  if (!logged) return [];
-  const key = (g: string | null) => g?.toLowerCase() ?? "";
-  const live = new Set((props.report?.connected ?? []).map((s) => key(s.sc_product_guid)));
-  const started = new Set(logged.joysticks.map((j) => key(j.product_guid)));
-  return [
-    ...logged.joysticks
-      .filter((j) => !live.has(key(j.product_guid)))
-      .map((j) => ({ id: `gone-${j.instance}`, name: j.product_name, instance: j.instance, state: "missing" })),
-    ...(props.report?.connected ?? [])
-      .filter((s) => !started.has(key(s.sc_product_guid)))
-      .map((s) => ({ id: `new-${s.effective_instance}`, name: s.name ?? "?", instance: s.effective_instance, state: "new" })),
-  ];
-});
-
 const hasIssue = computed(
   () =>
     !!props.sc?.error ||
     !!props.loadError ||
     !!props.report?.order_error ||
-    !!props.report?.logged_order ||
     !!props.report?.has_clash,
 );
 </script>
@@ -126,24 +106,6 @@ const hasIssue = computed(
           <span class="name">No joystick order</span>
         </div>
         <div class="note">{{ report.order_error }}</div>
-      </div>
-
-      <!-- The game started with another order (a device plugged in or out
-           since): it keeps that order until it restarts. -->
-      <div v-if="report?.logged_order" class="tile issue detail">
-        <div class="row">
-          <Icon name="warning" :size="16" />
-          <span class="name">Game started with another device order</span>
-        </div>
-        <div class="moves">
-          <div v-for="c in orderChanges" :key="c.id" class="move">
-            <span class="dot filled" />
-            <span class="name">{{ c.name }}</span>
-            <span class="chip mono">js{{ c.instance }}</span>
-            <span>{{ c.state }}</span>
-          </div>
-        </div>
-        <div class="note">If game is running, restart for changes to take effect</div>
       </div>
 
       <div v-if="report?.has_clash" class="tile issue clash">
