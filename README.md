@@ -24,7 +24,7 @@ You always forget what input which action was? You always get lost in the game's
 
 | Windows | Linux |
 | --- | --- |
-| **[Installer](https://github.com/w00zla/BindSight/releases/download/v0.15.0/BindSight_0.15.0_x64-setup.exe)** · [Standalone](https://github.com/w00zla/BindSight/releases/download/v0.15.0/BindSight_0.15.0_x64-standalone.zip) | **[AppImage](https://github.com/w00zla/BindSight/releases/download/v0.15.0/BindSight_0.15.0_amd64.AppImage)** · [deb](https://github.com/w00zla/BindSight/releases/download/v0.15.0/BindSight_0.15.0_amd64.deb) · [rpm](https://github.com/w00zla/BindSight/releases/download/v0.15.0/BindSight-0.15.0-1.x86_64.rpm) |
+| **[Installer](https://github.com/w00zla/BindSight/releases/download/v0.15.2/BindSight_0.15.2_x64-setup.exe)** · [Standalone](https://github.com/w00zla/BindSight/releases/download/v0.15.2/BindSight_0.15.2_x64-standalone.zip) | **[AppImage](https://github.com/w00zla/BindSight/releases/download/v0.15.2/BindSight_0.15.2_amd64.AppImage)** · [deb](https://github.com/w00zla/BindSight/releases/download/v0.15.2/BindSight_0.15.2_amd64.deb) · [rpm](https://github.com/w00zla/BindSight/releases/download/v0.15.2/BindSight-0.15.2-1.x86_64.rpm) |
 
 </div>
 
