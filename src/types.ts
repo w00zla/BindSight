@@ -251,6 +251,24 @@ export interface ResortMove {
 
 // A device hidapi lists with a joystick-class interface that SDL does not
 // list (Device List only, `input.rs::HidOnlyDevice`).
+// A joystick the game lists (its Game.log order) that SDL does not, so no
+// input can reach the app from it — e.g. a device on SDL's joystick
+// blacklist that Wine still takes through hidraw. The Monitor shows it as a
+// tile without input; `hardware_id` is null, an image-map needs input.
+export interface LogOnlyJoystick {
+  kind: "joystick";
+  log_only: true;
+  sc_name: string | null;
+  sdl_name: string;
+  sc_product_guid: string;
+  hardware_id: null;
+  gamepad_slot: null;
+  controller_name: null;
+}
+
+// What a Monitor tile stands for: an SDL device or a log-only joystick.
+export type TileDevice = DeviceInfo | LogOnlyJoystick;
+
 export interface HidOnlyDevice {
   vid: number;
   pid: number;

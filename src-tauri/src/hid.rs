@@ -14,6 +14,13 @@
 //! X Y Rz Z Rx Ry: SDL reported X=0, Y=1, slider(Z)=2, twist(Rz)=5, exactly the
 //! canonical rank. Anything this module cannot place with that rule is an
 //! error, never a guess; callers also check the count against SDL's.
+//!
+//! A descriptor may hold several top-level collections (a Keychron K2 HE's
+//! interface 0: keyboard, mouse, joystick, …); the kernel, SDL and the game
+//! see the joystick collection as a device of its own, so only the fields of
+//! the joystick-class collections (usage joystick / gamepad / multi-axis)
+//! count — the mouse's X/Y are not a second pair of axes. A descriptor
+//! without such a collection is taken whole.
 
 /// The HID usages that are axes here: Generic Desktop (page 1) X..Dial.
 const PAGE_GENERIC_DESKTOP: u16 = 0x01;
@@ -22,19 +29,33 @@ const USAGE_RZ: u16 = 0x35;
 const USAGE_SLIDER: u16 = 0x36;
 const USAGE_DIAL: u16 = 0x37;
 
+/// A HID `(usage page, usage)` pair.
+type Usage = (u16, u16);
+
+/// Top-level collection usages that make a HID device a joystick to the
+/// game (and to `input.rs`'s interface pick): joystick, gamepad, multi-axis.
+fn is_joystick_class(usage: Usage) -> bool {
+    matches!(usage, (PAGE_GENERIC_DESKTOP, 0x04 | 0x05 | 0x08))
+}
+
 /// Ordered `(usage page, usage)` of every non-constant Input field in the
-/// descriptor that is at least 2 bits wide (buttons are 1-bit arrays and
-/// never axes), in report order. Ranges are expanded; an array field with
-/// fewer usages than its report count repeats its last usage, as HID does.
-/// Long items are skipped.
+/// descriptor's joystick-class top-level collections (see the module doc;
+/// the whole descriptor when it has none) that is at least 2 bits wide
+/// (buttons are 1-bit arrays and never axes), in report order. Ranges are
+/// expanded; an array field with fewer usages than its report count repeats
+/// its last usage, as HID does. Long items are skipped.
 pub fn axis_usages(desc: &[u8]) -> Vec<(u16, u16)> {
-    let mut out = Vec::new();
+    // Every field with the usage of the top-level collection it sits in.
+    let mut fields: Vec<(Option<Usage>, Usage)> = Vec::new();
     let mut i = 0;
     let mut usage_page: u16 = 0;
     let mut report_size: u32 = 0;
     let mut report_count: u32 = 0;
     let mut usages: Vec<(u16, u16)> = Vec::new();
     let mut usage_min: Option<(u16, u16)> = None;
+    // Collection nesting: the usage of the open top-level collection.
+    let mut depth: u32 = 0;
+    let mut top: Option<(u16, u16)> = None;
 
     while i < desc.len() {
         let prefix = desc[i];
@@ -82,21 +103,44 @@ pub fn axis_usages(desc: &[u8]) -> Vec<(u16, u16)> {
                         let Some(&u) = usages.get(n).or(usages.last()) else {
                             break;
                         };
-                        out.push(u);
+                        fields.push((top, u));
                     }
                 }
                 usages.clear();
                 usage_min = None;
             }
+            (0, 0xA) => {
+                // Collection: a top-level one is named by its usage.
+                if depth == 0 {
+                    top = usages.first().copied();
+                }
+                depth += 1;
+                usages.clear();
+                usage_min = None;
+            }
+            (0, 0xC) => {
+                // End Collection.
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    top = None;
+                }
+                usages.clear();
+                usage_min = None;
+            }
             (0, _) => {
-                // Other main items (output/feature/collection) consume locals.
+                // Other main items (output/feature) consume locals.
                 usages.clear();
                 usage_min = None;
             }
             _ => {}
         }
     }
-    out
+    let joystick_only = fields.iter().any(|(t, _)| t.is_some_and(is_joystick_class));
+    fields
+        .into_iter()
+        .filter(|(t, _)| !joystick_only || t.is_some_and(is_joystick_class))
+        .map(|(_, u)| u)
+        .collect()
 }
 
 /// SC axis names in SDL index order for a device's axis usages (see the
@@ -185,8 +229,31 @@ mod tests {
     // X Y Rz Z Rx Ry, two usage-0 16-bit fields, 128 buttons, one hat.
     const VKB_EVO_R: &str = "05010904a101050185010501093075109501150026ff0f46ff0f81020501093175109501150026ff0f46ff0f81020501093575109501150026ff0746ff0781020501093275109501150026ff0746ff0781020501093375109501150026ff0346ff0381020501093475109501150026ff0346ff0381020500090075109501150026ff0746ff0781020500090075109501150026ff0746ff078102050919012a8000150025017501968000810205010939150026070035004668016514550175049501814209006500550075049503810105010900751095018101050109007510950181010501090075109501810105010900750895178101850b050109007508953f8101850c050109007508953f81018508050109007508953f8101150026ff0046ff0085587508953f090091028559750895800900b102c0";
 
+    // Verbatim Keychron K2 HE interface-0 descriptor (Device List,
+    // 2026-09-20): keyboard, mouse (X Y Wheel + AC Pan), a Joystick
+    // collection with a nested physical one (X Y Z Rx Ry Rz, 16 buttons),
+    // system control, consumer, a second keyboard.
+    const K2_HE_IF0: &str = "05010906a1018501050719e029e7150025019508750181029501750881010507190029ff150026ff0095067508810005081901290515002501950575019102950175039101c005010902a10185020901a100050919012908150025019508750181020501093009311581257f95027508810609381581257f950175088106050c0a38021581257f950175088106c0c005010904a1018507a10005010930093109320933093409351581257f95067508810205091901291015002501951075018102c0c005010980a101850319012ab700150126b700950175108100c0050c0901a101850419012aa002150126a002950175108100c005010906a1018506050719e029e7150025019508750181020507190029ef1500250195f075018102050819012905950575019102950175039101c0";
+
     fn hex(s: &str) -> Vec<u8> {
         (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+
+    #[test]
+    fn only_the_joystick_collection_counts() {
+        // The mouse's X/Y (and the keyboard arrays) are other collections:
+        // without the split this was "duplicate x axis".
+        let usages = axis_usages(&hex(K2_HE_IF0));
+        assert_eq!(usages, [(1, 0x30), (1, 0x31), (1, 0x32), (1, 0x33), (1, 0x34), (1, 0x35)]);
+        assert_eq!(sc_axes_from(&hex(K2_HE_IF0), 6).unwrap(), ["x", "y", "z", "rotx", "roty", "rotz"]);
+        // A plain joystick descriptor is unchanged by the rule.
+        assert_eq!(axis_usages(&hex(VKB_EVO_R)).len(), axis_usages(&hex(VKB_EVO_R)).len());
+        assert!(sc_axes_from(&hex(VKB_EVO_R), 6).is_ok());
+        // No joystick-class collection at all: everything counts, as before.
+        let mouse: Vec<u8> = vec![
+            0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x09, 0x30, 0x09, 0x31, 0x75, 0x08, 0x95, 0x02, 0x81, 0x02, 0xC0,
+        ];
+        assert_eq!(axis_usages(&mouse), [(1, 0x30), (1, 0x31)]);
     }
 
     #[test]

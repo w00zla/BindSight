@@ -22,6 +22,7 @@ import AppFooter from "./components/AppFooter.vue";
 import { setDebugLogging } from "./logging";
 import VersionDialog from "./components/VersionDialog.vue";
 import type { Updater } from "./update";
+import type { LogOnlyJoystick } from "./types";
 import type {
   DeviceKind,
   ActionMap,
@@ -743,6 +744,36 @@ const orderedDevices = computed<DeviceInfo[]>(() =>
 const monitorDevices = computed<DeviceInfo[]>(() =>
   orderedDevices.value.filter((d) => !deviceUnseen(d)),
 );
+// Joysticks the game lists (its order) that SDL does not: no input can
+// reach the app from them (e.g. a device on SDL's joystick blacklist that
+// Wine takes through hidraw). The Monitor shows them as tiles without input,
+// after the SDL devices, in the game's order.
+const logOnlyJoysticks = computed<LogOnlyJoystick[]>(() => {
+  const sdl = new Set(
+    devices.value
+      .filter((d) => d.kind === "joystick")
+      .map((d) => d.sc_product_guid?.toLowerCase())
+      .filter((g): g is string => !!g),
+  );
+  return (clash.value?.connected ?? [])
+    .filter((s): s is typeof s & { sc_product_guid: string } => !!s.sc_product_guid && !sdl.has(s.sc_product_guid.toLowerCase()))
+    .map((s) => ({
+      kind: "joystick",
+      log_only: true,
+      sc_name: s.name,
+      sdl_name: s.name ?? "?",
+      sc_product_guid: s.sc_product_guid,
+      hardware_id: null,
+      gamepad_slot: null,
+      controller_name: null,
+    }));
+});
+const logOnlyInstances = computed<Set<number>>(
+  () => new Set(logOnlyJoysticks.value.map((j) => slotFor(j.sc_product_guid)?.effective_instance).filter((n): n is number => n !== undefined)),
+);
+function isLogOnly(instance: number): boolean {
+  return logOnlyInstances.value.has(instance);
+}
 // Settings dialog Save: apply the environments and the switches; the
 // backend reloads when the active environment changed.
 async function applySettings(s: {
@@ -1431,7 +1462,16 @@ onUnmounted(() => {
           :hidden="isStageHidden(d)"
           @toggleMap="toggleStageHidden(d)"
         />
-        <div v-if="!monitorDevices.length" class="tile-none">None</div>
+        <DeviceTile
+          v-for="j in logOnlyJoysticks"
+          :key="'log:' + j.sc_product_guid"
+          :device="j"
+          :slot="slotFor(j.sc_product_guid)"
+          :noOrder="false"
+          :bindingCount="0"
+          :hidden="false"
+        />
+        <div v-if="!monitorDevices.length && !logOnlyJoysticks.length" class="tile-none">None</div>
         </ScrollRail>
       </div>
       <StatusPanel
@@ -1488,6 +1528,7 @@ onUnmounted(() => {
       :bindings="bindings"
       :actionMaps="actionMaps"
       :clash="clash"
+      :isLogOnly="isLogOnly"
       :hasCurrent="currentLoaded"
       :tokenLabel="tokenLabel"
       :inputToken="rebindToken"

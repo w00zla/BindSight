@@ -17,8 +17,10 @@ export interface ColumnSpec {
   sortable?: boolean;
   // Icon in front of the label (an Icon name).
   icon?: string;
-  // Warning text after the label, in the warn colour.
+  // Warning text after the label, in the warn colour — or, with `dim`, a
+  // plain fact in the dim colour.
   note?: string;
+  dim?: boolean;
 }
 
 const MIN_WIDTH = 40;

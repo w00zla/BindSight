@@ -34,7 +34,7 @@ function gripTarget(i: number): { key: string; fromLeft: boolean } | null {
     >
       <Icon v-if="c.icon" :name="c.icon as IconName" :size="13" class="col-icon" />
       <span class="txt">{{ c.label }}</span>
-      <span v-if="c.note" class="txt note">{{ c.note }}</span>
+      <span v-if="c.note" class="txt note" :class="{ dim: c.dim }">{{ c.note }}</span>
       <!-- A non-sortable column never shows a sort, whatever the state says
            (the Bindings List keeps the game's order). -->
       <Icon
@@ -84,6 +84,10 @@ function gripTarget(i: number): { key: string; fromLeft: boolean } | null {
 .note {
   flex-shrink: 0;
   color: var(--warn);
+}
+
+.note.dim {
+  color: var(--text-3);
 }
 
 

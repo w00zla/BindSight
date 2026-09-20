@@ -46,6 +46,9 @@ const props = defineProps<{
   actionMaps: ActionMap[];
   // The device-order report: names the joystick the game ranks at each jsN.
   clash: ClashReport | null;
+  // Whether the joystick the game ranks at this jsN is one SDL does not
+  // list (a `LogOnlyJoystick`): no input reaches the app from it.
+  isLogOnly: (instance: number) => boolean;
   hasCurrent: boolean;
   // SC's label for an input token; echoes the token when there is none.
   tokenLabel: (token: string) => string;
@@ -782,8 +785,10 @@ interface DeviceCol {
   kind: DeviceKind;
   instance: number;
   label: string;
-  // The order problem with this slot, shown in the warn colour.
+  // The order problem with this slot, shown in the warn colour — or, with
+  // `dim`, that no input reaches the app from the device.
   note?: string;
+  dim?: boolean;
 }
 
 const deviceCols = computed<DeviceCol[]>(() => {
@@ -803,6 +808,10 @@ const deviceCols = computed<DeviceCol[]>(() => {
       col.label += ` · ${slot.name ?? "?"}`;
       if (slot.stored_instance === null) col.note = "(not saved)";
       else if (slot.stored_instance !== n) col.note = `(saved js${slot.stored_instance})`;
+      else if (props.isLogOnly(n)) {
+        col.note = "(no input)";
+        col.dim = true;
+      }
     }
     return col;
   };
@@ -851,6 +860,7 @@ const listColumns = computed<ColumnSpec[]>(() => [
     key: d.key,
     label: d.label.toUpperCase(),
     note: d.note?.toUpperCase(),
+    dim: d.dim,
     width: i === all.length - 1 ? null : 200,
     sortable: false,
     icon: d.kind === "keyboard" ? "keyboard" : d.kind === "gamepad" ? "gamepad" : "devices",

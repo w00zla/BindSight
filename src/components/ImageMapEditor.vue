@@ -61,7 +61,8 @@ const props = defineProps<{
   // keys the game's device order is sorted by.
   wineKeys: WineKey[];
   // Joystick-class HID devices SDL does not list: shown after the SDL
-  // devices, so the user sees why they are in no Monitor.
+  // devices (in the Monitor only as a tile without input, if the game
+  // lists them).
   hidOnly: HidOnlyDevice[];
   // App version, OS, toolkit versions and keyboard layout, the head of every dump.
   systemLine: string;
@@ -2072,18 +2073,28 @@ function compactUsages(usages: string[]): string {
   return out.join(" ");
 }
 
-// The jsN the game gives a joystick (its own order from Game.log), and how
-// that relates to the slot saved in the bindings file.
-function gameSlotText(d: DeviceInfo): string {
+// The `game` row of a joystick (SDL device or hid-only): the jsN the game
+// gives it (its own order from Game.log), how that relates to the slot saved
+// in the bindings file, and that the game lists it as a joystick. A device
+// the order lacks is "not enumerated".
+function joystickGameText(productGuid: string | null): string {
   const r = props.clash;
   if (!r) return "—";
   if (r.order_error) return "order unknown";
-  const guid = d.sc_product_guid?.toLowerCase();
+  const guid = productGuid?.toLowerCase();
   const slot = r.connected.find((s) => !!guid && s.sc_product_guid?.toLowerCase() === guid);
   if (!slot) return "not enumerated";
-  if (slot.stored_instance === null) return `js${slot.effective_instance} · not saved`;
-  if (slot.stored_instance !== slot.effective_instance) return `js${slot.effective_instance} · saved as js${slot.stored_instance} · clash`;
-  return `js${slot.effective_instance} · saved`;
+  let text = `js${slot.effective_instance}`;
+  if (slot.stored_instance === null) text += " · not saved";
+  else if (slot.stored_instance !== slot.effective_instance) text += ` · saved as js${slot.stored_instance} · clash`;
+  else text += " · saved";
+  return `${text} · seen as joystick`;
+}
+
+// The `game` row of a pad: the slot (only gp1 exists in the game) and that
+// the game lists it as its gamepad.
+function gamepadGameText(d: DeviceInfo): string {
+  return `${d.gamepad_slot !== null ? `gp${d.gamepad_slot}` : "no slot"} · seen as gamepad`;
 }
 
 // The interfaces Wine registers for a device, matched by Product GUID
@@ -2115,36 +2126,34 @@ function hidRows(interfaces: DeviceInfo["hid_interfaces"]): [string, string][] {
 }
 
 // Rows of a joystick-class HID device SDL does not list (so no input
-// reaches the app from it); the `wine` row says whether the game
-// enumerates it.
+// reaches the app from it), in the same groups as `deviceRows`: the `game`
+// row says whether the game lists it (from its order), the `wine` row what
+// the replicated Wine enumeration makes of it.
 function hidOnlyRows(h: HidOnlyDevice): [string, string][] {
   const usage = h.usage === 4 ? "joystick" : h.usage === 5 ? "gamepad" : h.usage === 8 ? "multi-axis" : `usage ${h.usage}`;
   return [
     ["kind", `hid ${usage} interface`],
+    ["game", joystickGameText(h.product_guid)],
     ["hardware id", h.product_guid],
     ...wineRows(h.product_guid),
+    ["sdl", "not listed"],
     ["usb", `vid ${hex4(h.vid)} · pid ${hex4(h.pid)}`],
     ...hidRows(h.interfaces),
   ];
 }
 
-// Whether the game enumerates the device: a joystick in its order, or a
-// gamepad (the kind follows the game's rule, see `input.rs`).
-function seenByGame(d: DeviceInfo): string {
-  if (props.isUnseen(d)) return "no";
-  return d.kind === "gamepad" ? "yes · gamepad" : "yes · joystick";
-}
-
-// Key/value rows of everything known about a device. The keyboard is a
-// synthetic device (the mouse is part of it, as in the game) — it has
-// nothing but its name, its hardware id and what the capture knows.
+// Key/value rows of everything known about a device, grouped: what it is
+// and what the game makes of it (kind, game, hardware id, wine), then SDL's
+// view (sdl, name, path), then the hardware (usb, io, axes, hid). The
+// keyboard is a synthetic device (the mouse is part of it, as in the game) —
+// it has nothing but its name, its hardware id and what the capture knows.
 function deviceRows(d: DeviceInfo): [string, string][] {
   if (d.kind === "keyboard") {
     return [
       ["kind", d.kind],
-      ["sdl name", d.sdl_name],
+      ["game", "kb1"],
       ["hardware id", d.hardware_id ?? "—"],
-      ["game slot", "kb1"],
+      ["sdl name", d.sdl_name],
       ["io", `${KEY_COUNT} keys · mouse ${MOUSE_INPUTS.join(" ")}`],
     ];
   }
@@ -2155,13 +2164,12 @@ function deviceRows(d: DeviceInfo): [string, string][] {
         ? `gamepad · slot ${d.gamepad_slot ?? "—"} · ${d.controller_name ?? "—"}${d.wine_gamepad ? " · wine" : ""}`
         : d.kind,
     ],
-    ["game slot", d.kind === "gamepad" ? (d.gamepad_slot !== null ? `gp${d.gamepad_slot}` : "none") : gameSlotText(d)],
-    ["seen by game", seenByGame(d)],
-    ["sdl name", d.sdl_name],
-    ["sdl guid", d.sdl_guid],
+    ["game", d.kind === "gamepad" ? gamepadGameText(d) : joystickGameText(d.sc_product_guid)],
     ["hardware id", d.hardware_id ?? "—"],
-    ["sdl", `index ${d.index} · instance ${d.sdl_instance_id} · type ${d.sdl_type} · path ${d.sdl_path ?? "—"}`],
     ...wineRows(d.sc_product_guid),
+    ["sdl", `index ${d.index} · instance ${d.sdl_instance_id} · type ${d.sdl_type} · guid ${d.sdl_guid}`],
+    ["sdl name", d.sdl_name],
+    ["sdl path", d.sdl_path ?? "—"],
     ["usb", `vid ${hex4(d.sdl_vendor)} · pid ${hex4(d.sdl_product)} · version ${hex4(d.sdl_product_version)} · serial ${d.sdl_serial || "—"} · power ${d.power_level}`],
     [
       "io",

@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import Icon from "./Icon.vue";
-import type { DeviceInfo, SlotStatus } from "../types";
+import type { SlotStatus, TileDevice } from "../types";
 import { deviceIcon, deviceName } from "../devices";
 import { KEY_COUNT, MOUSE_INPUTS } from "../keyboard";
 
 const props = defineProps<{
-  device: DeviceInfo;
+  // An SDL device, or a joystick only the game lists (`LogOnlyJoystick`):
+  // that one has no input, row 2 says so instead of the counts.
+  device: TileDevice;
   slot: SlotStatus | null;
   // The game's device order is unknown, so the joystick has no jsN: a
   // warning takes the slot chip's place, the rest of the tile is as usual.
@@ -20,7 +22,10 @@ const emit = defineEmits<{ toggleMap: [] }>();
 // A further pad holds no SC slot: it cannot carry bindings. (A joystick the
 // game does not see never reaches the rail.)
 const noSlot = computed(() => props.device.kind === "gamepad" && props.device.gamepad_slot === null);
-const dimmed = noSlot;
+// No input can reach the app from a log-only joystick.
+const unsupported = computed(() => "log_only" in props.device);
+// The whole tile is deactivated when nothing can come from the device.
+const dimmed = computed(() => noSlot.value || unsupported.value);
 
 // Device kind icon at the start of the tile.
 const kindIcon = computed(() => deviceIcon(props.device));
@@ -44,6 +49,7 @@ const name = computed(() => deviceName(props.device));
 
 const state = computed(() => {
   const d = props.device;
+  if ("log_only" in d) return "input handling not supported";
   if (noSlot.value) return "no slot";
   const counts =
     d.kind === "keyboard" ? [`${KEY_COUNT} keys`, `${MOUSE_INPUTS.length} btns`] : [`${d.num_buttons} btns`, `${d.num_axes} axes`, `${d.num_hats} hats`];
@@ -74,7 +80,7 @@ const state = computed(() => {
       >
         <Icon :name="hidden ? 'image-off' : 'image'" :size="14" />
       </button>
-      <span class="status">{{ state }}</span>
+      <span class="status" :class="{ unsupported }">{{ state }}</span>
     </div>
   </div>
 </template>
@@ -161,6 +167,11 @@ const state = computed(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The log-only tile's status: dimmed, it is a fact, not a state to fix. */
+.status.unsupported {
+  color: var(--text-3);
 }
 
 /* Sized to the row so the button does not stretch the tile. */

@@ -21,11 +21,22 @@
 //! `winebus.sys/main.c`, `bus_sdl.c`):
 //!
 //! - only a HID top-level usage of Joystick (1:4) or Gamepad (1:5);
-//! - one backend per device: hidraw for a list of vendors / products (every
-//!   VKB and VPC, some Thrustmaster / Fanatec / Simucube, DualShock 4 /
-//!   DualSense, Atmel with 32 / 50 / 64 buttons — [`hidraw_preferred`]),
-//!   SDL for everything else. The hidraw node must open read-write or the
-//!   device is absent; the SDL twin of a hidraw device is dropped either way;
+//! - one backend per device: hidraw or SDL, decided per hidraw interface on
+//!   its **first** top-level collection (`is_hidraw_enabled` via
+//!   `get_device_usages`, which reads `CollectionDesc[0]`): a mouse,
+//!   keyboard or digitizer first is never hidraw; anything outside Generic
+//!   Desktop, or a Generic Desktop usage other than joystick / gamepad, is
+//!   always hidraw; a joystick / gamepad first goes by a list of vendors /
+//!   products (every VKB and VPC, some Thrustmaster / Fanatec / Simucube,
+//!   DualShock 4 / DualSense, Atmel with 32 / 50 / 64 buttons —
+//!   [`hidraw_preferred`], [`hidraw_taken`]). The hidraw node must open
+//!   read-write or the device is absent; the SDL twin of a hidraw-preferred
+//!   vendor's device is dropped either way;
+//! - hidclass splits a hidraw interface with several top-level collections
+//!   into one device per collection (`&ColNN`, 1-based, plus a `&NNNN`
+//!   instance suffix, 0-based), and dinput takes the joystick / gamepad
+//!   ones: the Keychron Link dongle (bar-code page first, joystick second,
+//!   `MI_01&COL02`) is a joystick to the game while SDL never lists it;
 //! - an SDL-fed device that SDL maps as a game controller (unless SDL calls
 //!   it a wheel or flight stick), or that has exactly 6 axes and at least 14
 //!   buttons, is a gamepad ([`sdl_is_gamepad`]): `&IG_00`, driven through
@@ -35,11 +46,13 @@
 //! Verified 2026-09-13 against the prefix's `system.reg`, sysfs and the
 //! `Game.log` of the last start: VKB R `231D:0200` ranks before VKB L
 //! `231D:0201` whatever evdev does; a Keychron K2 HE (6 axes, 16 buttons) is
-//! `IG_00` and invisible to the game. Not replicated: registry overrides
-//! (`Software\Wine\WineBus`, `Software\Wine\DirectInput\Joysticks`), the
-//! evdev backend (SDL switched off in the registry), devices with several
-//! joystick collections (`&ColNN`, one slot each). The pure parts compile
-//! everywhere for the tests; `enumerate` is Linux only (see `order::live`).
+//! `IG_00` and invisible to the game; the Keychron Link is `js3` via
+//! hidraw (`system.reg` + Game.log, 2026-09-20). Not replicated: registry
+//! overrides (`Software\Wine\WineBus`, `Software\Wine\DirectInput\Joysticks`),
+//! the evdev backend (SDL switched off in the registry), winebus's
+//! synthesized serial for devices without one (the key shows `0000`). The
+//! pure parts compile everywhere for the tests; `enumerate` is Linux only
+//! (see `order::live`).
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -64,6 +77,11 @@ pub struct WineDevice {
     pub serial: String,
     /// `&IG_00`: an XInput device to the game, no slot.
     pub is_gamepad: bool,
+    /// hidraw interface with several top-level collections: this device is
+    /// its collection number `n` (0-based; hidclass writes `&COL{n+1}` and
+    /// the instance suffix `&{n:04}`). `None` for a single collection or
+    /// an SDL device.
+    pub collection: Option<u32>,
     /// What SC shows: the USB product string (hidraw) or SDL's name.
     pub product_name: String,
     /// sysfs path of the node Wine opens — the creation-order tie-break
@@ -92,6 +110,22 @@ pub fn hidraw_preferred(vid: u16, pid: u16, buttons: u32) -> bool {
     }
 }
 
+/// Whether winebus takes a hidraw interface at all (`is_hidraw_enabled`,
+/// Wine 11.x `winebus.sys/main.c`), decided on the interface's first
+/// top-level collection `first` = (usage page, usage): a digitizer, mouse or
+/// keyboard first is never hidraw (the SDL twin decides); a joystick or
+/// gamepad first goes by the vendor list; everything else — another usage
+/// page, or a Generic Desktop usage such as multi-axis — is always hidraw.
+/// The Keychron Link's joystick interface starts with a bar-code collection
+/// and is hidraw to Wine, whatever SDL does with the device.
+pub fn hidraw_taken(first: (u16, u16), vid: u16, pid: u16, buttons: u32) -> bool {
+    match first {
+        (0x0D, _) | (0x01, 0x02) | (0x01, 0x06) => false,
+        (0x01, 0x04) | (0x01, 0x05) => hidraw_preferred(vid, pid, buttons),
+        _ => true,
+    }
+}
+
 /// Whether winebus's SDL backend flags the device as a gamepad
 /// (`sdl_add_device`): SDL's controller mapping counts unless SDL calls the
 /// device a wheel or flight stick, otherwise exactly 6 axes and at least 14
@@ -116,10 +150,16 @@ fn interface_key(d: &WineDevice, index: u32) -> String {
     if let Some(mi) = d.interface {
         key.push_str(&format!("&MI_{mi:02}"));
     }
+    if let Some(col) = d.collection {
+        key.push_str(&format!("&COL{:02}", col + 1));
+    }
     if d.is_gamepad {
         key.push_str("&IG_00");
     }
     key.push_str(&format!("#{}&{}&0&{}&{}", d.version, d.serial, index, d.is_gamepad as u8));
+    if let Some(col) = d.collection {
+        key.push_str(&format!("&{col:04}"));
+    }
     key
 }
 
@@ -164,12 +204,23 @@ fn keyed(devices: &[WineDevice]) -> Vec<(String, usize)> {
     let mut creation: Vec<usize> = (0..devices.len()).collect();
     creation.sort_by(|&a, &b| devices[a].syspath.cmp(&devices[b].syspath));
     let mut counts: HashMap<(u16, u16, Option<u32>), u32> = HashMap::new();
+    // The collections of one hidraw interface are one winebus device: they
+    // share its index (their node), the collection suffix tells them apart.
+    let mut node_index: HashMap<&str, u32> = HashMap::new();
     let mut keyed: Vec<(String, usize)> = Vec::with_capacity(devices.len());
     for i in creation {
         let d = &devices[i];
-        let index = counts.entry((d.vid, d.pid, d.interface)).or_default();
-        keyed.push((interface_key(d, *index), i));
-        *index += 1;
+        let index = match node_index.get(d.syspath.as_str()) {
+            Some(&n) if d.collection.is_some() => n,
+            _ => {
+                let count = counts.entry((d.vid, d.pid, d.interface)).or_default();
+                let n = *count;
+                *count += 1;
+                node_index.insert(d.syspath.as_str(), n);
+                n
+            }
+        };
+        keyed.push((interface_key(d, index), i));
     }
     keyed.sort_by(|a, b| wine_key_cmp(&a.0, &b.0));
     keyed
@@ -209,7 +260,7 @@ pub use linux::{enumerate, live_keys, syspath, wine_devices};
 mod linux {
     use log::warn;
 
-    use super::{hidraw_preferred, rank, sdl_is_gamepad, WineDevice, WineKey};
+    use super::{hidraw_preferred, hidraw_taken, rank, sdl_is_gamepad, WineDevice, WineKey};
     use crate::input::DeviceInfo;
     use crate::order::DeviceOrder;
     use crate::scdata::DeviceKind;
@@ -224,24 +275,31 @@ mod linux {
             .unwrap_or_else(|_| node.to_string())
     }
 
-    /// Wine's view of the connected devices: every hidraw joystick /
-    /// gamepad interface winebus prefers hidraw for (and can open), plus
-    /// every SDL device it does not.
+    /// Wine's view of the connected devices: every joystick / gamepad
+    /// collection of a hidraw interface winebus takes through hidraw (and can
+    /// open), plus every SDL device it does not. hidapi lists one entry per
+    /// top-level collection, in descriptor order, all collections of an
+    /// interface sharing its node path — so an interface's first entry is
+    /// the collection winebus decides on.
     pub fn wine_devices(devices: &[DeviceInfo]) -> Result<Vec<WineDevice>, String> {
         let api = hidapi::HidApi::new().map_err(|e| format!("hidapi: {e}"))?;
         let sdl_buttons = |vid: u16, pid: u16| {
             devices.iter().find(|d| d.sdl_vendor == vid && d.sdl_product == pid).map(|d| d.num_buttons).unwrap_or(0)
         };
+        let entries: Vec<_> = api.device_list().collect();
         let mut list = Vec::new();
-        for dev in api.device_list() {
+        for (pos, dev) in entries.iter().enumerate() {
             // dinput opens only Generic Desktop joysticks (4) and gamepads (5).
             if dev.usage_page() != 0x01 || !matches!(dev.usage(), 4 | 5) {
                 continue;
             }
             let (vid, pid) = (dev.vendor_id(), dev.product_id());
-            if !hidraw_preferred(vid, pid, sdl_buttons(vid, pid)) {
+            let siblings: Vec<usize> = (0..entries.len()).filter(|&k| entries[k].path() == dev.path()).collect();
+            let first = &entries[siblings[0]];
+            if !hidraw_taken((first.usage_page(), first.usage()), vid, pid, sdl_buttons(vid, pid)) {
                 continue;
             }
+            let collection = (siblings.len() > 1).then(|| siblings.iter().position(|&k| k == pos).unwrap_or(0) as u32);
             let path = dev.path().to_string_lossy().into_owned();
             // winebus opens the node O_RDWR; a node it cannot open does not exist to the game.
             if let Err(e) = std::fs::OpenOptions::new().read(true).write(true).open(&path) {
@@ -255,6 +313,7 @@ mod linux {
                 version: dev.release_number(),
                 serial: dev.serial_number().filter(|s| !s.is_empty()).map_or_else(|| "0000".to_string(), str::to_string),
                 is_gamepad: false,
+                collection,
                 product_name: dev.product_string().unwrap_or_default().to_string(),
                 syspath: syspath("hidraw", &path),
             });
@@ -274,6 +333,7 @@ mod linux {
                 version: d.sdl_product_version,
                 serial: d.sdl_serial.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| "0000".to_string()),
                 is_gamepad: sdl_is_gamepad(matches!(d.kind, DeviceKind::Gamepad), &d.sdl_type, d.num_axes, d.num_buttons),
+                collection: None,
                 product_name: d.sdl_name.clone(),
                 syspath: d.sdl_path.as_deref().map(|p| syspath("input", p)).unwrap_or_default(),
             });
@@ -309,9 +369,84 @@ mod tests {
             version: 8465,
             serial: "0000".into(),
             is_gamepad: false,
+            collection: None,
             product_name: name.into(),
             syspath: syspath.into(),
         }
+    }
+
+    const LINK: &str = "{D0303434-0000-0000-0000-504944564944}";
+
+    /// One collection of a hidraw interface with several (the Keychron Link
+    /// dongle: bar-code page first, joystick second, interface 1).
+    fn collection(vid: u16, pid: u16, interface: u32, col: u32, name: &str, syspath: &str) -> WineDevice {
+        WineDevice { interface: Some(interface), collection: Some(col), version: 54016, ..hidraw(vid, pid, name, syspath) }
+    }
+
+    #[test]
+    fn first_collection_decides_hidraw() {
+        // Bar-code page first (the Keychron Link): hidraw whatever the vendor.
+        assert!(hidraw_taken((0x8C, 0x01), 0x3434, 0xd030, 16));
+        // Any other page, or a Generic Desktop usage that is no joystick /
+        // gamepad (multi-axis, pointer): hidraw.
+        assert!(hidraw_taken((0xFF60, 0x61), 0x3434, 0x0e21, 0));
+        assert!(hidraw_taken((0x01, 0x08), 0x1234, 0x0001, 0));
+        assert!(hidraw_taken((0x01, 0x01), 0x1234, 0x0001, 0));
+        // Keyboard, mouse or digitizer first: never (the K2 HE's interface 0).
+        assert!(!hidraw_taken((0x01, 0x06), 0x231d, 0x0200, 79));
+        assert!(!hidraw_taken((0x01, 0x02), 0x231d, 0x0200, 79));
+        assert!(!hidraw_taken((0x0D, 0x04), 0x231d, 0x0200, 79));
+        // Joystick or gamepad first: the vendor list.
+        assert!(hidraw_taken((0x01, 0x04), 0x231d, 0x0200, 79));
+        assert!(!hidraw_taken((0x01, 0x04), 0x3434, 0x0e21, 16));
+        assert!(hidraw_taken((0x01, 0x05), 0x3344, 0x0001, 0));
+        assert!(!hidraw_taken((0x01, 0x05), 0x045e, 0x028e, 11));
+    }
+
+    #[test]
+    fn collection_key_has_hidclass_layout() {
+        // Verbatim from the prefix's system.reg (2026-09-20), serial aside.
+        let link = collection(0x3434, 0xd030, 1, 1, "Keychron Link", "");
+        assert_eq!(interface_key(&link, 0), "HID#VID_3434&PID_D030&MI_01&COL02#54016&0000&0&0&0&0001");
+        let first = collection(0x3434, 0xd030, 1, 0, "Keychron Link", "");
+        assert_eq!(interface_key(&first, 0), "HID#VID_3434&PID_D030&MI_01&COL01#54016&0000&0&0&0&0000");
+    }
+
+    #[test]
+    fn collections_of_one_interface_share_its_index() {
+        // Two joystick collections on one node: one winebus device (index 0
+        // for both), two hidclass children, two slots. A second dongle would
+        // be index 1.
+        let devices = [
+            collection(0x3434, 0xd030, 1, 1, "Link", "/sys/a"),
+            collection(0x3434, 0xd030, 1, 0, "Link", "/sys/a"),
+            collection(0x3434, 0xd030, 1, 0, "Link 2", "/sys/b"),
+        ];
+        let k: Vec<String> = keys(&devices).into_iter().map(|k| k.key).collect();
+        assert_eq!(
+            k,
+            [
+                "HID#VID_3434&PID_D030&MI_01&COL01#54016&0000&0&0&0&0000",
+                "HID#VID_3434&PID_D030&MI_01&COL01#54016&0000&0&1&0&0000",
+                "HID#VID_3434&PID_D030&MI_01&COL02#54016&0000&0&0&0&0001",
+            ]
+        );
+        assert_eq!(rank(&devices).joysticks.len(), 3);
+    }
+
+    #[test]
+    fn keychron_link_is_js3_behind_the_vkbs() {
+        // The real case (Game.log 2026-09-19): R js1, L js2, the dongle's
+        // joystick collection js3; the K2 HE itself is the gamepad.
+        let devices = [
+            collection(0x3434, 0xd030, 1, 1, "Keychron Link", "/sys/usb1/1-3"),
+            sdl(0x3434, 0x0e21, "Keychron K2 HE", true, "/sys/usb2/2-1"),
+            hidraw(0x231d, 0x0201, " VKBsim Gladiator EVO  L  ", "/sys/usb3/3-2"),
+            hidraw(0x231d, 0x0200, " VKBsim Gladiator EVO  R  ", "/sys/usb3/3-3"),
+        ];
+        let o = rank(&devices);
+        let got: Vec<_> = o.joysticks.iter().map(|j| (j.instance, j.product_guid.clone().unwrap())).collect();
+        assert_eq!(got, [(1, VKB_R.into()), (2, VKB_L.into()), (3, LINK.into())]);
     }
 
     fn sdl(vid: u16, pid: u16, name: &str, is_gamepad: bool, syspath: &str) -> WineDevice {

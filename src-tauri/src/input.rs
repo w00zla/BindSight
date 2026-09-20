@@ -704,6 +704,7 @@ fn gp1_holder(infos: &[DeviceInfo]) -> Option<usize> {
                     version: d.sdl_product_version,
                     serial: d.sdl_serial.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| "0000".to_string()),
                     is_gamepad: true,
+                    collection: None,
                     product_name: d.sdl_name.clone(),
                     syspath: d.sdl_path.as_deref().map(|p| syspath("input", p)).unwrap_or_default(),
                 }

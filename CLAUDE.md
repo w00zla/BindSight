@@ -216,7 +216,9 @@ presentational components:
 - `guid.rs` — SDL joystick GUID -> SC `options/@Product` GUID (byte-swap
   vendor/product); `sdl_guid_vendor_product`.
 - `hid.rs` — HID report descriptor -> SC axis name per SDL axis index
-  (`x y z rotx roty rotz slider1 slider2`).
+  (`x y z rotx roty rotz slider1 slider2`); only the joystick-class
+  top-level collections count (a keyboard's interface may carry a mouse
+  collection with its own X/Y).
 - `kblayout.rs` — `keyboard_layout` command: xkb code (`de`, `us`, …) via
   `localectl` / `vconsole.conf` on Linux, `GetKeyboardLayoutNameW` on Windows.
 
@@ -245,14 +247,19 @@ presentational components:
   `HID#VID_xxxx&PID_yyyy[&MI_nn]#<version>&<serial>&0&<index>&<gp>`: by
   (vendor, product), identical devices by winebus's `index` (creation
   order = udev enumeration, sorted by sysfs path). Visibility as winebus
-  decides it: HID usage joystick / gamepad only; one backend per device —
-  hidraw for `hidraw_preferred` vendors (all VKB / VPC, some TM / Fanatec /
-  Simucube, DualShock / DualSense), which must open read-write, SDL for the
-  rest; an SDL device that SDL maps as a controller (unless wheel / flight
+  decides it: HID usage joystick / gamepad only; one backend per device,
+  decided on a hidraw interface's **first** top-level collection
+  (`hidraw_taken`): mouse / keyboard / digitizer first never hidraw, a
+  joystick / gamepad first by the `hidraw_preferred` vendors (all VKB / VPC,
+  some TM / Fanatec / Simucube, DualShock / DualSense), anything else
+  always hidraw (the Keychron Link dongle: bar-code page first); the node
+  must open read-write; SDL for the rest. hidclass splits a multi-collection
+  interface into `&ColNN` children (+ `&NNNN` instance suffix), each a
+  device. An SDL device that SDL maps as a controller (unless wheel / flight
   stick) or has exactly 6 axes and 14+ buttons is a gamepad (`&IG_00`, SC's
   `xinput`, no slot). `rank` is the pure part with tests, `enumerate` reads
   hidapi + sysfs. Not replicated: registry overrides, the evdev backend,
-  multi-collection devices (`&ColNN`).
+  winebus's synthesized serial for devices without one.
 - `gamelog.rs` — parse `Connected joystickN: <Product {GUID}>` into a
   `DeviceOrder` (gamepad lines are not read: no slot). **This is the app's
   joystick-order source**: `device_order` mirrors the last parsed log
@@ -319,11 +326,16 @@ presentational components:
   used by the clash analysis and the Bindings List only), `resolve_bindings`,
   `analyze_clash` (saved `<options>` vs. SC's joystick order from the Game.log,
   a `DeviceOrder`; an empty order is an order, every saved slot then
-  "missing"), `plan_resort` / `resort_commands`. (`ClashReport::logged_order`
-  is vestigial — always `None` now that the log *is* the order.)
+  "missing"), `plan_resort` / `resort_commands`.
   A joystick SDL lists that the order lacks is `unseen`: the GUI drops it
   from Monitor, deck and image-map list without a word — only the Device
-  List ("seen by game") and the clash line in the app log name it.
+  List (`game` row) and the clash line in the app log name it. The reverse
+  — a joystick the order lists that SDL lacks (e.g. one on SDL's joystick
+  blacklist that Wine reaches through hidraw, the Keychron Link dongle) —
+  is a `LogOnlyJoystick` in the frontend (`App.vue`): a Monitor tile
+  without input ("input handling not supported"), a dim "(no input)" note
+  on its Bindings List column, and the `game` row of its hid-only entry in
+  the Device List.
 - `diff.rs` — compares the joystick bindings of two sources (live file,
   binding profile, or backup) by SC token: the `(actionmap, action)` set per
   token in A vs B (label-only differences are not changes); added / removed /
