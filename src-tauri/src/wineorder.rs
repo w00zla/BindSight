@@ -50,9 +50,11 @@
 //! hidraw (`system.reg` + Game.log, 2026-09-20). Not replicated: registry
 //! overrides (`Software\Wine\WineBus`, `Software\Wine\DirectInput\Joysticks`),
 //! the evdev backend (SDL switched off in the registry), winebus's
-//! synthesized serial for devices without one (the key shows `0000`). The
-//! pure parts compile everywhere for the tests; `enumerate` is Linux only
-//! (see `order::live`).
+//! synthesized serial for devices without one (the key shows `0000`). This is
+//! diagnostics only: SC's order comes from `Game.log` (`order::assign`), never
+//! a live enumeration. `wine_devices` + `rank` are Linux only, kept for the
+//! `wine_order` example (`live_keys` also feeds the `wine_keys` command); the
+//! pure parts compile everywhere for the tests.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -255,15 +257,14 @@ pub fn keys(devices: &[WineDevice]) -> Vec<WineKey> {
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::{enumerate, live_keys, syspath, wine_devices};
+pub use linux::{live_keys, syspath, wine_devices};
 
 #[cfg(target_os = "linux")]
 mod linux {
     use log::warn;
 
-    use super::{hidraw_preferred, hidraw_taken, rank, sdl_is_gamepad, WineDevice, WineKey};
+    use super::{hidraw_preferred, hidraw_taken, sdl_is_gamepad, WineDevice, WineKey};
     use crate::input::DeviceInfo;
-    use crate::order::DeviceOrder;
     use crate::scdata::DeviceKind;
 
     /// The sysfs path behind a device node (`/dev/hidraw3` ->
@@ -340,12 +341,6 @@ mod linux {
             });
         }
         Ok(list)
-    }
-
-    /// SC's current joystick order under Wine, replicated from the devices
-    /// SDL lists (`devices`) and the hidraw interfaces hidapi lists.
-    pub fn enumerate(devices: &[DeviceInfo]) -> Result<DeviceOrder, String> {
-        wine_devices(devices).map(|d| rank(&d)).map_err(|e| format!("Wine order: {e}"))
     }
 
     /// The interface keys Wine registers for the listed devices, in its order.

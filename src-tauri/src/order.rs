@@ -24,28 +24,7 @@
 
 use serde::Serialize;
 
-use crate::input::DeviceInfo;
 use crate::scdata::JoystickDevice;
-
-/// This platform's live order source for the devices currently listed
-/// (`devices` is the SDL list; DirectInput ignores it): `None` only on a
-/// platform without one.
-pub fn live(devices: &[DeviceInfo]) -> Option<Result<DeviceOrder, String>> {
-    #[cfg(windows)]
-    {
-        let _ = devices;
-        Some(crate::dinput::enumerate())
-    }
-    #[cfg(target_os = "linux")]
-    {
-        Some(crate::wineorder::enumerate(devices))
-    }
-    #[cfg(not(any(windows, target_os = "linux")))]
-    {
-        let _ = devices;
-        None
-    }
-}
 
 /// The joysticks in SC's order, `instance` being the `jsN` number.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]

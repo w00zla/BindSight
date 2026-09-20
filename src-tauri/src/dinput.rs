@@ -8,8 +8,10 @@
 //! what SC drives through XInput and logs as `xinput`, not `joystick`; they
 //! take no slot and are skipped.
 //!
-//! Windows only (see `order::live`). The pure helpers compile everywhere for
-//! the tests.
+//! Windows only, and diagnostics only: SC's order comes from `Game.log`
+//! (`order::assign`), never a live enumeration. `list` + `to_order` are kept
+//! for the `dinput_order` example; the pure helpers compile everywhere for the
+//! tests.
 
 use crate::order::DeviceOrder;
 use crate::scdata::JoystickDevice;
@@ -65,12 +67,6 @@ pub fn to_order(devices: &[DiDevice]) -> DeviceOrder {
         });
     }
     DeviceOrder { joysticks, timestamp: None }
-}
-
-/// SC's current joystick order, live from DirectInput.
-#[cfg(windows)]
-pub fn enumerate() -> Result<DeviceOrder, String> {
-    list().map(|d| to_order(&d)).map_err(|e| format!("DirectInput: {e}"))
 }
 
 #[cfg(windows)]

@@ -240,11 +240,12 @@ presentational components:
   SDL's joysticks plus the hid-only ones, taken by the clash-report
   commands outside the lock — hidapi enumerates on every call) — the
   next start will not see them, and that is the clash the Monitor
-  predicts. `Assignment::describe_source` is the app-log line. The live
-  enumeration (`order::live()` — `dinput.rs` on Windows, `wineorder.rs` on
-  Linux) never was SC's rule; those modules stay only for the
-  `dinput_order` / `wine_order` diagnostics and `wine_keys`. No usable log
-  means no order — there is no live fallback.
+  predicts. `Assignment::describe_source` is the app-log line. A live
+  enumeration never was SC's rule; `dinput.rs` / `wineorder.rs` stay only for
+  the `dinput_order` / `wine_order` diagnostics (and `wine_keys`), no longer
+  wired into the order — nothing composes them, only their pieces
+  (`dinput::list`/`to_order`, `wineorder::wine_devices`/`rank`) feed the
+  examples. No usable log means no order — there is no live fallback.
 - `dinput.rs` — Windows: DirectInput 8 `EnumDevices(DI8DEVCLASS_GAMECTRL,
   DIEDFL_ATTACHEDONLY)` via `windows-sys` with hand-rolled COM vtables
   (windows-sys ships none). The rank is `jsN`, `guidProduct` is byte for
