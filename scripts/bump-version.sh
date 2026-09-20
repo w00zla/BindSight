@@ -33,6 +33,19 @@ if [ -n "$(git status --porcelain)" ]; then
 	echo "Error: the working tree is not clean, commit or stash first" >&2
 	exit 1
 fi
+
+# Tag the up-to-date remote state, not a stale local one.
+printf 'Pull origin before tagging? [y/N] '
+read -r pull_answer
+case $pull_answer in
+y | Y | yes | YES)
+	git pull
+	;;
+*)
+	echo "Not pulling; tagging the local state."
+	;;
+esac
+
 if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
 	echo "Error: tag v$version exists already" >&2
 	exit 1
