@@ -61,6 +61,7 @@ pub fn to_order(devices: &[DiDevice]) -> DeviceOrder {
             instance: joysticks.len() as u32 + 1,
             product_name: d.product_name.trim().to_string(),
             product_guid: Some(d.product_guid.clone()),
+            product: format!("{} {}", d.product_name.trim(), d.product_guid),
         });
     }
     DeviceOrder { joysticks, timestamp: None }

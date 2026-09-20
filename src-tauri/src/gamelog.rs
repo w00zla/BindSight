@@ -40,9 +40,12 @@ pub fn parse(text: &str) -> Option<DeviceOrder> {
 
     for line in text.lines() {
         // "0:  VKBsim ... {GUID}" -> index, then the Product string.
-        let Some((index, product)) = device_line(line) else { continue };
+        let Some((index, rest)) = device_line(line) else { continue };
+        // After the `:` comes one separator space, then the Product string
+        // byte for byte (its own leading space included).
+        let product = rest.strip_prefix(' ').unwrap_or(rest).trim_end_matches(['\r', '\n']);
         let (product_name, product_guid) = split_product(product);
-        let device = JoystickDevice { instance: index + 1, product_name, product_guid };
+        let device = JoystickDevice { instance: index + 1, product_name, product_guid, product: product.to_string() };
         if let Some(existing) = joysticks.iter_mut().find(|d| d.instance == device.instance) {
             *existing = device;
         } else {
@@ -95,6 +98,9 @@ mod tests {
         assert_eq!(e.joysticks[0].instance, 1); // joystick0 -> js1
         assert_eq!(e.joysticks[0].product_name, "VKBsim Gladiator EVO  R");
         assert_eq!(e.joysticks[0].product_guid.as_deref(), Some("{0200231D-0000-0000-0000-504944564944}"));
+        // The raw Product string keeps SC's own spacing: the leading space
+        // of the name and the run before the GUID.
+        assert_eq!(e.joysticks[0].product, " VKBsim Gladiator EVO  R    {0200231D-0000-0000-0000-504944564944}");
         assert_eq!(e.joysticks[1].instance, 2);
         assert_eq!(e.joysticks[1].product_guid.as_deref(), Some("{0201231D-0000-0000-0000-504944564944}"));
         assert_eq!(e.timestamp.as_deref(), Some("2026-09-08T21:06:00.789Z"));

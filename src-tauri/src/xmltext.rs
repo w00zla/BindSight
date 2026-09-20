@@ -119,9 +119,50 @@ pub fn set_attr(head: &str, name: &str, value: &str) -> Option<String> {
     Some(format!("{}{value}{}", &head[..s.value_start], &head[s.value_end..]))
 }
 
+/// The tag head without the attribute (its name, `=`, quotes and value, plus
+/// the whitespace before it); `None` when the head has no such attribute.
+pub fn remove_attr(head: &str, name: &str) -> Option<String> {
+    let s = find_attr(head, name)?;
+    let bytes = head.as_bytes();
+    // Back from the opening quote over `=` and whitespace to the name…
+    let mut i = s.value_start - 1;
+    while i > 0 && (bytes[i - 1].is_ascii_whitespace() || bytes[i - 1] == b'=') {
+        i -= 1;
+    }
+    i = i.checked_sub(name.len())?;
+    if &head[i..i + name.len()] != name {
+        return None;
+    }
+    // …and over the whitespace in front of it.
+    while i > 0 && bytes[i - 1].is_ascii_whitespace() {
+        i -= 1;
+    }
+    Some(format!("{}{}", &head[..i], &head[s.value_end + 1..]))
+}
+
+/// The tag head with ` name="value"` appended after the last attribute
+/// (before `/>` or `>`); `value` must already be attribute-safe.
+pub fn insert_attr(head: &str, name: &str, value: &str) -> String {
+    let trimmed = head.trim_end_matches('>');
+    let (body, tail) = match trimmed.strip_suffix('/') {
+        Some(body) => (body, "/>"),
+        None => (trimmed, ">"),
+    };
+    format!("{} {name}=\"{value}\"{tail}", body.trim_end())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remove_and_insert_attr() {
+        assert_eq!(remove_attr(r#"<o type="joystick" instance="4" Product="x y"/>"#, "Product").as_deref(), Some(r#"<o type="joystick" instance="4"/>"#));
+        assert_eq!(remove_attr(r#"<o Product = 'x' type="joystick">"#, "Product").as_deref(), Some(r#"<o type="joystick">"#));
+        assert_eq!(remove_attr(r#"<o type="joystick"/>"#, "Product"), None);
+        assert_eq!(insert_attr(r#"<o instance="4"/>"#, "Product", "x {G}"), r#"<o instance="4" Product="x {G}"/>"#);
+        assert_eq!(insert_attr(r#"<o instance="4" >"#, "Product", "x"), r#"<o instance="4" Product="x">"#);
+    }
 
     #[test]
     fn mask_blanks_comments_cdata_and_pis_keeping_offsets() {

@@ -89,8 +89,8 @@ The app supports **Windows** and **Linux**!
 
 ## 🔀 Device Order Fix
 
-- Currently Star Citizen does not assign your device bindings in a reliable way, so bindings can get broken when devices are un/plugged on game startup.
-- The app can recognize and fix those issues beforehand or while in-game!
+- Star Citizen binds to joystick slots (`js1`, `js2`, …), not to devices. When a joystick is unplugged or comes back, the slots behind it shift and their bindings land on the wrong stick or on none.
+- The app knows which slot the game will give each joystick, shows the clash before the game starts, and fixes it: either in the configuration (bindings moved, joystick assignment recorded) or with the console commands for a running game.
 
 ## 💾 Backups
 
@@ -158,7 +158,7 @@ The app supports **Windows** and **Linux**!
 | Shell          | [Tauri 2](https://tauri.app), Rust                                                                                                                        |
 | Frontend       | Vue 3, TypeScript, Vite, [Konva](https://konvajs.org) (editor)                                                                                            |
 | Input          | [SDL2](https://libsdl.org) joystick + GameController APIs, [hidapi](https://github.com/libusb/hidapi) (HID names, axis usages), webview (keyboard, mouse) |
-| Joystick order | DirectInput 8 `EnumDevices` via `windows-sys`; on Linux Wine's registry key order rebuilt from hidapi + sysfs                                             |
+| Joystick order | The game's own device list from its log, reconciled with the joystick assignment saved in its configuration; DirectInput 8 / Wine's registry order as diagnostics |
 | Game data      | [StarBreaker](https://github.com/diogotr7/StarBreaker) code to extract `defaultProfile.xml`, `global.ini`, token labels from `Data.p4k`                   |
 | XML            | `quick-xml` parsing; textual rewrites keep the game's file layout; atomic writes, re-parsed before applied                                                |
 

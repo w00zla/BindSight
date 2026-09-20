@@ -191,6 +191,7 @@ pub fn rank(devices: &[WineDevice]) -> DeviceOrder {
             instance: joysticks.len() as u32 + 1,
             product_name: d.product_name.trim().to_string(),
             product_guid: Some(product_guid(d.vid, d.pid)),
+            product: format!("{} {}", d.product_name.trim(), product_guid(d.vid, d.pid)),
         });
     }
     DeviceOrder { joysticks, timestamp: None }

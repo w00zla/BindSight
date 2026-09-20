@@ -868,11 +868,10 @@ function announceDevices(change: DevicesChanged) {
 }
 
 // The game log was read: at start-up / after an environment change quietly,
-// or because the game started and wrote a new one with the order it took.
-// Either way redo the report (the order source itself on Linux, the
-// "restart the game" check on Windows).
+// or because the game started and wrote a new one with the joysticks it
+// enumerated. Either way redo the report; only a clash appearing or going
+// away is toasted (a start that changes nothing is not news).
 async function onGameLogChanged(started: boolean) {
-  if (started) notify("Game started, device order checked", "hint");
   await loadClash(started);
 }
 

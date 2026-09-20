@@ -99,6 +99,16 @@ pub(crate) struct AppData {
     /// The last clash summary written to the log, so the same outcome is not
     /// logged again on every Refresh / hot-plug (see [`clash_report`]).
     last_clash_log: String,
+    /// The last joystick-order line written to the log, same purpose (see
+    /// [`refresh_device_order`]).
+    last_order_log: String,
+    /// The joysticks attached right now (SDL's list plus the hid-only ones,
+    /// `instance` = position in that list, `product` reconstructed and never
+    /// written), as of the last clash report — what the game will enumerate
+    /// at its next start. `None` before the first report: the log is then
+    /// taken as is. Kept here so the order can be re-taken without the
+    /// device list (log watch, reloads), cheaply.
+    attached_joysticks: Option<Vec<scdata::JoystickDevice>>,
     /// The `actionmaps.xml` on disk as of the last `reload_bindings`, for the
     /// watch thread (see [`spawn_actionmaps_watch`]): a change the app did
     /// not make itself (the game's console, an editor) is reloaded from here.
@@ -199,10 +209,35 @@ pub(crate) fn current_bindings(data: &AppData) -> Vec<bindings::ResolvedBinding>
     }
 }
 
+/// The Product GUIDs of the joysticks attached now: SDL's joysticks plus
+/// the hid-only ones (a device SDL blacklists that the game still sees,
+/// the Keychron Link dongle under Wine). Enumerates hidapi — call it
+/// outside the `AppData` lock.
+fn attached_joysticks(devices: &input::DeviceList) -> Vec<scdata::JoystickDevice> {
+    let listed = devices.lock().map(|d| d.clone()).unwrap_or_default();
+    let mut out: Vec<(String, String)> = listed
+        .iter()
+        .filter(|d| d.kind == scdata::DeviceKind::Joystick)
+        .filter_map(|d| Some((d.sc_product_guid.clone()?, d.sc_name.clone().unwrap_or_else(|| d.sdl_name.clone()))))
+        .collect();
+    out.extend(input::hid_only_devices(&listed).into_iter().map(|h| (h.product_guid, h.name.unwrap_or_default())));
+    out.into_iter()
+        .enumerate()
+        .map(|(i, (guid, name))| scdata::JoystickDevice {
+            instance: i as u32 + 1,
+            product: format!("{name} {guid}"),
+            product_name: name,
+            product_guid: Some(guid),
+        })
+        .collect()
+}
+
 /// The clash report for the loaded actionmaps.xml against SC's joystick order
-/// (see [`AppData::device_order`], taken from the last `Game.log` read — no
-/// file is touched here, so this stays cheap under the lock).
-fn clash_report(data: &mut AppData, devices: &input::DeviceList) -> bindings::ClashReport {
+/// (see [`AppData::device_order`], taken from the last `Game.log` read and
+/// the joysticks `attached` now — no file is touched here, so this stays
+/// cheap under the lock).
+fn clash_report(data: &mut AppData, devices: &input::DeviceList, attached: Vec<scdata::JoystickDevice>) -> bindings::ClashReport {
+    data.attached_joysticks = Some(attached);
     refresh_device_order(data);
     // Without a bindings file (no install configured, or it failed to load)
     // the order still says which joysticks the game sees: the report is
@@ -223,11 +258,22 @@ fn clash_report(data: &mut AppData, devices: &input::DeviceList) -> bindings::Cl
         .iter()
         .map(|u| format!("{} {}", u.name.as_deref().unwrap_or("?"), u.sc_product_guid.as_deref().unwrap_or("?")))
         .collect();
+    // Per device: the slot the file saves it under -> the slot the game
+    // assigns ("-" = not saved), the missing ones with their saved slot.
+    let slots: Vec<String> = report
+        .connected
+        .iter()
+        .map(|s| {
+            let stored = s.stored_instance.map(|i| format!("js{i}")).unwrap_or_else(|| "-".into());
+            format!("{} {stored}->js{}", s.name.as_deref().unwrap_or("?"), s.effective_instance)
+        })
+        .collect();
+    let missing: Vec<String> = report.missing.iter().map(|m| format!("{} js{}->gone", m.name, m.stored_instance)).collect();
     let summary = format!(
-        "clash: has_clash={} connected={} missing={} unseen=[{}] resort=[{}]",
+        "clash: has_clash={} slots=[{}] missing=[{}] unseen=[{}] resort=[{}]",
         report.has_clash,
-        report.connected.len(),
-        report.missing.len(),
+        slots.join(", "),
+        missing.join(", "),
         unseen.join(", "),
         report.resort_commands.join(" | ")
     );
@@ -246,32 +292,38 @@ fn get_clash_report(
     devices: State<input::DeviceList>,
     data: State<Mutex<AppData>>,
 ) -> bindings::ClashReport {
-    clash_report(&mut data.lock().unwrap(), devices.inner())
+    let attached = attached_joysticks(devices.inner());
+    clash_report(&mut data.lock().unwrap(), devices.inner(), attached)
 }
 
 /// Apply the clash report's resort to the live `actionmaps.xml` — the
-/// out-of-game equivalent of the `pp_resortdevices` commands. The game must
-/// not be running (it would overwrite the file on exit). While auto-backups
-/// are on, a backup of the original is taken first via `backups::create`
-/// (reason "before order fix"). Reloads the
-/// bindings afterwards and returns the load status, like `set_environments`
-/// / `set_active_env`.
+/// out-of-game equivalent of the `pp_resortdevices` commands — and record
+/// the device map the game now assigns in the `<options>` (what the game
+/// itself writes at its next save): afterwards the saved set is the
+/// attached one, so the game follows the file whatever its rule for a set
+/// change is, and the clash is gone. The game must not be running (it
+/// would overwrite the file on exit). While auto-backups are on, a backup
+/// of the original is taken first via `backups::create` (reason "before
+/// order fix"). Reloads the bindings afterwards and returns the load
+/// status, like `set_environments` / `set_active_env`.
 #[tauri::command]
 fn apply_resort(
     app: AppHandle,
     devices: State<input::DeviceList>,
     data: State<Mutex<AppData>>,
 ) -> Result<LoadStatus, String> {
+    let attached = attached_joysticks(devices.inner());
     let mut data = data.lock().unwrap();
-    let report = clash_report(&mut data, devices.inner());
+    let report = clash_report(&mut data, devices.inner(), attached);
     // GUI messages: the Status panel already names the order problem.
-    if report.order_error.is_some() {
+    let Ok(order) = data.device_order.clone() else {
         return Err("No joystick order found".into());
-    }
+    };
     if report.resort.is_empty() {
         return Err("Nothing to fix".into());
     }
-    write_resort(&app, &mut data, &bindings::resort_swaps(&report.resort), "before order fix", "order fix")
+    let map: Vec<(u32, String)> = order.joysticks.iter().map(|j| (j.instance, j.product.clone())).collect();
+    write_resort(&app, &mut data, &bindings::resort_swaps(&report.resort), Some(&map), "before order fix", "order fix")
 }
 
 /// Swap two joystick slots in the live `actionmaps.xml` — the user's own
@@ -289,33 +341,46 @@ fn apply_reorder(a: u32, b: u32, app: AppHandle, data: State<Mutex<AppData>>) ->
     if data.bindings_file.is_none() {
         return Err("No bindings loaded".into());
     }
-    write_resort(&app, &mut data, &[(a, b)], "before resort", "resort")
+    write_resort(&app, &mut data, &[(a, b)], None, "before resort", "resort")
 }
 
 /// The one write behind the order fix and the resort: the textual rewrite
 /// of the swap chain, what the `pp_resortdevices` commands would do
-/// (validated and verified in `resort`), then the guarded replacement of
-/// the live file. `what` names the caller in the log.
+/// (validated and verified in `resort`), then — for the order fix — the
+/// device map `map` (slot, raw Product) recorded in the `<options>`, then
+/// the guarded replacement of the live file. `what` names the caller in
+/// the log.
 fn write_resort(
     app: &AppHandle,
     data: &mut AppData,
     swaps: &[(u32, u32)],
+    map: Option<&[(u32, String)]>,
     reason: &str,
     what: &str,
 ) -> Result<LoadStatus, String> {
     let path = config::actionmaps_path(data.config.base_path());
     let xml = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let rewritten = resort::rewrite_actionmaps(&xml, swaps).map_err(|e| {
+    let mut rewritten = resort::rewrite_actionmaps(&xml, swaps).map_err(|e| {
         error!("{what} rewrite refused ({} swap(s)): {e}", swaps.len());
         e
     })?;
+    if let Some(map) = map {
+        let entries: Vec<(u32, &str)> = map.iter().map(|(s, p)| (*s, p.as_str())).collect();
+        rewritten = resort::rewrite_device_map(&rewritten, &entries).map_err(|e| {
+            error!("{what} device map rewrite refused: {e}");
+            e
+        })?;
+    }
 
     let version = data.sc.version.as_ref().map(|v| v.label.as_str());
     let root = backups::backups_root(app)?;
     let backup =
         gamefile::replace_live_file(&root, &path, &rewritten, reason, data.config.auto_backup, version, &data.sc.data.actions)?;
     let listed: Vec<String> = swaps.iter().map(|(a, b)| format!("js{a}<->js{b}")).collect();
-    info!("{what} applied to {}: {} ({})", path.display(), listed.join(" "), gamefile::backup_label(&backup));
+    let recorded = map
+        .map(|m| format!(", device map recorded: [{}]", m.iter().map(|(s, p)| format!("js{s}={}", p.trim())).collect::<Vec<_>>().join(", ")))
+        .unwrap_or_default();
+    info!("{what} applied to {}: {}{recorded} ({})", path.display(), listed.join(" "), gamefile::backup_label(&backup));
 
     Ok(reload_bindings(data))
 }
@@ -782,25 +847,52 @@ fn sc_cache_root(app: &AppHandle) -> Result<std::path::PathBuf, String> {
 /// player's language (the file path stays in the app log via [`AppData::game_log`]).
 const NO_ORDER_HINT: &str = "Start the game once so it lists your joysticks.";
 
-/// Re-take SC's joystick order from the last `Game.log` read
-/// ([`AppData::game_log`], maintained by the watch thread): the game's own
-/// record of the order it enumerated at its last start, which is SC's order on
-/// every platform. The live DirectInput/Wine enumeration does not reliably
-/// reproduce it (Windows 11 in particular), so it is not the source. No usable
-/// log means no order — the clash report then carries [`NO_ORDER_HINT`]. Only a
-/// changed order is stored; the watch thread already logs the change.
+/// Re-take SC's joystick order: the slots the game assigns the joysticks it
+/// enumerated at its last start ([`AppData::game_log`], maintained by the
+/// watch thread) given the device map saved in the loaded `actionmaps.xml`
+/// (`order::assign`: the file's slots while the attached set is the saved
+/// one, derived slots after a set change). No usable log means no order —
+/// the clash report then carries [`NO_ORDER_HINT`]. The source and the
+/// outcome are logged whenever they change.
 fn refresh_device_order(data: &mut AppData) {
-    let fresh = match &data.game_log {
-        Ok(order) => Ok(order.clone()),
-        Err(_) => Err(NO_ORDER_HINT.to_string()),
+    let saved = data.bindings_file.as_ref().map(|f| f.joysticks.as_slice()).unwrap_or(&[]);
+    // (order, log line, whether the line is an error: a state the app cannot
+    // work in, worth a developer's eye)
+    let (fresh, line, is_error) = match (&data.game_log, &data.attached_joysticks) {
+        (Ok(log), attached) => {
+            // The log is the game's last start; a joystick unplugged since
+            // is not what the game will enumerate next time.
+            let (enumerated, gone) = match attached {
+                Some(attached) => {
+                    let guids: Vec<String> = attached.iter().filter_map(|d| d.product_guid.clone()).collect();
+                    order::attached_only(log, &guids)
+                }
+                None => (log.clone(), Vec::new()),
+            };
+            let assignment = order::assign(&enumerated, saved);
+            let unplugged = if gone.is_empty() {
+                String::new()
+            } else {
+                format!(", unplugged since the game's start: [{}]", gone.iter().map(|d| d.product_name.clone()).collect::<Vec<_>>().join(", "))
+            };
+            let line = format!("joystick order from the {}: [{}]{unplugged}", assignment.describe_source(), assignment.order.describe());
+            (Ok(assignment.order), line, false)
+        }
+        // No usable log: no order, no fallback — the app cannot resolve a
+        // single joystick input in this state, so it is an error.
+        (Err(log_err), _) => (
+            Err(NO_ORDER_HINT.to_string()),
+            format!("no joystick order: no usable game log ({log_err}); joystick input cannot be resolved"),
+            true,
+        ),
     };
-    let same = match (&fresh, &data.device_order) {
-        (Ok(a), Ok(b)) => a.joysticks == b.joysticks,
-        (Err(a), Err(b)) => a == b,
-        _ => false,
-    };
-    if same {
-        return;
+    if line != data.last_order_log {
+        if is_error {
+            error!("{line}");
+        } else if !line.is_empty() {
+            info!("{line}");
+        }
+        data.last_order_log = line;
     }
     data.device_order = fresh;
 }
@@ -1238,6 +1330,8 @@ pub fn run() {
                 index: bindings::BindingIndex::default(),
                 bindings_error: None,
                 last_clash_log: String::new(),
+                last_order_log: String::new(),
+                attached_joysticks: None,
                 actionmaps_stamp: None,
             }));
             app.manage(devices);

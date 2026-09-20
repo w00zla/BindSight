@@ -290,6 +290,12 @@ pub struct JoystickDevice {
     pub instance: u32,
     pub product_name: String,
     pub product_guid: Option<String>,
+    /// The raw `Product` string as SC writes it (`" VKBsim Gladiator EVO  L    {GUID}"`,
+    /// spacing quirks included): the `<options>` attribute, or the rest of a
+    /// `Game.log` device line. Written back byte for byte when the app
+    /// records the device map (`resort::rewrite_device_map`).
+    #[serde(skip)]
+    pub product: String,
 }
 
 /// One user rebind: which action (identified by its actionmap + action name)
@@ -400,7 +406,7 @@ fn joystick_device_from(attrs: &HashMap<String, String>) -> Option<JoystickDevic
     // Empty joystick slots have no Product attribute; skip them.
     let product = attrs.get("Product")?;
     let (product_name, product_guid) = split_product(product);
-    Some(JoystickDevice { instance, product_name, product_guid })
+    Some(JoystickDevice { instance, product_name, product_guid, product: product.clone() })
 }
 
 /// Split an SC `Product` string into its name and `{GUID}` parts, e.g.

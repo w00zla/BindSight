@@ -273,12 +273,12 @@ pub fn resolve_bindings(maps: &[ActionMap], profile: &ActionMapsFile) -> Vec<Res
     out
 }
 
-/// One joystick in SC's order: the `jsN` SC assigns it (its 1-based rank,
-/// see `order.rs`) versus the `jsN` recorded for its GUID in the saved
-/// `<options>` block.
+/// One joystick in SC's order: the `jsN` SC assigns it (see `order::assign`)
+/// versus the `jsN` recorded for its GUID in the saved `<options>` block.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SlotStatus {
-    /// `jsN` SC assigns: 1-based rank in SC's enumeration.
+    /// `jsN` SC assigns: the saved slot while the attached set is the saved
+    /// one, a derived slot after a set change.
     pub effective_instance: u32,
     /// `jsN` recorded for this device's GUID in `<options>`, or `None` if the
     /// device is not in the saved profile at all.
@@ -353,13 +353,12 @@ fn guid_eq(a: Option<&str>, b: Option<&str>) -> bool {
     matches!((a, b), (Some(a), Some(b)) if a.eq_ignore_ascii_case(b))
 }
 
-/// Compare the saved `<options>` order against SC's actual device order. SC
-/// assigns `jsN` purely by enumeration position and ignores name/GUID
-/// (validated by the user: `pp_resortdevices` is only ever needed because of
-/// this). So a device whose SC rank differs from its saved `jsN` — or a saved
-/// device SC does not list — means its bindings land on the wrong stick.
-///
-/// `order` is SC's joystick order (see `order.rs`); an empty one (nothing
+/// Compare the saved `<options>` map against the slots SC assigns now.
+/// `order` is the assigned order (`order::assign`: the file's own slots while
+/// the attached set is the saved one, derived slots after a set change), so
+/// a difference only ever comes from a set change — a device whose slot
+/// moved, or a saved device SC does not list — and means its bindings sit
+/// on the wrong `jsN` until they are resorted. An empty order (nothing
 /// attached) is an order too — every saved slot is then missing. Without an
 /// order the report carries just the error.
 pub fn analyze_clash(
@@ -1095,5 +1094,65 @@ mod tests {
         assert!(!report.has_clash);
         assert_eq!(report.connected.len(), 1); // only the stick has a slot
         assert!(report.unseen.is_empty()); // pad and keyboard are not "unseen"
+    }
+
+    // --- test series v2 (2026-09-20): the assignment rule end to end -------
+
+    const LINK: &str = "{D0303434-0000-0000-0000-504944564944}";
+
+    /// The file of step A: L1 Link2 K2HE3 R4, R's bindings on js4.
+    const SERIES_XML: &str = r#"<ActionMaps>
+      <options type="joystick" instance="1" Product=" VKB L {0201231D-0000-0000-0000-504944564944}"/>
+      <options type="joystick" instance="2" Product="Keychron Link   {D0303434-0000-0000-0000-504944564944}"/>
+      <options type="joystick" instance="3" Product="Keychron K2 HE  {0E213434-0000-0000-0000-504944564944}"/>
+      <options type="joystick" instance="4" Product=" VKB R {0200231D-0000-0000-0000-504944564944}"/>
+    </ActionMaps>"#;
+
+    fn series_report(log: &[(&str, &str)], xml: &str) -> ClashReport {
+        let profile = parse_actionmaps(xml).unwrap();
+        let assigned = crate::order::assign(&log_of(log), &profile.joysticks);
+        analyze_clash(&profile, &[], Ok(&assigned.order))
+    }
+
+    #[test]
+    fn series_stable_set_is_no_clash_whatever_the_enumeration() {
+        // Step A: the game enumerates L, K2HE, Link, R; the file says L1 Link2 K2HE3 R4.
+        let r = series_report(&[("VKB L", VKB_L), ("Keychron K2 HE", KEYCHRON_K2HE), ("Keychron Link", LINK), ("VKB R", VKB_R)], SERIES_XML);
+        assert!(!r.has_clash);
+        assert!(r.resort.is_empty());
+        assert!(r.missing.is_empty());
+        let slot = |g: &str| r.connected.iter().find(|s| s.sc_product_guid.as_deref() == Some(g)).unwrap().effective_instance;
+        assert_eq!((slot(VKB_L), slot(LINK), slot(KEYCHRON_K2HE), slot(VKB_R)), (1, 2, 3, 4));
+    }
+
+    #[test]
+    fn series_step_c_removed_device_shifts_r_and_one_swap_fixes_it() {
+        // K2 HE unplugged: R becomes js3, its bindings sit on js4.
+        let r = series_report(&[("VKB L", VKB_L), ("Keychron Link", LINK), ("VKB R", VKB_R)], SERIES_XML);
+        assert!(r.has_clash);
+        let rs = r.connected.iter().find(|s| s.sc_product_guid.as_deref() == Some(VKB_R)).unwrap();
+        assert_eq!((rs.stored_instance, rs.effective_instance, rs.clash), (Some(4), 3, true));
+        assert_eq!(r.missing.len(), 1);
+        assert_eq!(r.missing[0].stored_instance, 3);
+        assert_eq!(resort_swaps(&r.resort), vec![(3, 4)]);
+        assert_eq!(r.resort_commands, vec!["pp_resortdevices joystick 3 4"]);
+    }
+
+    #[test]
+    fn series_step_d_added_device_pushes_r_back_to_js4() {
+        // The file after C (the game's own save: L1 Link2 R3), K2 HE back.
+        let xml = r#"<ActionMaps>
+          <options type="joystick" instance="1" Product=" VKB L {0201231D-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="2" Product="Keychron Link   {D0303434-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="3" Product=" VKB R {0200231D-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="4"/>
+        </ActionMaps>"#;
+        let r = series_report(&[("VKB L", VKB_L), ("Keychron K2 HE", KEYCHRON_K2HE), ("Keychron Link", LINK), ("VKB R", VKB_R)], xml);
+        assert!(r.has_clash);
+        let slot = |g: &str| r.connected.iter().find(|s| s.sc_product_guid.as_deref() == Some(g)).unwrap();
+        assert_eq!((slot(VKB_R).stored_instance, slot(VKB_R).effective_instance), (Some(3), 4));
+        assert_eq!((slot(KEYCHRON_K2HE).stored_instance, slot(KEYCHRON_K2HE).effective_instance), (None, 3));
+        assert!(r.missing.is_empty());
+        assert_eq!(resort_swaps(&r.resort), vec![(3, 4)]);
     }
 }

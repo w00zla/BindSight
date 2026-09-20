@@ -228,13 +228,23 @@ presentational components:
   type every order source yields: `instance_for_guid` is what the Monitor
   resolves against (`resolve_input`; without an order no joystick input
   resolves, keyboard and pad still do), `same_ranking` the log-vs-live
-  check. **`Game.log` is the order source on every platform** (`gamelog.rs` /
-  `logwatch.rs`): SC's own record of the order it enumerated at its last start.
-  The live enumeration (`order::live()` — `dinput.rs` on Windows, `wineorder.rs`
-  on Linux) does not reliably reproduce it (Windows 11 in particular, verified
-  2026-09-19), so it is no longer the source; those modules stay only for the
-  `dinput_order` / `wine_order` diagnostics and `wine_keys`. No usable log means
-  no order — there is no live fallback.
+  check. **`assign(enumerated, saved)` is the slot rule** (see the order
+  gotcha): the enumeration from `Game.log` (`gamelog.rs` / `logwatch.rs`,
+  SC's own record of what it saw at its last start) reconciled with the
+  device map in the file's `<options>` — the file's slots while the
+  attached set is the saved one (`OrderSource::File`), derived slots after
+  a set change (`SetChanged`: gap closed on removal, a new device inserted
+  at enumeration index + 1, the latter an assumption from one observed
+  case). The log is the game's *last* start, so `attached_only` first drops
+  the logged joysticks that are unplugged now (`AppData::attached_joysticks`:
+  SDL's joysticks plus the hid-only ones, taken by the clash-report
+  commands outside the lock — hidapi enumerates on every call) — the
+  next start will not see them, and that is the clash the Monitor
+  predicts. `Assignment::describe_source` is the app-log line. The live
+  enumeration (`order::live()` — `dinput.rs` on Windows, `wineorder.rs` on
+  Linux) never was SC's rule; those modules stay only for the
+  `dinput_order` / `wine_order` diagnostics and `wine_keys`. No usable log
+  means no order — there is no live fallback.
 - `dinput.rs` — Windows: DirectInput 8 `EnumDevices(DI8DEVCLASS_GAMECTRL,
   DIEDFL_ATTACHEDONLY)` via `windows-sys` with hand-rolled COM vtables
   (windows-sys ships none). The rank is `jsN`, `guidProduct` is byte for
@@ -261,9 +271,12 @@ presentational components:
   hidapi + sysfs. Not replicated: registry overrides, the evdev backend,
   winebus's synthesized serial for devices without one.
 - `gamelog.rs` — parse `Connected joystickN: <Product {GUID}>` into a
-  `DeviceOrder` (gamepad lines are not read: no slot). **This is the app's
-  joystick-order source**: `device_order` mirrors the last parsed log
-  (`lib.rs::refresh_device_order`). Parsing fails soft, never panics.
+  `DeviceOrder` (gamepad lines are not read: no slot), the raw `product`
+  kept byte for byte (it is the `Product` attribute SC writes). **This is
+  the enumeration `order::assign` starts from**: `device_order` is the
+  assignment of the last parsed log against the loaded file
+  (`lib.rs::refresh_device_order`, logged on every change). Parsing fails
+  soft, never panics.
 - `logwatch.rs` — the `Game.log` watch (pure state machine; the thread is
   `lib.rs::spawn_game_log_watch`, **the only reader of the log**, always
   outside the `AppData` lock): a metadata poll every 2 s; the first poll and
@@ -275,8 +288,8 @@ presentational components:
   fall between them, so the first line found is not the order yet; every
   changed outcome replaces the log snapshot and emits `gamelog-changed`
   (`{started}`: true for the first outcome of a new file — the frontend
-  toasts and announces a clash flip only then). Writes to a running log are
-  ignored on purpose.
+  announces a clash flip only then; a start by itself is not toasted).
+  Writes to a running log are ignored on purpose.
 
 ### Game data and bindings
 
@@ -324,9 +337,10 @@ presentational components:
   defaults per kind with a per-kind "touched" rule), `button_token` /
   `hat_token` (+1 offset), `instance_for_guid` (the saved `<options>` slot,
   used by the clash analysis and the Bindings List only), `resolve_bindings`,
-  `analyze_clash` (saved `<options>` vs. SC's joystick order from the Game.log,
-  a `DeviceOrder`; an empty order is an order, every saved slot then
-  "missing"), `plan_resort` / `resort_commands`.
+  `analyze_clash` (saved `<options>` vs. the assigned order from
+  `order::assign`, a `DeviceOrder`; a difference only ever comes from a set
+  change; an empty order is an order, every saved slot then "missing"),
+  `plan_resort` / `resort_commands`.
   A joystick SDL lists that the order lacks is `unseen`: the GUI drops it
   from Monitor, deck and image-map list without a word — only the Device
   List (`game` row) and the clash line in the app log name it. The reverse
@@ -373,14 +387,19 @@ presentational components:
   `<options type="joystick">` elements (invert / exponent settings, an
   emptied element written self-closing, a filled one opened) — while the
   `instance` / `Product` attributes and the element order stay: that map is
-  the game's per-session record, which the command never touches (so after
-  a Fix via config the file's `<options>` still disagree with the log and
-  the clash report stays until the game rewrites the map at its next
-  save). Not replicated, not understood: the game left two blank rebinds on
-  the source slot (`turret_toggle_mouse_mode`, `v_cycle_pitch_ladder_mode`)
+  the game's per-session record, which the command never touches. Not
+  replicated, not understood: the game left two blank rebinds on the
+  source slot (`turret_toggle_mouse_mode`, `v_cycle_pitch_ladder_mode`)
   while moving 350 blanks of the same shape. Every swap re-parses its output
   and checks it (`verify_applied`: rebinds in place with swapped tokens,
   device map unchanged; `verify_children_swapped`).
+  `rewrite_device_map` records a device map in the `<options>` (raw
+  `Product` per slot, byte for byte, the rest emptied; element order,
+  `instance` and children stay) — what the game writes at its next save.
+  The **order fix** (`apply_resort`) is the swap chain plus that map for the
+  assigned order: afterwards the saved set is the attached one, the game
+  follows the file whatever its rule for a set change is, and the clash is
+  gone; Resort in the Bindings mode (`apply_reorder`) is the bare command.
 - `apply.rs` — applies a profile or backup to the live file per device
   (`plan_apply`: the source's rebinds for the chosen `kb1` / `gp1` / `jsN`
   are written, live rebinds the source lacks are removed via an empty
@@ -439,10 +458,12 @@ presentational components:
 - `lib.rs` — Tauri commands, state wiring and thread spawns, the Wayland
   DMABUF workaround, logging setup. `AppData` holds config, game data +
   load status, the bindings file + its load error, the binding index, the
-  joystick order (`device_order`, mirrored from the Game.log snapshot on every
-  clash report via `refresh_device_order`) + that Game.log snapshot, the
-  last logged clash summary, and the stamp (mtime + length) of the
-  `actionmaps.xml` last read. **`spawn_actionmaps_watch`** polls that stamp
+  joystick order (`device_order`: `order::assign` of the Game.log snapshot
+  reduced to the joysticks attached now against the file's `<options>`,
+  re-taken by `refresh_device_order` on every clash report, reload and log
+  change) + that Game.log snapshot + the attached joysticks as of the last
+  report, the last logged clash summary and order line, and the stamp
+  (mtime + length) of the `actionmaps.xml` last read. **`spawn_actionmaps_watch`** polls that stamp
   every 2 s (under the lock, a metadata call) and, once a changed stamp held
   still for one more poll, runs `reload_bindings` and emits
   `bindings-changed` (payload the `LoadStatus`; the frontend takes it like a
@@ -452,9 +473,10 @@ presentational components:
   back as a change; idle until the first load and while the environment is
   invalid.
   **Nothing slow under the `AppData` lock**: `resolve_input` runs per input
-  event on the main thread and needs it; the order now costs nothing there
-  (a clone of the Game.log snapshot — no enumeration), and the log is read
-  only by the watch thread without the lock; the write
+  event on the main thread and needs it; the order costs nothing there
+  (`order::assign` over snapshots — no enumeration; the hidapi scan for the
+  attached set runs in the report commands before they take the lock), and
+  the log is read only by the watch thread without the lock; the write
   commands hold it for their backup + write + reload on purpose (user
   actions, consistency). `get_load_status` hands the last load outcome to
   a frontend that mounts after the first load already finished;
@@ -637,8 +659,8 @@ cargo run --example enum_joysticks              # list devices + GUIDs
 cargo run --example log_joystick_events         # live event log
 cargo run --example hid_names                   # HID product strings
 cargo run --example hid_axes [-- --hex]         # HID axis usages + SC axes
-cargo run --example dinput_order                # SC's joystick order (Windows)
-cargo run --example wine_order                  # SC's joystick order under Wine (Linux)
+cargo run --example dinput_order                # DirectInput enumeration, diagnostics (Windows)
+cargo run --example wine_order                  # Wine's enumeration, diagnostics (Linux)
 cargo run --example pad_events                  # pad mapping + controller-level events
 cargo run --example parse_scdata -- <defaultProfile.xml> <global.ini>  # parser check
 cargo run --release --example p4k_extract -- <Data.p4k> <out dir>      # P4K reader check
@@ -679,20 +701,26 @@ on Windows; delete it to force a re-extract.
   `Data.p4k` (e.g. `.../StarCitizen/LIVE`).
 - **Device identity is GUID, never name**: SDL's name (evdev) differs from
   SC's (HID product string).
-- **SC's joystick order comes from `Game.log`, on every platform** (since
-  2026-09-19). SC logs `Connected joystickN: <Product {GUID}>` at start —
-  `joystickN` -> `js(N+1)` — its own record of what it enumerated. The live
-  enumeration was the source before but does not reliably match SC on Windows 11
-  (a user's DirectInput `EnumDevices` returned a different order than SC used —
-  it matched SDL's arrival order instead — and no derivable key reproduced SC's),
-  so `dinput.rs` (Windows) / `wineorder.rs` (Linux) are now diagnostics only, not
-  the source. **Neither SDL order nor the saved `<options>` slot is SC order**
-  (SDL's Windows backend even prepends, reversing its start enumeration; the
-  `<options>` slot is what the file says, the order is what the game did). No
-  usable `Game.log` = no order: the joysticks show "no joystick order" and
-  resolve nothing (no live fallback). The Monitor, the deck and the Bindings
-  List's column names follow the order; a device plugged in or out shifts every
-  slot behind it — inherent to SC, that is what Apply / the order fix are for.
+- **SC's `jsN` slots follow the saved device map, not the enumeration**
+  (test series v2, Windows, SC 4.10, 2026-09-20, in-cockpit verified):
+  while the attached joysticks are the ones in the file's
+  `<options type="joystick">`, each takes the `instance` saved for its
+  Product GUID — swap two `Product` attributes and the sticks swap in the
+  cockpit. Only a **set change** derives new slots: a stick gone closes the
+  gap (`js4` -> `js3`; the tokens stay, so every stick behind the gap loses
+  its bindings — the real clash), a stick new was seen once (enumerated
+  second, three saved: it took `js3`, the saved third moved to `js4`;
+  `order::assign` replicates that as "insert at enumeration index + 1",
+  an assumption). The game writes its map at exit and on a keybinding
+  export, never at start, so after a regular exit the file is the game's
+  own state. `Game.log`'s `Connected joystickN: <Product {GUID}>` lines
+  (`joystickN` -> `js(N+1)`) are the enumeration the rule starts from and
+  the only source of "what the game saw"; the live enumeration (`dinput.rs`
+  / `wineorder.rs`) is diagnostics only, and SDL's order is nothing (its
+  Windows backend even prepends). No usable `Game.log` = no order: the
+  joysticks show "no joystick order" and resolve nothing (no live fallback).
+  The Monitor, the deck and the Bindings List's column names follow the
+  assigned order.
 - **`pp_resortdevices` logs 0-based slots**: `pp_resortdevices joystick 2 3`
   writes `N actions moved from js1 to js2` into `Game.log` (the same quirk
   as `Connected joystick0` = `js1`). The arguments are 1-based `jsN`. A

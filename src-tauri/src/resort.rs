@@ -23,7 +23,7 @@
 //! checks it against the intent before the next one.
 
 use crate::scdata::{parse_actionmaps, ActionMapsFile};
-use crate::xmltext::{attr, find_attr, mask_markup, tag_end};
+use crate::xmltext::{attr, find_attr, insert_attr, mask_markup, remove_attr, set_attr, tag_end};
 
 /// Apply `swaps` (pairs of slots, `pp_resortdevices joystick A B` each) in
 /// order to `xml`.
@@ -208,6 +208,63 @@ fn verify_children_swapped(before: &str, after: &str, a: u32, b: u32) -> Result<
         }
     }
     Ok(())
+}
+
+/// Record a joystick device map in the `<options type="joystick">` elements:
+/// slot `instance` of each `map` entry gets that raw `Product` string,
+/// every other joystick element loses its `Product` — what the game writes
+/// at its next save once it assigned the slots (see `order::assign`). The
+/// element order, the `instance` attributes and the children stay; a slot
+/// in `map` without an element is an error (the game keeps `js1`–`js8`),
+/// and so is a product string that would need escaping. Re-parsed and
+/// checked before it is returned.
+pub fn rewrite_device_map(xml: &str, map: &[(u32, &str)]) -> Result<String, String> {
+    for (slot, product) in map {
+        if *slot == 0 {
+            return Err("joystick slots start at js1".into());
+        }
+        if product.chars().any(|c| matches!(c, '"' | '<' | '>' | '&') || c.is_control()) {
+            return Err(format!("js{slot}: the device name cannot be written as it is"));
+        }
+        if map.iter().filter(|(s, _)| s == slot).count() > 1 {
+            return Err(format!("js{slot} listed twice"));
+        }
+    }
+    let blocks = find_joystick_options(xml)?;
+    if blocks.is_empty() {
+        return Err("no <options type=\"joystick\"> in actionmaps.xml".into());
+    }
+    if let Some((slot, _)) = map.iter().find(|(s, _)| !blocks.iter().any(|b| b.instance == *s)) {
+        return Err(format!("no <options> element for js{slot}"));
+    }
+
+    let mut out = String::with_capacity(xml.len());
+    let mut last = 0;
+    for block in &blocks {
+        let head = &xml[block.start..=block.head_end];
+        let new_head = match map.iter().find(|(s, _)| *s == block.instance) {
+            Some((_, product)) => set_attr(head, "Product", product).unwrap_or_else(|| insert_attr(head, "Product", product)),
+            None => remove_attr(head, "Product").unwrap_or_else(|| head.to_string()),
+        };
+        out.push_str(&xml[last..block.start]);
+        out.push_str(&new_head);
+        last = block.head_end + 1;
+    }
+    out.push_str(&xml[last..]);
+
+    let after = parse_actionmaps(&out).map_err(|e| format!("rewrite produced unreadable XML: {e}"))?;
+    let mut expected: Vec<(u32, String)> = map.iter().map(|(s, p)| (*s, (*p).to_string())).collect();
+    expected.sort();
+    let mut got: Vec<(u32, String)> = after.joysticks.iter().map(|j| (j.instance, j.product.clone())).collect();
+    got.sort();
+    if got != expected {
+        return Err("rewrite check failed: the joystick device map is not what was asked".into());
+    }
+    let before = parse_actionmaps(xml)?;
+    if before.rebinds.len() != after.rebinds.len() || before.rebinds.iter().zip(&after.rebinds).any(|(x, y)| x.input != y.input) {
+        return Err("rewrite check failed: the rebinds changed".into());
+    }
+    Ok(out)
 }
 
 /// Swap the `jsA_` / `jsB_` prefixes of every token inside the `input`
@@ -427,5 +484,80 @@ mod tests {
         assert_eq!(swap_tokens("kb1_js", 1, 2), "kb1_js"); // no digits/underscore
         assert_eq!(swap_tokens("js_button1", 1, 2), "js_button1");
         assert_eq!(swap_tokens("", 1, 2), "");
+    }
+
+    // --- device map ---------------------------------------------------------
+
+    const MAP_XML: &str = "<ActionMaps>\r\n\
+ <options type=\"joystick\" instance=\"1\" Product=\" VKBsim Gladiator EVO  L    {0201231D-0000-0000-0000-504944564944}\">\r\n\
+  <flight_move_strafe_vertical invert=\"1\"/>\r\n\
+ </options>\r\n\
+ <options type=\"joystick\" instance=\"2\" Product=\"Keychron Link   {D0303434-0000-0000-0000-504944564944}\"/>\r\n\
+ <options type=\"joystick\" instance=\"3\" Product=\"Keychron K2 HE  {0E213434-0000-0000-0000-504944564944}\"/>\r\n\
+ <options type=\"joystick\" instance=\"4\" Product=\" VKBsim Gladiator EVO  R    {0200231D-0000-0000-0000-504944564944}\"/>\r\n\
+ <options type=\"joystick\" instance=\"5\"/>\r\n\
+ <!-- <options type=\"joystick\" instance=\"6\" Product=\"ghost\"/> -->\r\n\
+ <actionmap name=\"spaceship_view\">\r\n\
+  <action name=\"v_view_pitch\">\r\n\
+   <rebind input=\"js4_y\"/>\r\n\
+  </action>\r\n\
+ </actionmap>\r\n\
+</ActionMaps>\r\n";
+
+    #[test]
+    fn device_map_step_c_removes_a_device_and_closes_the_gap() {
+        // The map the game wrote in step C (K2 HE gone): L1 Link2 R3, 4 empty.
+        let out = rewrite_device_map(
+            MAP_XML,
+            &[
+                (1, " VKBsim Gladiator EVO  L    {0201231D-0000-0000-0000-504944564944}"),
+                (2, "Keychron Link   {D0303434-0000-0000-0000-504944564944}"),
+                (3, " VKBsim Gladiator EVO  R    {0200231D-0000-0000-0000-504944564944}"),
+            ],
+        )
+        .unwrap();
+        assert!(out.contains("<options type=\"joystick\" instance=\"3\" Product=\" VKBsim Gladiator EVO  R    {0200231D-0000-0000-0000-504944564944}\"/>\r\n"));
+        assert!(out.contains("<options type=\"joystick\" instance=\"4\"/>\r\n"));
+        assert!(out.contains("<options type=\"joystick\" instance=\"5\"/>\r\n"));
+        // Children, the comment, the rebinds and the line endings stay.
+        // (The string continuations of MAP_XML drop the indentation.)
+        assert!(out.contains("Product=\" VKBsim Gladiator EVO  L    {0201231D-0000-0000-0000-504944564944}\">\r\n<flight_move_strafe_vertical invert=\"1\"/>\r\n</options>"));
+        assert!(out.contains("<!-- <options type=\"joystick\" instance=\"6\" Product=\"ghost\"/> -->"));
+        assert!(out.contains("<rebind input=\"js4_y\"/>"));
+        let parsed = parse_actionmaps(&out).unwrap();
+        assert_eq!(parsed.joysticks.iter().map(|j| j.instance).collect::<Vec<_>>(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn device_map_step_d_fills_an_empty_slot() {
+        // From C's map back to A's: K2 HE into 3, R to 4, and 5 gets one too.
+        let c = rewrite_device_map(MAP_XML, &[(1, "L {1}"), (2, "Link {2}"), (3, "R {3}")]).unwrap();
+        let d = rewrite_device_map(&c, &[(1, "L {1}"), (2, "Link {2}"), (3, "K2 {4}"), (4, "R {3}"), (5, "X {5}")]).unwrap();
+        assert!(d.contains("<options type=\"joystick\" instance=\"4\" Product=\"R {3}\"/>\r\n"));
+        assert!(d.contains("<options type=\"joystick\" instance=\"5\" Product=\"X {5}\"/>\r\n"));
+        let parsed = parse_actionmaps(&d).unwrap();
+        assert_eq!(parsed.joysticks.iter().map(|j| j.product.as_str()).collect::<Vec<_>>(), vec!["L {1}", "Link {2}", "K2 {4}", "R {3}", "X {5}"]);
+        // Writing the map the file already has changes nothing.
+        let same = rewrite_device_map(
+            MAP_XML,
+            &parse_actionmaps(MAP_XML).unwrap().joysticks.iter().map(|j| (j.instance, j.product.as_str())).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert_eq!(same, MAP_XML);
+    }
+
+    #[test]
+    fn device_map_refuses_bad_input() {
+        assert!(rewrite_device_map(MAP_XML, &[(0, "x")]).unwrap_err().contains("js1"));
+        assert!(rewrite_device_map(MAP_XML, &[(6, "x")]).unwrap_err().contains("no <options> element for js6"));
+        assert!(rewrite_device_map(MAP_XML, &[(1, "a"), (1, "b")]).unwrap_err().contains("twice"));
+        for bad in ["a\"b", "a<b", "a&b", "a>b", "a\nb"] {
+            assert!(rewrite_device_map(MAP_XML, &[(1, bad)]).is_err(), "{bad:?}");
+        }
+        assert!(rewrite_device_map("<ActionMaps/>", &[(1, "x")]).is_err());
+        // Single quotes are read and kept.
+        let sq = "<ActionMaps>\n <options type='joystick' instance='1' Product='old'/>\n <options type='joystick' instance='2'/>\n</ActionMaps>\n";
+        let out = rewrite_device_map(sq, &[(2, "new")]).unwrap();
+        assert_eq!(out, "<ActionMaps>\n <options type='joystick' instance='1'/>\n <options type='joystick' instance='2' Product=\"new\"/>\n</ActionMaps>\n");
     }
 }

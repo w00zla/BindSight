@@ -146,6 +146,7 @@ const hasIssue = computed(
       ]"
       @choose="onConfirmApply"
     >
+      <p class="dialog-note">Moves the bindings to the slots the game assigns now and records the joystick order</p>
       <p class="dialog-note">If game is running, restart for changes to take effect</p>
     </ConfirmDialog>
 
