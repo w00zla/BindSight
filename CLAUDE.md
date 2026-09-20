@@ -95,7 +95,7 @@ presentational components:
   (the game's keybinding screen as a table, one toggleable column per device
   the file names, categories collapsible, "Set binding" / double-click =
   rebind dialog editing one input at a time, pending rebinds kept until
-  Save / Discard in the action tile above it, which also holds Reorder —
+  Save / Discard in the action tile above it, which also holds Resort —
   swap two joystick slots the game ranks now, one swap at a time, either
   Apply to config = `apply_reorder` or the `pp_resortdevices` line in
   `ConsoleCommandDialog` — plus Save Profile / Create Backup) or **Compare**
@@ -116,7 +116,7 @@ presentational components:
   via a button or Escape (the first `outline` button), never a backdrop click**
   — same for `SettingsDialog`),
   `ConsoleCommandDialog` (how to open the game console, the command line, a
-  Copy button; used by the order fix and Reorder), `Dropdown` (a select in
+  Copy button; used by the order fix and Resort), `Dropdown` (a select in
   the app's look — WebKitGTK paints a native popup no CSS reaches),
   `ScrollRail` (one non-wrapping row that scrolls sideways, wheel or end
   arrows, scrollbar hidden), `Toasts` (`ok` / `error` / `hint`: green done,
@@ -363,11 +363,24 @@ presentational components:
   `validate` (SC identifiers only, the input must be an SC token of the
   change's kind or a blank of it, attributes whitelisted) and the result
   `verify_applied` (the parsed before/after differ exactly by the changes).
-- `resort.rs` — textual `actionmaps.xml` rewrite applying a resort (joystick
-  `<options>` instances + `jsN_` prefixes in `input="..."`), the out-of-game
-  counterpart of `pp_resortdevices`. Re-parses its output and checks it
-  against the intent (`verify_applied`: every rebind in place with mapped
-  tokens, devices on their new slots, nothing else changed).
+- `resort.rs` — textual `actionmaps.xml` rewrite replicating
+  `pp_resortdevices joystick A B`, swap for swap in console order
+  (`bindings::resort_swaps` turns the clash plan into that chain; Resort in
+  the Bindings mode is one swap). **What the command does to the file**
+  (byte-exact against the game's own output, 2026-09-20): the *contents* of
+  the two slots swap — every `jsA_` / `jsB_` token in a `<rebind input>`
+  (blanks and combos alike) and the child elements of the two
+  `<options type="joystick">` elements (invert / exponent settings, an
+  emptied element written self-closing, a filled one opened) — while the
+  `instance` / `Product` attributes and the element order stay: that map is
+  the game's per-session record, which the command never touches (so after
+  a Fix via config the file's `<options>` still disagree with the log and
+  the clash report stays until the game rewrites the map at its next
+  save). Not replicated, not understood: the game left two blank rebinds on
+  the source slot (`turret_toggle_mouse_mode`, `v_cycle_pitch_ladder_mode`)
+  while moving 350 blanks of the same shape. Every swap re-parses its output
+  and checks it (`verify_applied`: rebinds in place with swapped tokens,
+  device map unchanged; `verify_children_swapped`).
 - `apply.rs` — applies a profile or backup to the live file per device
   (`plan_apply`: the source's rebinds for the chosen `kb1` / `gp1` / `jsN`
   are written, live rebinds the source lacks are removed via an empty
@@ -383,7 +396,8 @@ presentational components:
   (`meta.json` with reason + game version, `actionmaps.xml`) under
   `<app_data_dir>/backups/<id>/`, id = `YYYYMMDD-HHMMSS` (UTC) with a `-2`,
   `-3`, … suffix on collision (folders are created, not checked, so
-  concurrent backups cannot collide). Taken manually and, always, before
+  concurrent backups cannot collide). Taken manually (Create Backup asks
+  for a description in a dialog, "manual" by default) and, always, before
   every write to the live file (rebind, apply, order fix, restore); a
   backup counts only once its copy compares byte for byte with the source,
   a restore refuses a backup that no longer parses. `Config::auto_backup`
@@ -426,8 +440,17 @@ presentational components:
   DMABUF workaround, logging setup. `AppData` holds config, game data +
   load status, the bindings file + its load error, the binding index, the
   joystick order (`device_order`, mirrored from the Game.log snapshot on every
-  clash report via `refresh_device_order`) + that Game.log snapshot, and the
-  last logged clash summary.
+  clash report via `refresh_device_order`) + that Game.log snapshot, the
+  last logged clash summary, and the stamp (mtime + length) of the
+  `actionmaps.xml` last read. **`spawn_actionmaps_watch`** polls that stamp
+  every 2 s (under the lock, a metadata call) and, once a changed stamp held
+  still for one more poll, runs `reload_bindings` and emits
+  `bindings-changed` (payload the `LoadStatus`; the frontend takes it like a
+  Refresh and toasts a hint) — the game's console commands and its
+  keybinding screen land in the GUI without a Refresh. The app's own writes
+  end in `reload_bindings`, which records the stamp, so they never come
+  back as a change; idle until the first load and while the environment is
+  invalid.
   **Nothing slow under the `AppData` lock**: `resolve_input` runs per input
   event on the main thread and needs it; the order now costs nothing there
   (a clone of the Game.log snapshot — no enumeration), and the log is read
@@ -670,6 +693,11 @@ on Windows; delete it to force a re-extract.
   resolve nothing (no live fallback). The Monitor, the deck and the Bindings
   List's column names follow the order; a device plugged in or out shifts every
   slot behind it — inherent to SC, that is what Apply / the order fix are for.
+- **`pp_resortdevices` logs 0-based slots**: `pp_resortdevices joystick 2 3`
+  writes `N actions moved from js1 to js2` into `Game.log` (the same quirk
+  as `Connected joystick0` = `js1`). The arguments are 1-based `jsN`. A
+  blank rebind counts as an action; the settings children of `<options>`
+  travel with them, the `Product` map does not (see `resort.rs`).
 - **Joystick modifiers do not exist in SC** (no `modifier+jsN_` token in
   the data or a real file); keyboard and gamepad combos do (`kb1_lalt+x`,
   `gp1_shoulderl+thumbl_left`, `gp1_shoulderl+thumblx`), always with a real

@@ -1,92 +1,98 @@
-//! Apply a slot permutation to `actionmaps.xml` — the out-of-game counterpart
-//! of SC's `pp_resortdevices` console command.
+//! Apply joystick slot swaps to `actionmaps.xml` — the out-of-game counterpart
+//! of SC's `pp_resortdevices joystick A B` console command, replicating what
+//! that command does to the file (observed 2026-09-20, SC 4.10):
 //!
-//! The file is SC's live config, so the rewrite is textual and touches only
-//! two things: the `instance` of every `<options type="joystick">` element
-//! (the element moves whole, deadzone/invert children included, and the
-//! joystick blocks are re-emitted in ascending slot order as SC writes them)
-//! and the `jsN_` prefix of every token inside an `input="..."` attribute
-//! (rebinds, blank `js1_ ` rebinds and modifier combos alike). Everything
-//! else — whitespace, line endings, attribute order, `<deviceoptions>` (keyed
-//! by product name, not slot) — is left byte for byte.
+//! - The **contents** of the two slots swap: every `jsA_` token in an
+//!   `input="..."` attribute becomes `jsB_` and vice versa (rebinds, blank
+//!   `jsA_ ` rebinds that switch a default off, modifier combos alike), and
+//!   the child elements of the two `<options type="joystick">` elements
+//!   (invert / exponent settings) swap.
+//! - The **device assignment stays**: the `instance` / `Product` attributes
+//!   of the `<options>` elements and their order in the file are untouched.
+//!   That map is the game's own per-session record and no business of the
+//!   command.
+//! - Not replicated, not understood: in the observed file the game left two
+//!   blank rebinds on the source slot (`turret_toggle_mouse_mode`,
+//!   `v_cycle_pitch_ladder_mode`, both without a joystick default) while it
+//!   moved 350 blanks of the same shape. Every token moves here.
+//!
+//! Several swaps are applied one after the other, in the order the console
+//! commands would be entered. The rewrite is textual: whitespace, line
+//! endings, attribute order, comments and `<deviceoptions>` (keyed by product
+//! name, not slot) are left byte for byte. Every swap re-parses its output and
+//! checks it against the intent before the next one.
 
-use std::collections::BTreeMap;
-
-use crate::bindings::ResortMove;
 use crate::scdata::{parse_actionmaps, ActionMapsFile};
 use crate::xmltext::{attr, find_attr, mask_markup, tag_end};
 
-/// Rewrite `xml` so that every binding saved under `js{from}` lives under
-/// `js{to}` for each move, and the joystick `<options>` slots follow. `moves`
-/// must be a bijection (each slot at most once as source and as target),
-/// as [`crate::bindings::plan_resort`] produces.
-pub fn rewrite_actionmaps(xml: &str, moves: &[ResortMove]) -> Result<String, String> {
-    let map = slot_map(moves)?;
-    if map.is_empty() {
+/// Apply `swaps` (pairs of slots, `pp_resortdevices joystick A B` each) in
+/// order to `xml`.
+pub fn rewrite_actionmaps(xml: &str, swaps: &[(u32, u32)]) -> Result<String, String> {
+    if swaps.is_empty() {
         return Err("nothing to resort".into());
     }
-    let before = parse_actionmaps(xml)?;
-    let renumbered = renumber_options(xml, &map)?;
-    let out = renumber_inputs(&renumbered, &map);
-    let after = parse_actionmaps(&out).map_err(|e| format!("rewrite produced unreadable XML: {e}"))?;
-    verify_applied(&before, &after, &map)?;
+    let mut out = xml.to_string();
+    for &(a, b) in swaps {
+        if a == 0 || b == 0 {
+            return Err("joystick slots start at js1".into());
+        }
+        if a == b {
+            return Err(format!("cannot swap js{a} with itself"));
+        }
+        let before = parse_actionmaps(&out)?;
+        let swapped = swap_options_children(&out, a, b)?;
+        let swapped = swap_inputs(&swapped, a, b);
+        let after = parse_actionmaps(&swapped).map_err(|e| format!("rewrite produced unreadable XML: {e}"))?;
+        verify_applied(&before, &after, a, b)?;
+        verify_children_swapped(&out, &swapped, a, b)?;
+        out = swapped;
+    }
     Ok(out)
 }
 
-/// Check that `after` is `before` with the slots renumbered and nothing else:
-/// every rebind in place with its tokens mapped, attributes untouched, the
-/// joystick devices the same set on their new slots.
-pub fn verify_applied(before: &ActionMapsFile, after: &ActionMapsFile, map: &BTreeMap<u32, u32>) -> Result<(), String> {
+/// Check that `after` is `before` with the slots `a` and `b` swapped in the
+/// rebinds and nothing else: every rebind in place with its tokens swapped,
+/// attributes untouched, the joystick device map identical.
+pub fn verify_applied(before: &ActionMapsFile, after: &ActionMapsFile, a: u32, b: u32) -> Result<(), String> {
     if before.rebinds.len() != after.rebinds.len() {
         return Err("rewrite check failed: the number of rebinds changed".into());
     }
-    for (b, a) in before.rebinds.iter().zip(&after.rebinds) {
-        let same = b.actionmap == a.actionmap && b.action == a.action && b.attrs == a.attrs && renumber_tokens(&b.input, map) == a.input;
+    for (x, y) in before.rebinds.iter().zip(&after.rebinds) {
+        let same = x.actionmap == y.actionmap && x.action == y.action && x.attrs == y.attrs && swap_tokens(&x.input, a, b) == y.input;
         if !same {
-            return Err(format!("rewrite check failed: {}/{} {:?} became {:?}", b.actionmap, b.action, b.input, a.input));
+            return Err(format!("rewrite check failed: {}/{} {:?} became {:?}", x.actionmap, x.action, x.input, y.input));
         }
     }
-    let devices = |f: &ActionMapsFile, mapped: bool| -> Vec<(u32, String, Option<String>)> {
-        let mut v: Vec<_> = f
-            .joysticks
-            .iter()
-            .map(|j| {
-                let n = if mapped { map.get(&j.instance).copied().unwrap_or(j.instance) } else { j.instance };
-                (n, j.product_name.clone(), j.product_guid.clone())
-            })
-            .collect();
-        v.sort();
-        v
+    let devices = |f: &ActionMapsFile| -> Vec<(u32, String, Option<String>)> {
+        f.joysticks.iter().map(|j| (j.instance, j.product_name.clone(), j.product_guid.clone())).collect()
     };
-    if devices(before, true) != devices(after, false) {
-        return Err("rewrite check failed: the joystick devices do not match the moves".into());
+    if devices(before) != devices(after) {
+        return Err("rewrite check failed: the joystick device map changed".into());
     }
     Ok(())
 }
 
-/// `from -> to` for the non-identity moves, checked for bijectivity.
-fn slot_map(moves: &[ResortMove]) -> Result<BTreeMap<u32, u32>, String> {
-    let mut map = BTreeMap::new();
-    for m in moves {
-        if map.insert(m.from, m.to).is_some() {
-            return Err(format!("slot js{} moved twice", m.from));
-        }
-    }
-    let mut targets: Vec<u32> = map.values().copied().collect();
-    targets.sort_unstable();
-    targets.dedup();
-    let sources: Vec<u32> = map.keys().copied().collect();
-    if targets != sources {
-        return Err("resort is not a permutation of the slots".into());
-    }
-    Ok(map)
-}
-
-/// A joystick `<options>` element in the text: its byte span and slot.
+/// A joystick `<options>` element in the text: the byte span of the whole
+/// element, the end of its opening tag (index of its `>`), whether it is
+/// self-closing, and its slot.
 struct OptionsBlock {
     start: usize,
     end: usize,
+    head_end: usize,
+    self_closing: bool,
     instance: u32,
+}
+
+impl OptionsBlock {
+    /// The text between the opening tag and `</options>` — the children with
+    /// their surrounding whitespace; empty for a self-closing element.
+    fn inner<'a>(&self, xml: &'a str) -> &'a str {
+        if self.self_closing {
+            ""
+        } else {
+            &xml[self.head_end + 1..self.end - "</options>".len()]
+        }
+    }
 }
 
 /// Locate every `<options type="joystick" instance="N" ...>` element,
@@ -104,65 +110,110 @@ fn find_joystick_options(xml: &str) -> Result<Vec<OptionsBlock>, String> {
             pos = start + 1;
             continue;
         }
-        let tag_end = tag_end(&masked, start, masked.len()).ok_or("unterminated <options> tag")?;
-        let tag = &xml[start..=tag_end];
+        let head_end = tag_end(&masked, start, masked.len()).ok_or("unterminated <options> tag")?;
+        let tag = &xml[start..=head_end];
         let self_closing = tag.ends_with("/>");
         let end = if self_closing {
-            tag_end + 1
+            head_end + 1
         } else {
-            let close = masked[tag_end..].find("</options>").ok_or("<options> without </options>")?;
-            tag_end + close + "</options>".len()
+            let close = masked[head_end..].find("</options>").ok_or("<options> without </options>")?;
+            head_end + close + "</options>".len()
         };
         if attr(tag, "type") == Some("joystick") {
             let instance = attr(tag, "instance")
                 .ok_or("joystick <options> without instance")?
                 .parse::<u32>()
                 .map_err(|e| format!("bad joystick <options> instance: {e}"))?;
-            blocks.push(OptionsBlock { start, end, instance });
+            blocks.push(OptionsBlock { start, end, head_end, self_closing, instance });
         }
         pos = end;
     }
     Ok(blocks)
 }
 
-/// Renumber the joystick `<options>` elements and re-emit them, sorted by
-/// their new slot, into the byte spans the old ones occupied (so the
-/// surrounding whitespace stays put).
-fn renumber_options(xml: &str, map: &BTreeMap<u32, u32>) -> Result<String, String> {
+/// Swap the children of the joystick `<options>` elements of slots `a` and
+/// `b`, in place; an element that ends up empty is written self-closing, one
+/// that receives children is opened, the way the game writes them. A slot
+/// without an element is fine as long as nothing has to move into it.
+fn swap_options_children(xml: &str, a: u32, b: u32) -> Result<String, String> {
     let blocks = find_joystick_options(xml)?;
     if blocks.is_empty() {
         return Err("no <options type=\"joystick\"> in actionmaps.xml".into());
     }
-    let mut renumbered: Vec<(u32, String)> = blocks
-        .iter()
-        .map(|b| {
-            let new = map.get(&b.instance).copied().unwrap_or(b.instance);
-            let text = &xml[b.start..b.end];
-            // Only the opening tag carries the attribute; children never do.
-            let head_end = tag_end(text, 0, text.len()).unwrap_or(text.len() - 1);
-            let head = &text[..=head_end];
-            let renumbered = find_attr(head, "instance")
-                .map(|s| format!("{}{new}{}", &head[..s.value_start], &head[s.value_end..]))
-                .unwrap_or_else(|| head.to_string());
-            (new, format!("{renumbered}{}", &text[head_end + 1..]))
-        })
-        .collect();
-    renumbered.sort_by_key(|(n, _)| *n);
+    let find = |slot: u32| blocks.iter().filter(|x| x.instance == slot).collect::<Vec<_>>();
+    let (ba, bb) = (find(a), find(b));
+    if ba.len() > 1 || bb.len() > 1 {
+        return Err(format!("more than one <options> element for js{a} or js{b}"));
+    }
+    let (ba, bb) = (ba.first().copied(), bb.first().copied());
+    let inner_a = ba.map(|x| x.inner(xml)).unwrap_or("");
+    let inner_b = bb.map(|x| x.inner(xml)).unwrap_or("");
+    if ba.is_none() && !inner_b.is_empty() {
+        return Err(format!("no <options> element for js{a} to take the settings of js{b}"));
+    }
+    if bb.is_none() && !inner_a.is_empty() {
+        return Err(format!("no <options> element for js{b} to take the settings of js{a}"));
+    }
+    let mut edits: Vec<(&OptionsBlock, &str)> = Vec::new();
+    if let Some(x) = ba {
+        edits.push((x, inner_b));
+    }
+    if let Some(x) = bb {
+        edits.push((x, inner_a));
+    }
+    edits.sort_by_key(|(x, _)| x.start);
 
     let mut out = String::with_capacity(xml.len());
     let mut last = 0;
-    for (block, (_, text)) in blocks.iter().zip(renumbered) {
+    for (block, inner) in edits {
         out.push_str(&xml[last..block.start]);
-        out.push_str(&text);
+        out.push_str(&with_inner(&xml[block.start..block.end], block.head_end - block.start, block.self_closing, inner));
         last = block.end;
     }
     out.push_str(&xml[last..]);
     Ok(out)
 }
 
-/// Replace the `jsN_` prefix of every token inside the `input` attribute of
-/// every tag (comments and CDATA skipped, either quote style read).
-fn renumber_inputs(xml: &str, map: &BTreeMap<u32, u32>) -> String {
+/// Re-emit one `<options>` element with `inner` as its content: `<tag .../>`
+/// when `inner` is empty, `<tag ...>` + inner + `</options>` otherwise.
+fn with_inner(element: &str, head_end: usize, self_closing: bool, inner: &str) -> String {
+    let head = &element[..=head_end];
+    // The opening tag without its closing `/>` or `>`.
+    let open = if self_closing { head[..head.len() - 2].trim_end() } else { &head[..head.len() - 1] };
+    if inner.is_empty() {
+        format!("{open}/>")
+    } else {
+        format!("{open}>{inner}</options>")
+    }
+}
+
+/// After a swap, the children of `a` must be the former children of `b` and
+/// vice versa, every other joystick element byte for byte the same.
+fn verify_children_swapped(before: &str, after: &str, a: u32, b: u32) -> Result<(), String> {
+    let (x, y) = (find_joystick_options(before)?, find_joystick_options(after)?);
+    if x.len() != y.len() {
+        return Err("rewrite check failed: the number of joystick <options> elements changed".into());
+    }
+    for (p, q) in x.iter().zip(&y) {
+        if p.instance != q.instance {
+            return Err("rewrite check failed: the joystick <options> order changed".into());
+        }
+        let expected = match p.instance {
+            n if n == a => x.iter().find(|o| o.instance == b).map(|o| o.inner(before)).unwrap_or(""),
+            n if n == b => x.iter().find(|o| o.instance == a).map(|o| o.inner(before)).unwrap_or(""),
+            _ => p.inner(before),
+        };
+        if q.inner(after) != expected {
+            return Err(format!("rewrite check failed: the settings of js{} are not what the swap leaves", p.instance));
+        }
+    }
+    Ok(())
+}
+
+/// Swap the `jsA_` / `jsB_` prefixes of every token inside the `input`
+/// attribute of every `<rebind>` (comments and CDATA skipped, either quote
+/// style read).
+fn swap_inputs(xml: &str, a: u32, b: u32) -> String {
     let masked = mask_markup(xml);
     let mut out = String::with_capacity(xml.len());
     // `copied`: how far `xml` has been copied into `out`; `search`: where
@@ -179,10 +230,13 @@ fn renumber_inputs(xml: &str, map: &BTreeMap<u32, u32>) -> String {
             break;
         };
         let head = &xml[start..=end];
-        if let Some(s) = find_attr(head, "input") {
-            out.push_str(&xml[copied..start + s.value_start]);
-            out.push_str(&renumber_tokens(&head[s.value_start..s.value_end], map));
-            copied = start + s.value_end;
+        let name = head[1..].split(|c: char| c.is_whitespace() || c == '/' || c == '>').next().unwrap_or("");
+        if name == "rebind" {
+            if let Some(s) = find_attr(head, "input") {
+                out.push_str(&xml[copied..start + s.value_start]);
+                out.push_str(&swap_tokens(&head[s.value_start..s.value_end], a, b));
+                copied = start + s.value_end;
+            }
         }
         search = end + 1;
     }
@@ -190,9 +244,9 @@ fn renumber_inputs(xml: &str, map: &BTreeMap<u32, u32>) -> String {
     out
 }
 
-/// `js2_button5+js2_x` -> with 2->1: `js1_button5+js1_x`. Anything that is
-/// not `js<digits>_` is copied through.
-fn renumber_tokens(value: &str, map: &BTreeMap<u32, u32>) -> String {
+/// `js2_button5+js2_x` -> with a swap 1<->2: `js1_button5+js1_x`. Anything
+/// that is not `js<digits>_` is copied through.
+fn swap_tokens(value: &str, a: u32, b: u32) -> String {
     let mut out = String::with_capacity(value.len());
     let mut rest = value;
     while let Some(i) = rest.find("js") {
@@ -201,7 +255,14 @@ fn renumber_tokens(value: &str, map: &BTreeMap<u32, u32>) -> String {
         let digits = after.chars().take_while(char::is_ascii_digit).count();
         if digits > 0 && after[digits..].starts_with('_') {
             if let Ok(n) = after[..digits].parse::<u32>() {
-                out.push_str(&format!("js{}_", map.get(&n).copied().unwrap_or(n)));
+                let m = if n == a {
+                    b
+                } else if n == b {
+                    a
+                } else {
+                    n
+                };
+                out.push_str(&format!("js{m}_"));
                 rest = &after[digits + 1..];
                 continue;
             }
@@ -216,10 +277,6 @@ fn renumber_tokens(value: &str, map: &BTreeMap<u32, u32>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn mv(from: u32, to: u32) -> ResortMove {
-        ResortMove { from, to, name: None }
-    }
 
     // Shaped like SC's own output (CRLF, one-space indent, empty slots).
     // Rust strips the indentation after a `\` continuation, so concat! it is.
@@ -257,43 +314,61 @@ mod tests {
     );
 
     #[test]
-    fn swaps_two_slots_options_and_inputs() {
-        let out = rewrite_actionmaps(XML, &[mv(1, 2), mv(2, 1)]).unwrap();
-        // The joystick blocks are re-emitted sorted by new slot, whole.
-        let i_l = out.find("instance=\"1\" Product=\" VKB L").unwrap();
-        let i_r = out.find("instance=\"2\" Product=\" VKB R").unwrap();
-        assert!(i_l < i_r);
-        assert!(out.contains("instance=\"2\" Product=\" VKB R {0200231D-0000-0000-0000-504944564944}\">\r\n   <flight_move_roll invert=\"1\"/>\r\n  </options>"));
-        // Inputs follow, including blank rebinds and modifier combos.
-        assert!(out.contains("<rebind input=\"js2_ \"/>"));
+    fn swaps_slot_contents_and_leaves_the_device_map() {
+        let out = rewrite_actionmaps(XML, &[(1, 2)]).unwrap();
+        // The device map and the element order stay: R is still instance 1,
+        // L still instance 2 — only the settings changed hands, and the
+        // elements switched between self-closing and open the way SC writes
+        // them.
+        assert!(out.contains("  <options type=\"joystick\" instance=\"1\" Product=\" VKB R {0200231D-0000-0000-0000-504944564944}\"/>\r\n"));
+        assert!(out.contains("  <options type=\"joystick\" instance=\"2\" Product=\" VKB L {0201231D-0000-0000-0000-504944564944}\">\r\n   <flight_move_roll invert=\"1\"/>\r\n  </options>\r\n"));
+        let i_r = out.find("instance=\"1\" Product=\" VKB R").unwrap();
+        let i_l = out.find("instance=\"2\" Product=\" VKB L").unwrap();
+        assert!(i_r < i_l);
+        // Inputs swap, including the blank that switches a default off and
+        // the modifier combo.
+        assert!(out.contains("<action name=\"v_eject\">\r\n    <rebind input=\"js2_ \"/>"));
         assert!(out.contains("<rebind input=\"js1_button5\"/>"));
         assert!(out.contains("<rebind input=\"js1_button1+js1_x\"/>"));
         // Untouched: other slots, other devices, keyboard/gamepad options, deviceoptions.
         assert!(out.contains("<rebind input=\"js12_rotz\"/>"));
         assert!(out.contains("<rebind input=\"kb1_space\"/>"));
         assert!(out.contains("<options type=\"keyboard\" instance=\"1\""));
-        assert!(out.contains("<options type=\"gamepad\" instance=\"1\""));
+        assert!(out.contains("<options type=\"gamepad\" instance=\"1\" Product=\"Controller (Gamepad)\">\r\n   <flight_view exponent=\"1\"/>\r\n  </options>"));
         assert!(out.contains("<options type=\"joystick\" instance=\"3\"/>"));
         assert!(out.contains("<deviceoptions name=\" VKB L {0201231D-0000-0000-0000-504944564944}\">"));
-        // Line endings and structure survive; a second swap restores the file.
+        // Line endings and structure survive; the same swap again restores
+        // the file byte for byte.
         assert_eq!(out.matches("\r\n").count(), XML.matches("\r\n").count());
-        assert_eq!(rewrite_actionmaps(&out, &[mv(1, 2), mv(2, 1)]).unwrap(), XML);
+        assert_eq!(rewrite_actionmaps(&out, &[(1, 2)]).unwrap(), XML);
     }
 
     #[test]
-    fn cycle_over_three_slots() {
-        // 1->3, 3->2, 2->1
-        let out = rewrite_actionmaps(XML, &[mv(1, 3), mv(2, 1), mv(3, 2)]).unwrap();
-        assert!(out.contains("instance=\"3\" Product=\" VKB R"));
-        assert!(out.contains("instance=\"1\" Product=\" VKB L"));
-        assert!(out.contains("<options type=\"joystick\" instance=\"2\"/>"));
-        assert!(out.contains("<rebind input=\"js3_ \"/>"));
-        assert!(out.contains("<rebind input=\"js1_button5\"/>"));
-        let order: Vec<usize> = ["instance=\"1\" Product", "instance=\"2\"/>", "instance=\"3\" Product"]
-            .iter()
-            .map(|s| out.find(s).unwrap())
-            .collect();
-        assert!(order[0] < order[1] && order[1] < order[2]);
+    fn a_swap_chain_is_applied_in_order() {
+        // `pp_resortdevices joystick 1 2` then `1 3`: R's settings and
+        // v_eject's blank travel 1 -> 2, L's boost bindings 2 -> 1 -> 3.
+        let out = rewrite_actionmaps(XML, &[(1, 2), (1, 3)]).unwrap();
+        assert!(out.contains("instance=\"1\" Product=\" VKB R {0200231D-0000-0000-0000-504944564944}\"/>"));
+        assert!(out.contains("instance=\"2\" Product=\" VKB L {0201231D-0000-0000-0000-504944564944}\">\r\n   <flight_move_roll invert=\"1\"/>"));
+        assert!(out.contains("<options type=\"joystick\" instance=\"3\"/>"));
+        assert!(out.contains("<action name=\"v_eject\">\r\n    <rebind input=\"js2_ \"/>"));
+        assert!(out.contains("<rebind input=\"js3_button5\"/>"));
+        assert!(out.contains("<rebind input=\"js3_button1+js3_x\"/>"));
+    }
+
+    #[test]
+    fn a_slot_without_an_element_takes_no_settings() {
+        // js3 has an (empty) element, js4 has none: swapping 3 and 4 moves
+        // nothing and is fine; swapping 1 (settings) and 4 has nowhere to put
+        // them.
+        assert_eq!(rewrite_actionmaps(XML, &[(3, 4)]).unwrap(), XML);
+        let err = rewrite_actionmaps(XML, &[(1, 4)]).unwrap_err();
+        assert!(err.contains("js4"), "{err}");
+        // Empty on both sides swaps only the tokens.
+        let out = rewrite_actionmaps(XML, &[(2, 3)]).unwrap();
+        assert!(out.contains("<rebind input=\"js3_button5\"/>"));
+        assert!(out.contains("<options type=\"joystick\" instance=\"2\" Product=\" VKB L {0201231D-0000-0000-0000-504944564944}\"/>"));
+        assert!(out.contains("<options type=\"joystick\" instance=\"3\"/>"));
     }
 
     #[test]
@@ -301,60 +376,56 @@ mod tests {
         let xml = XML
             .replace(
                 "  <options type=\"keyboard\" instance=\"1\"",
-                "  <!-- <options type=\"joystick\" instance=\"1\" Product=\"ghost\"/> <rebind input=\"js1_ghost\"/> -->\r\n  <options type='joystick' instance='9' Product='Nine'/>\r\n  <options type=\"keyboard\" instance=\"1\"",
+                "  <!-- <options type=\"joystick\" instance=\"1\" Product=\"ghost\"><x/></options> <rebind input=\"js1_ghost\"/> -->\r\n  <options type='joystick' instance='9' Product='Nine'/>\r\n  <options type=\"keyboard\" instance=\"1\"",
             )
             .replace("<rebind input=\"js2_button5\"/>", "<rebind input='js2_button5'/>");
-        let out = rewrite_actionmaps(&xml, &[mv(1, 2), mv(2, 1), mv(9, 3), mv(3, 9)]).unwrap();
-        assert!(out.contains("<!-- <options type=\"joystick\" instance=\"1\" Product=\"ghost\"/> <rebind input=\"js1_ghost\"/> -->"), "comment untouched");
-        assert!(out.contains("<options type='joystick' instance='3' Product='Nine'/>"), "{out}");
+        let out = rewrite_actionmaps(&xml, &[(1, 2), (9, 3)]).unwrap();
+        assert!(out.contains("<!-- <options type=\"joystick\" instance=\"1\" Product=\"ghost\"><x/></options> <rebind input=\"js1_ghost\"/> -->"), "comment untouched");
+        assert!(out.contains("<options type='joystick' instance='9' Product='Nine'/>"), "{out}");
         assert!(out.contains("<rebind input='js1_button5'/>"));
-        // The way back restores the meaning (blocks are re-emitted sorted by
-        // slot, so with four of them the bytes rotate, the content does not).
-        let back = rewrite_actionmaps(&out, &[mv(1, 2), mv(2, 1), mv(9, 3), mv(3, 9)]).unwrap();
-        let (a, b) = (parse_actionmaps(&xml).unwrap(), parse_actionmaps(&back).unwrap());
-        let devs = |f: &ActionMapsFile| {
-            let mut v: Vec<_> = f.joysticks.iter().map(|j| (j.instance, j.product_name.clone())).collect();
-            v.sort();
-            v
-        };
-        assert_eq!(devs(&a), devs(&b));
-        assert_eq!(a.rebinds.iter().map(|r| &r.input).collect::<Vec<_>>(), b.rebinds.iter().map(|r| &r.input).collect::<Vec<_>>());
-        assert!(back.contains("<!-- <options type=\"joystick\" instance=\"1\" Product=\"ghost\"/>"));
+        // Single-quoted element receiving settings.
+        let out = rewrite_actionmaps(&xml, &[(1, 9)]).unwrap();
+        assert!(out.contains("<options type='joystick' instance='9' Product='Nine'>\r\n   <flight_move_roll invert=\"1\"/>\r\n  </options>"), "{out}");
+        assert_eq!(rewrite_actionmaps(&out, &[(1, 9)]).unwrap(), xml);
     }
 
     #[test]
     fn verify_applied_catches_a_wrong_rewrite() {
         let before = parse_actionmaps(XML).unwrap();
-        let map: BTreeMap<u32, u32> = [(1, 2), (2, 1)].into_iter().collect();
-        let good = rewrite_actionmaps(XML, &[mv(1, 2), mv(2, 1)]).unwrap();
-        verify_applied(&before, &parse_actionmaps(&good).unwrap(), &map).unwrap();
+        let good = rewrite_actionmaps(XML, &[(1, 2)]).unwrap();
+        verify_applied(&before, &parse_actionmaps(&good).unwrap(), 1, 2).unwrap();
         // A token left behind on its old slot.
         let stale = good.replace("<rebind input=\"js1_button5\"/>", "<rebind input=\"js2_button5\"/>");
-        assert!(verify_applied(&before, &parse_actionmaps(&stale).unwrap(), &map).is_err());
-        // A device that did not move with its bindings.
-        let device = good.replace("instance=\"2\" Product=\" VKB R", "instance=\"3\" Product=\" VKB R");
-        assert!(verify_applied(&before, &parse_actionmaps(&device).unwrap(), &map).is_err());
+        assert!(verify_applied(&before, &parse_actionmaps(&stale).unwrap(), 1, 2).is_err());
+        // A device that moved with the settings.
+        let device = good.replace("instance=\"2\" Product=\" VKB L", "instance=\"3\" Product=\" VKB L");
+        assert!(verify_applied(&before, &parse_actionmaps(&device).unwrap(), 1, 2).is_err());
         // A rebind lost on the way.
         let lost = good.replace("    <rebind input=\"kb1_space\"/>\r\n", "");
-        assert!(verify_applied(&before, &parse_actionmaps(&lost).unwrap(), &map).is_err());
+        assert!(verify_applied(&before, &parse_actionmaps(&lost).unwrap(), 1, 2).is_err());
+        // Settings that did not change hands.
+        assert!(verify_children_swapped(XML, XML, 1, 2).is_err());
+        verify_children_swapped(XML, &good, 1, 2).unwrap();
     }
 
     #[test]
-    fn rejects_non_permutations_and_empty_plans() {
+    fn rejects_bad_swaps() {
         assert!(rewrite_actionmaps(XML, &[]).is_err());
-        assert!(rewrite_actionmaps(XML, &[mv(1, 2)]).is_err()); // 2 never leaves
-        assert!(rewrite_actionmaps(XML, &[mv(1, 2), mv(1, 3), mv(2, 1), mv(3, 1)]).is_err());
-        assert!(rewrite_actionmaps("<ActionMaps/>", &[mv(1, 2), mv(2, 1)]).is_err());
+        assert!(rewrite_actionmaps(XML, &[(1, 1)]).is_err());
+        assert!(rewrite_actionmaps(XML, &[(0, 1)]).is_err());
+        assert!(rewrite_actionmaps("<ActionMaps/>", &[(1, 2)]).is_err());
+        let twice = XML.replace("<options type=\"joystick\" instance=\"3\"/>", "<options type=\"joystick\" instance=\"2\"/>");
+        assert!(rewrite_actionmaps(&twice, &[(1, 2)]).is_err());
     }
 
     #[test]
-    fn token_renumbering_is_precise() {
-        let map: BTreeMap<u32, u32> = [(1, 2), (2, 1)].into_iter().collect();
-        assert_eq!(renumber_tokens("js1_button1", &map), "js2_button1");
-        assert_eq!(renumber_tokens("js1_button1+js2_hat1_up", &map), "js2_button1+js1_hat1_up");
-        assert_eq!(renumber_tokens("js3_x", &map), "js3_x"); // not in the map
-        assert_eq!(renumber_tokens("kb1_js", &map), "kb1_js"); // no digits/underscore
-        assert_eq!(renumber_tokens("js_button1", &map), "js_button1");
-        assert_eq!(renumber_tokens("", &map), "");
+    fn token_swapping_is_precise() {
+        assert_eq!(swap_tokens("js1_button1", 1, 2), "js2_button1");
+        assert_eq!(swap_tokens("js1_button1+js2_hat1_up", 1, 2), "js2_button1+js1_hat1_up");
+        assert_eq!(swap_tokens("js3_x", 1, 2), "js3_x"); // not in the swap
+        assert_eq!(swap_tokens("js12_x", 1, 2), "js12_x"); // js12 is not js1
+        assert_eq!(swap_tokens("kb1_js", 1, 2), "kb1_js"); // no digits/underscore
+        assert_eq!(swap_tokens("js_button1", 1, 2), "js_button1");
+        assert_eq!(swap_tokens("", 1, 2), "");
     }
 }

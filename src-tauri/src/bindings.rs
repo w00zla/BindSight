@@ -469,17 +469,17 @@ pub fn plan_resort(connected: &[SlotStatus], missing: &[MissingSlot]) -> Vec<Res
     moves
 }
 
-/// Express a slot permutation as `pp_resortdevices joystick A B` console
-/// commands, one per swap, to be entered in order. Each cycle
-/// `a1 -> a2 -> ... -> ak` (bindings of `a1` go to `a2`, ...) becomes the
-/// swaps `(a1 a2) (a1 a3) ... (a1 ak)`: after each swap `a1` holds the
-/// bindings that still have to travel on.
-pub fn resort_commands(moves: &[ResortMove]) -> Vec<String> {
+/// Express a slot permutation as a chain of swaps, to be applied in order
+/// (`pp_resortdevices joystick A B` each, or `resort::rewrite_actionmaps`).
+/// Each cycle `a1 -> a2 -> ... -> ak` (bindings of `a1` go to `a2`, ...)
+/// becomes the swaps `(a1 a2) (a1 a3) ... (a1 ak)`: after each swap `a1`
+/// holds the bindings that still have to travel on.
+pub fn resort_swaps(moves: &[ResortMove]) -> Vec<(u32, u32)> {
     use std::collections::{BTreeMap, BTreeSet};
 
     let next: BTreeMap<u32, u32> = moves.iter().map(|m| (m.from, m.to)).collect();
     let mut done = BTreeSet::new();
-    let mut commands = Vec::new();
+    let mut swaps = Vec::new();
     for &start in next.keys() {
         if !done.insert(start) {
             continue;
@@ -487,11 +487,16 @@ pub fn resort_commands(moves: &[ResortMove]) -> Vec<String> {
         let mut cur = next[&start];
         while cur != start {
             done.insert(cur);
-            commands.push(format!("pp_resortdevices joystick {start} {cur}"));
+            swaps.push((start, cur));
             cur = next[&cur];
         }
     }
-    commands
+    swaps
+}
+
+/// The swaps of [`resort_swaps`] as in-game console commands.
+pub fn resort_commands(moves: &[ResortMove]) -> Vec<String> {
+    resort_swaps(moves).into_iter().map(|(a, b)| format!("pp_resortdevices joystick {a} {b}")).collect()
 }
 
 /// Find the SC `jsN` instance for a device by its SC Product GUID.

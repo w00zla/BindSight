@@ -99,10 +99,26 @@ pub(crate) struct AppData {
     /// The last clash summary written to the log, so the same outcome is not
     /// logged again on every Refresh / hot-plug (see [`clash_report`]).
     last_clash_log: String,
+    /// The `actionmaps.xml` on disk as of the last `reload_bindings`, for the
+    /// watch thread (see [`spawn_actionmaps_watch`]): a change the app did
+    /// not make itself (the game's console, an editor) is reloaded from here.
+    actionmaps_stamp: Option<FileStamp>,
+}
+
+/// What identifies one state of a file on disk: modification time + length.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FileStamp {
+    modified: Option<std::time::SystemTime>,
+    len: u64,
+}
+
+fn file_stamp(path: &std::path::Path) -> Option<FileStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some(FileStamp { modified: meta.modified().ok(), len: meta.len() })
 }
 
 /// Result of (re)loading the user's actionmaps.xml.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct LoadStatus {
     base_path: String,
     actionmaps_path: String,
@@ -255,12 +271,12 @@ fn apply_resort(
     if report.resort.is_empty() {
         return Err("Nothing to fix".into());
     }
-    write_resort(&app, &mut data, &report.resort, "before order fix", "resort")
+    write_resort(&app, &mut data, &bindings::resort_swaps(&report.resort), "before order fix", "order fix")
 }
 
 /// Swap two joystick slots in the live `actionmaps.xml` — the user's own
-/// reorder from the Bindings mode, one swap at a time, the same guarded
-/// rewrite as the order fix (backup "before reorder"). Reloads afterwards.
+/// resort from the Bindings mode, one swap at a time, the same guarded
+/// rewrite as the order fix (backup "before resort"). Reloads afterwards.
 #[tauri::command]
 fn apply_reorder(a: u32, b: u32, app: AppHandle, data: State<Mutex<AppData>>) -> Result<LoadStatus, String> {
     if a == 0 || b == 0 {
@@ -273,30 +289,24 @@ fn apply_reorder(a: u32, b: u32, app: AppHandle, data: State<Mutex<AppData>>) ->
     if data.bindings_file.is_none() {
         return Err("No bindings loaded".into());
     }
-    let name = |slot: u32| -> Option<String> {
-        data.bindings_file.as_ref()?.joysticks.iter().find(|j| j.instance == slot).map(|j| j.product_name.clone())
-    };
-    let moves = [
-        bindings::ResortMove { from: a, to: b, name: name(a) },
-        bindings::ResortMove { from: b, to: a, name: name(b) },
-    ];
-    write_resort(&app, &mut data, &moves, "before reorder", "reorder")
+    write_resort(&app, &mut data, &[(a, b)], "before resort", "resort")
 }
 
-/// The one write behind the order fix and the reorder: the textual rewrite
+/// The one write behind the order fix and the resort: the textual rewrite
+/// of the swap chain, what the `pp_resortdevices` commands would do
 /// (validated and verified in `resort`), then the guarded replacement of
 /// the live file. `what` names the caller in the log.
 fn write_resort(
     app: &AppHandle,
     data: &mut AppData,
-    moves: &[bindings::ResortMove],
+    swaps: &[(u32, u32)],
     reason: &str,
     what: &str,
 ) -> Result<LoadStatus, String> {
     let path = config::actionmaps_path(data.config.base_path());
     let xml = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let rewritten = resort::rewrite_actionmaps(&xml, moves).map_err(|e| {
-        error!("{what} rewrite refused ({} move(s)): {e}", moves.len());
+    let rewritten = resort::rewrite_actionmaps(&xml, swaps).map_err(|e| {
+        error!("{what} rewrite refused ({} swap(s)): {e}", swaps.len());
         e
     })?;
 
@@ -304,7 +314,7 @@ fn write_resort(
     let root = backups::backups_root(app)?;
     let backup =
         gamefile::replace_live_file(&root, &path, &rewritten, reason, data.config.auto_backup, version, &data.sc.data.actions)?;
-    let listed: Vec<String> = moves.iter().map(|m| format!("js{}->js{}", m.from, m.to)).collect();
+    let listed: Vec<String> = swaps.iter().map(|(a, b)| format!("js{a}<->js{b}")).collect();
     info!("{what} applied to {}: {} ({})", path.display(), listed.join(" "), gamefile::backup_label(&backup));
 
     Ok(reload_bindings(data))
@@ -683,6 +693,9 @@ pub(crate) fn reload_bindings(data: &mut AppData) -> LoadStatus {
         return status;
     }
 
+    // Whatever the read makes of it, this is the state the watch thread
+    // compares against — a broken file is reported once, not every poll.
+    data.actionmaps_stamp = file_stamp(&am_path);
     let profile = std::fs::read_to_string(&am_path)
         .map_err(|e| format!("actionmaps.xml not found: {} ({e})", status.actionmaps_path))
         .and_then(|xml| {
@@ -862,6 +875,45 @@ fn spawn_game_log_watch(app: AppHandle) {
                 let _ = app.emit("gamelog-changed", GameLogChanged { started: first });
             }
             std::thread::sleep(logwatch::POLL);
+        }
+    });
+}
+
+/// Watch the live `actionmaps.xml` for changes the app did not make itself —
+/// the game's console commands (`pp_resortdevices`, a rebind in its
+/// keybinding screen) or an editor — and reload the bindings when one shows
+/// (`bindings-changed`, payload the `LoadStatus`), so the GUI follows the
+/// file without a Refresh. A metadata poll every 2 s; a changed stamp is
+/// taken only once it held still for one more poll (the game writes in
+/// steps). The app's own writes end in `reload_bindings`, which records the
+/// stamp, so they never come back as a change. Idle until the first load has
+/// read the file, and while the environment is invalid.
+fn spawn_actionmaps_watch(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut pending: Option<Option<FileStamp>> = None;
+        loop {
+            std::thread::sleep(logwatch::POLL);
+            let state = app.state::<Mutex<AppData>>();
+            let mut data = state.lock().unwrap();
+            if data.sc.invalid_install || (data.bindings_file.is_none() && data.bindings_error.is_none()) {
+                pending = None;
+                continue;
+            }
+            let path = config::actionmaps_path(data.config.base_path());
+            let now = file_stamp(&path);
+            if now == data.actionmaps_stamp {
+                pending = None;
+                continue;
+            }
+            if pending != Some(now) {
+                pending = Some(now);
+                continue;
+            }
+            pending = None;
+            info!("actionmaps.xml changed on disk, re-read");
+            let status = reload_bindings(&mut data);
+            drop(data);
+            let _ = app.emit("bindings-changed", status);
         }
     });
 }
@@ -1186,11 +1238,13 @@ pub fn run() {
                 index: bindings::BindingIndex::default(),
                 bindings_error: None,
                 last_clash_log: String::new(),
+                actionmaps_stamp: None,
             }));
             app.manage(devices);
             app.manage(CloseGuard { requests: AtomicU64::new(0), acked: AtomicU64::new(0) });
             spawn_sc_load(app.handle().clone());
             spawn_game_log_watch(app.handle().clone());
+            spawn_actionmaps_watch(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {

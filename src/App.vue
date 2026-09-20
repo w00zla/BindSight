@@ -876,6 +876,18 @@ async function onGameLogChanged(started: boolean) {
   await loadClash(started);
 }
 
+// The backend saw the bindings file change (not by this app) and re-read it:
+// same follow-up as a reload, with a word about it.
+async function onBindingsChanged(s: LoadStatus) {
+  takeStatus(s);
+  await loadClash();
+  if (s.loaded) {
+    notify("Game bindings changed, reloaded", "hint");
+  } else {
+    notify(s.error ?? "Game bindings changed, load failed", "error");
+  }
+}
+
 // The write went through the backend's one road (`replace_live_file`), which
 // backs the file up first unless the user switched that off in Settings.
 function withBackup(message: string): string {
@@ -1336,6 +1348,11 @@ onMounted(async () => {
   // The game started and wrote a new log: its device order may have changed.
   await step("Game log events", async () => {
     unlisten.push(await listen<{ started: boolean }>("gamelog-changed", (e) => onGameLogChanged(e.payload.started)));
+  });
+  // The bindings file changed on disk (the game's console, an editor) and
+  // the backend re-read it.
+  await step("Bindings file events", async () => {
+    unlisten.push(await listen<LoadStatus>("bindings-changed", (e) => onBindingsChanged(e.payload)));
   });
   // Registered before the initial fetch below, so a load finishing in
   // between is not missed.

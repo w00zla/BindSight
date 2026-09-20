@@ -361,10 +361,27 @@ async function exportProfile() {
 
 // --- backups ---------------------------------------------------------------
 
-async function createBackup() {
+// Create Backup: the description is asked in a small dialog, "manual" by
+// default (the backend keeps that for an empty one).
+const backupDialog = ref<{ reason: string } | null>(null);
+const backupInput = ref<HTMLInputElement | null>(null);
+const BACKUP_REASON_MAX = 64;
+
+function openCreateBackup() {
+  backupDialog.value = { reason: "manual" };
+  nextTick(() => {
+    backupInput.value?.focus();
+    backupInput.value?.select();
+  });
+}
+
+async function onBackupChoose(value: string) {
+  const d = backupDialog.value;
+  backupDialog.value = null;
+  if (!d || value !== "create") return;
   busy.value = true;
   try {
-    await invoke<BackupSummary>("create_backup", { reason: "manual" });
+    await invoke<BackupSummary>("create_backup", { reason: d.reason.trim() || "manual" });
     await loadBackups();
     emit("notify", "Backup created", "ok");
   } catch (e) {
@@ -1538,7 +1555,7 @@ async function compareWith(key: string) {
         <div class="head">
           <Icon name="history" :size="15" />
           <span class="head-title">Backups</span>
-          <button type="button" class="btn primary small" :disabled="busy" @click="createBackup">
+          <button type="button" class="btn primary small" :disabled="busy" @click="openCreateBackup">
             <Icon name="plus" :size="12" />Create Backup
           </button>
         </div>
@@ -1576,7 +1593,7 @@ async function compareWith(key: string) {
           <Icon name="file" :size="14" />
           Save Profile
         </button>
-        <button type="button" class="btn outline small" :disabled="busy || !hasCurrent" @click="createBackup">
+        <button type="button" class="btn outline small" :disabled="busy || !hasCurrent" @click="openCreateBackup">
           <Icon name="history" :size="14" />
           Create Backup
         </button>
@@ -1589,7 +1606,7 @@ async function compareWith(key: string) {
           @click="openReorder"
         >
           <Icon name="swap" :size="14" />
-          Reorder Joysticks
+          Resort Joysticks
         </button>
         <div class="tile-divider" />
         <span v-if="dirty" class="tile-dirty">{{ changesText() }}</span>
@@ -1904,6 +1921,28 @@ async function compareWith(key: string) {
       />
     </ConfirmDialog>
 
+    <!-- back the live file up, with a description -->
+    <ConfirmDialog
+      v-if="backupDialog"
+      title="Create Backup"
+      icon="history"
+      :buttons="[
+        { label: 'Create', kind: 'primary', value: 'create' },
+        { label: 'Cancel', kind: 'outline', value: 'cancel' },
+      ]"
+      @choose="onBackupChoose"
+    >
+      <input
+        ref="backupInput"
+        class="name-in"
+        v-model="backupDialog.reason"
+        :maxlength="BACKUP_REASON_MAX"
+        spellcheck="false"
+        placeholder="Description"
+        @keydown.enter="onBackupChoose('create')"
+      />
+    </ConfirmDialog>
+
     <!-- apply a profile / backup: which devices' bindings to take over -->
     <ConfirmDialog
       v-if="applyDialog"
@@ -2011,7 +2050,7 @@ async function compareWith(key: string) {
 
     <ConfirmDialog
       v-if="reorderOpen"
-      title="Reorder joysticks"
+      title="Resort joysticks"
       icon="swap"
       :buttons="[
         { label: 'Cancel', kind: 'outline', value: 'cancel', side: 'left' },
