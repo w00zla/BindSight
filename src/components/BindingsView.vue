@@ -1932,15 +1932,17 @@ async function compareWith(key: string) {
       ]"
       @choose="onBackupChoose"
     >
-      <input
-        ref="backupInput"
-        class="name-in"
-        v-model="backupDialog.reason"
-        :maxlength="BACKUP_REASON_MAX"
-        spellcheck="false"
-        placeholder="Description"
-        @keydown.enter="onBackupChoose('create')"
-      />
+      <label class="backup-row">
+        <span class="reorder-label">Description</span>
+        <input
+          ref="backupInput"
+          class="name-in"
+          v-model="backupDialog.reason"
+          :maxlength="BACKUP_REASON_MAX"
+          spellcheck="false"
+          @keydown.enter="onBackupChoose('create')"
+        />
+      </label>
     </ConfirmDialog>
 
     <!-- apply a profile / backup: which devices' bindings to take over -->
@@ -3093,6 +3095,14 @@ async function compareWith(key: string) {
 .reorder-label {
   font-size: 13px;
   color: var(--text-2);
+}
+
+/* Create Backup dialog: label + description input on one line. */
+.backup-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
 }
 
 /* The dropdowns fill the row; "chip" would collide with this file's .chip. */
