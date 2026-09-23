@@ -329,6 +329,7 @@ dependencies = [
  "reqwest",
  "ruzstd",
  "sdl2",
+ "semver",
  "serde",
  "serde_json",
  "tauri",

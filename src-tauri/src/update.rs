@@ -9,6 +9,9 @@
 //! published release, pre-release or stable (`.github/workflows/release.yml`).
 //! A pre-release is the same binary and version number as the stable it may
 //! become: publishing it as a full release promotes it, no rebuild.
+//!
+//! An install without the updater (bare executable, deb / rpm) only checks:
+//! the feed's version against its own, the frontend links the project page.
 
 use std::sync::Mutex;
 
@@ -48,10 +51,16 @@ async fn fetch_release_notes(version: &str) -> String {
 }
 
 async fn release_body(url: &str) -> Result<String, String> {
+    let json = get_json(url).await?;
+    Ok(json.get("body").and_then(|b| b.as_str()).unwrap_or_default().trim().to_string())
+}
+
+/// GET a JSON document from GitHub.
+async fn get_json(url: &str) -> Result<serde_json::Value, String> {
     let client = reqwest::Client::builder()
         // GitHub rejects requests without a User-Agent.
         .user_agent(concat!("BindSight/", env!("CARGO_PKG_VERSION")))
-        // Notes are cosmetic: never let a slow API stall the update check.
+        // Never let a slow server stall the update check.
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())?;
@@ -65,8 +74,32 @@ async fn release_body(url: &str) -> Result<String, String> {
         return Err(format!("HTTP {}", resp.status()));
     }
     let text = resp.text().await.map_err(|e| e.to_string())?;
-    let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    Ok(json.get("body").and_then(|b| b.as_str()).unwrap_or_default().trim().to_string())
+    serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
+/// Whether the feed's version is newer than the running one.
+fn is_newer(feed: &str, current: &str) -> Result<bool, String> {
+    let parse = |v: &str| semver::Version::parse(v.trim().trim_start_matches('v')).map_err(|e| format!("version {v:?}: {e}"));
+    Ok(parse(feed)? > parse(current)?)
+}
+
+/// An install without the updater (bare executable, deb / rpm): read the
+/// channel's feed by hand and compare versions; the frontend links the
+/// project page, nothing is downloaded.
+async fn check_feed(url: &str) -> Result<Option<UpdateInfo>, String> {
+    let feed = get_json(url).await?;
+    let version = feed.get("version").and_then(|v| v.as_str()).ok_or("feed without a version")?;
+    if !is_newer(version, env!("CARGO_PKG_VERSION"))? {
+        return Ok(None);
+    }
+    let version = version.trim().trim_start_matches('v').to_string();
+    let gh = fetch_release_notes(&version).await;
+    let str_of = |k: &str| feed.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    Ok(Some(UpdateInfo {
+        date: str_of("pub_date").get(..10).unwrap_or_default().to_string(),
+        notes: if gh.is_empty() { str_of("notes") } else { gh },
+        version,
+    }))
 }
 
 /// The update the last check found, kept for `install_update`.
@@ -99,6 +132,17 @@ pub async fn check_update(
     state: State<'_, UpdateState>,
 ) -> Result<Option<UpdateInfo>, String> {
     let url = feed_url(channel);
+    if !crate::updater_available() {
+        let info = check_feed(url).await.map_err(|e| {
+            warn!("update check ({channel:?}) failed: {e}");
+            e
+        })?;
+        match &info {
+            Some(i) => info!("update check ({channel:?}): v{} available", i.version),
+            None => info!("update check ({channel:?}): up to date"),
+        }
+        return Ok(info);
+    }
     let updater = app
         .updater_builder()
         .endpoints(vec![url.parse().map_err(|e| format!("{url}: {e}"))?])
@@ -134,6 +178,9 @@ pub async fn check_update(
 /// ends the process itself.
 #[tauri::command]
 pub async fn install_update(app: AppHandle, state: State<'_, UpdateState>) -> Result<(), String> {
+    if !crate::updater_available() {
+        return Err("no updater in this install".into());
+    }
     let update = state.0.lock().unwrap().clone().ok_or("no update checked")?;
     info!("update v{} downloading", update.version);
     let mut downloaded: u64 = 0;
@@ -170,6 +217,16 @@ mod tests {
         for url in [STABLE_FEED, PRERELEASE_FEED] {
             assert!(url.starts_with("https://"), "{url}");
         }
+    }
+
+    #[test]
+    fn newer_versions() {
+        assert_eq!(is_newer("0.17.0", "0.16.0"), Ok(true));
+        assert_eq!(is_newer("v1.0.0", "0.16.9"), Ok(true));
+        assert_eq!(is_newer("0.16.0", "0.16.0"), Ok(false));
+        assert_eq!(is_newer("0.15.2", "0.16.0"), Ok(false));
+        assert!(is_newer("latest", "0.16.0").is_err());
+        assert!(is_newer("", "0.16.0").is_err());
     }
 
     #[test]

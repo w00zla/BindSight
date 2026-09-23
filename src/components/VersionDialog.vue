@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // The App Update dialog (footer: version, logo or update mark): the
-// running version and, in an install with an updater, the update state —
-// one chip per row, the download progress, the updater's buttons. Without
-// an updater (bare executable, deb / rpm) only the Current row.
+// running version and the update state — one chip per row, the download
+// progress, the updater's buttons (an install without the updater — bare
+// executable, deb / rpm — links the project page instead of installing).
 import { computed } from "vue";
 import ConfirmDialog, { type ConfirmButton } from "./ConfirmDialog.vue";
 import type { Updater } from "../update";
@@ -54,6 +54,7 @@ function choose(value: string) {
   if (value === "close") emit("close");
   else if (value === "check") void props.updater?.check();
   else if (value === "install") void props.updater?.install();
+  else if (value === "open") void props.updater?.openPage();
 }
 </script>
 
@@ -88,9 +89,14 @@ function choose(value: string) {
           <div class="bar" :class="{ unknown: percent === null }" :style="{ width: `${percent ?? 0}%` }" />
         </div>
       </div>
-      <button v-if="updater.simulated !== null" type="button" class="dev" @click="updater.simulate(!updater.simulated)">
-        {{ updater.simulated ? "Dev: reset" : "Dev: simulate an update" }}
-      </button>
+      <div v-if="updater.simulated !== null" class="devs">
+        <button type="button" class="dev" @click="updater.simulate(!updater.simulated)">
+          {{ updater.simulated ? "Dev: reset" : "Dev: simulate an update" }}
+        </button>
+        <button type="button" class="dev" @click="updater.simulateLinkOnly(updater.selfUpdate)">
+          {{ updater.selfUpdate ? "Dev: link only" : "Dev: self-update" }}
+        </button>
+      </div>
     </template>
   </ConfirmDialog>
 </template>
@@ -207,8 +213,12 @@ function choose(value: string) {
   }
 }
 
+.devs {
+  display: flex;
+  gap: 8px;
+}
+
 .dev {
-  align-self: flex-start;
   height: 28px;
   padding: 0 10px;
   border: 1px dashed var(--warn);

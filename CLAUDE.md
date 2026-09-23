@@ -126,13 +126,17 @@ presentational components:
   logo and the link-styled version button open the **App Update dialog**),
   `VersionDialog` (a `ConfirmDialog`: Current chip = the running version,
   Update chip = the found version / "Checking…" / a dash, then download
-  progress, an error line, the dev toggle; without an updater only the
-  Current row; the updater's buttons after Close).
+  progress, an error line, the dev toggle; the updater's buttons after
+  Close).
 - **Updater** (`update.ts`, `UpdateMark.vue`; backend `update.rs`):
-  loaded by `App.vue` via dynamic import only when `system_info.updater`
-  is true (see Releases), or in a dev build as the simulated one
+  loaded by `App.vue` via dynamic import in every install; it installs
+  only when `system_info.updater` is true (see Releases), elsewhere
+  (`selfUpdate` false) it checks the same way and a found update gets
+  "Open Webpage" (the project's GitHub page) instead of Install;
+  in a dev build it is the simulated one
   (`createUpdater(channel, true)`: a toggle in the dialog fakes an
-  available update and a download, so the GUI parts can be looked at; the
+  available update and a download, a second one the link-only path, so
+  the GUI parts can be looked at; the
   simulation code sits behind `import.meta.env.DEV` and is not in a
   release). `createUpdater(channel)` returns reactive state (`idle` /
   `checking` / `current` / `available` / `downloading` / `installing` /
@@ -580,9 +584,10 @@ All of it lives in the Devices mode's Device Info view instead.
   executable stays unstamped. `lib.rs::updater_available` accepts NSIS and
   AppImage only: the Windows installer and the AppImage update themselves,
   the bare executable (the standalone / portable download, just the file
-  from `target/release/`) and the deb / rpm packages (the package manager's
-  business) never load the updater module. No feature flags, no runtime
-  switch.
+  from `target/release/`) and the deb / rpm packages never install: their
+  `check_update` reads the channel's `latest.json` by hand
+  (`update.rs::check_feed`, `semver` against the running version) and the
+  dialog links the project page. No feature flags, no runtime switch.
 - **Channels** (`update.rs`, the plugin's JS commands are not used: only
   the Rust side can pick the endpoint per check): **stable** reads GitHub's
   `releases/latest/download/latest.json` (never a pre-release);

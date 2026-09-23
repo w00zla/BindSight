@@ -47,6 +47,8 @@ tauri-plugin-updater = "2"
 # GitHub API GET for a release's changelog (update.rs); rustls to match the
 # updater's TLS stack, no native-tls pulled in.
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+# Feed version vs. the running one, for installs without the updater (update.rs).
+semver = "1"
 
 # SDL2 is linked differently per platform. On Windows we build it from source
 # and static-link it, so the app needs no SDL2.dll and no system SDL2 install

@@ -1131,8 +1131,8 @@ struct SystemInfo {
 /// Whether this install updates itself: only the Windows installer and the
 /// Linux AppImage. The bundler stamps the binary it packs with its bundle
 /// type; the bare executable (the standalone build, `target/release/`) and
-/// the deb / rpm packages (the package manager's business) get no updater.
-fn updater_available() -> bool {
+/// the deb / rpm packages only check the feed and link the release page.
+pub(crate) fn updater_available() -> bool {
     use tauri::utils::config::BundleType;
     use tauri::utils::platform::bundle_type;
     matches!(bundle_type(), Some(BundleType::Nsis | BundleType::AppImage))

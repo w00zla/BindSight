@@ -3,13 +3,14 @@
 // buttons (VersionDialog.vue reads the state). Nothing is downloaded or
 // installed without a click. The work happens in the backend (`update.rs`:
 // `check_update`, `install_update` with `update-progress` events), because
-// only that side can pick the channel's feed per check. App.vue loads this
-// module on demand, only when the backend says the install is one the
+// only that side can pick the channel's feed per check. Only an install the
 // updater can replace (`SystemInfo.updater`: the Windows installer and the
-// AppImage; the bare executable and deb / rpm never call any of this).
+// AppImage) installs; the bare executable and deb / rpm only check and get
+// a button to the project page instead (`selfUpdate` false).
 import { markRaw, reactive, type Component } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import UpdateMark from "./components/UpdateMark.vue";
 import type { ConfirmButton } from "./components/ConfirmDialog.vue";
 import type { UpdateChannel } from "./types";
@@ -38,6 +39,8 @@ export interface Updater {
   // dialog then carries a toggle that fakes an available update, so the GUI
   // parts can be looked at. null for a real updater.
   simulated: boolean | null;
+  // This install replaces itself; false: the update is only linked.
+  selfUpdate: boolean;
   // Download progress 0..1; null until the size is known.
   progress: number | null;
   error: string;
@@ -47,22 +50,28 @@ export interface Updater {
   check(): Promise<boolean>;
   // Download and install the available update; the app restarts after.
   install(): Promise<void>;
+  // Open the project's GitHub page (installs without updater).
+  openPage(): Promise<void>;
   // The version dialog's update buttons for the current state.
   buttons(): ConfirmButton[];
   // Simulated updater: fake an available update, or reset.
   simulate(on: boolean): void;
+  // Simulated updater: take the install-less path (project page link).
+  simulateLinkOnly(on: boolean): void;
 }
 
 // `channel`: the Settings choice, read at every check. `simulate`: a
 // dev-only stand-in (never talks to the backend) instead of the real thing;
-// a release build drops the simulation code.
-export function createUpdater(channel: () => UpdateChannel, simulate = false): Updater {
+// a release build drops the simulation code. `selfUpdate`: the install can
+// replace itself (Install), else the project page is linked.
+export function createUpdater(channel: () => UpdateChannel, simulate = false, selfUpdate = true): Updater {
   let fakeTimer: ReturnType<typeof setInterval> | null = null;
 
   const u: Updater = reactive({
     state: "idle" as UpdateState,
     info: null,
     simulated: import.meta.env.DEV && simulate ? false : null,
+    selfUpdate,
     progress: null,
     error: "",
     mark: markRaw(UpdateMark),
@@ -133,7 +142,21 @@ export function createUpdater(channel: () => UpdateChannel, simulate = false): U
       }
     },
 
+    async openPage() {
+      const url = "https://github.com/w00zla/BindSight";
+      try {
+        await openUrl(url);
+      } catch (e) {
+        u.error = `Could not open ${url}: ${e}`;
+        u.state = "error";
+        console.error("project page open failed", e);
+      }
+    },
+
     buttons() {
+      if (u.state === "available" && !u.selfUpdate) {
+        return [{ label: "Open Webpage", kind: "primary", value: "open" }];
+      }
       const busy = u.state === "checking" || u.state === "downloading" || u.state === "installing";
       // Check Update until one is found; Install from then on.
       if (u.state === "available" || u.state === "downloading" || u.state === "installing") {
@@ -160,6 +183,11 @@ export function createUpdater(channel: () => UpdateChannel, simulate = false): U
         u.info = null;
         u.state = "idle";
       }
+    },
+
+    simulateLinkOnly(on) {
+      if (!import.meta.env.DEV || u.simulated === null) return;
+      u.selfUpdate = !on;
     },
   });
   return u;

@@ -87,8 +87,9 @@ const DEFAULT_MAPS: Partial<Record<DeviceKind, string>> = { keyboard: MAP_US, ga
 const keyboardLayout = ref<string | null>(null);
 // One line of environment facts for the Device Info dumps.
 const systemInfo = ref<SystemInfo | null>(null);
-// The in-app updater (update.ts), only in an install that has one (see
-// `SystemInfo.updater`); its footer mark is a component it brings along.
+// The in-app updater (update.ts; installs only where `SystemInfo.updater`,
+// elsewhere it links the project page); its footer mark is a component it
+// brings along.
 const updater = shallowRef<Updater | null>(null);
 // The App Update dialog (footer click; opens itself when the startup check
 // finds an update).
@@ -1284,13 +1285,15 @@ onMounted(async () => {
   } catch (e) {
     console.warn("system info unavailable", e);
   }
-  // The updater module only in an install it can replace; the bare
-  // executable and deb / rpm never load it. A dev build (`tauri dev`, no
-  // updater either) gets the simulated one, to look at the GUI parts.
-  if (systemInfo.value?.updater || import.meta.env.DEV) {
+  // The updater installs only in an install it can replace; the bare
+  // executable and deb / rpm only check and link the project page. A dev
+  // build (`tauri dev`, no updater either) gets the simulated one, to look
+  // at the GUI parts.
+  if (systemInfo.value) {
     try {
       const { createUpdater } = await import("./update");
-      updater.value = createUpdater(() => updateChannel.value, !systemInfo.value?.updater);
+      const self = systemInfo.value.updater;
+      updater.value = createUpdater(() => updateChannel.value, import.meta.env.DEV && !self, self || import.meta.env.DEV);
     } catch (e) {
       console.error("updater unavailable", e);
     }
