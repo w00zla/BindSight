@@ -19,7 +19,7 @@ import ConfirmDialog, { type ConfirmButton, type ConfirmIcon } from "./ConfirmDi
 import Splitter from "./Splitter.vue";
 import ColumnHead from "./ColumnHead.vue";
 import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
-import type { ClashReport, DeviceInfo, HidOnlyDevice, JoyInput, LoggedInput, ToastType, WineKey } from "../types";
+import type { ClashReport, DeviceInfo, DiDevice, HidOnlyDevice, JoyInput, LoggedInput, ToastType, WineKey } from "../types";
 import { deviceIcon, deviceName, inputIdentity, recordEdge } from "../devices";
 import { KEY_COUNT, MOUSE_INPUTS, recording } from "../keyboard";
 import { persistedRef } from "../persist";
@@ -60,6 +60,8 @@ const props = defineProps<{
   // The HID interfaces Wine registers, in its order (empty off Linux): the
   // keys the game's device order is sorted by.
   wineKeys: WineKey[];
+  // DirectInput's game controllers in enumeration order (empty off Windows).
+  dinputDevices: DiDevice[];
   // Joystick-class HID devices SDL does not list: shown after the SDL
   // devices (in the Monitor only as a tile without input, if the game
   // lists them).
@@ -2114,6 +2116,25 @@ function wineRows(productGuid: string | null): [string, string][] {
   ]);
 }
 
+// The `dinput` rows of a device: its position in DirectInput's enumeration
+// (Windows), the instance GUID and the device path. Matched by path, any
+// case (tells identical devices apart); without a path match every entry
+// with the device's Product GUID is listed. Off Windows the row is left out.
+function dinputRows(paths: string[], productGuid: string | null): [string, string][] {
+  const all = props.dinputDevices;
+  if (!all.length) return [];
+  const wanted = paths.map((p) => p.toLowerCase());
+  const guid = productGuid?.toLowerCase();
+  const indexed = all.map((d, i) => ({ ...d, pos: i + 1 }));
+  let mine = indexed.filter((d) => !!d.path && wanted.includes(d.path.toLowerCase()));
+  if (!mine.length) mine = indexed.filter((d) => !!guid && d.product_guid.toLowerCase() === guid);
+  if (!mine.length) return [["dinput", "not enumerated"]];
+  return mine.map((d, i): [string, string] => [
+    mine.length > 1 ? `dinput #${i}` : "dinput",
+    `#${d.pos} of ${all.length} · instance ${d.instance_guid} · ${d.path || "no path"}`,
+  ]);
+}
+
 // The `hid #i` rows of a device's hidapi interfaces.
 function hidRows(interfaces: DeviceInfo["hid_interfaces"]): [string, string][] {
   return interfaces.map(
@@ -2136,6 +2157,7 @@ function hidOnlyRows(h: HidOnlyDevice): [string, string][] {
     ["game", joystickGameText(h.product_guid)],
     ["hardware id", h.product_guid],
     ...wineRows(h.product_guid),
+    ...dinputRows(h.interfaces.map((i) => i.path), h.product_guid),
     ["sdl", "not listed"],
     ["usb", `vid ${hex4(h.vid)} · pid ${hex4(h.pid)}`],
     ...hidRows(h.interfaces),
@@ -2167,6 +2189,7 @@ function deviceRows(d: DeviceInfo): [string, string][] {
     ["game", d.kind === "gamepad" ? gamepadGameText(d) : joystickGameText(d.sc_product_guid)],
     ["hardware id", d.hardware_id ?? "—"],
     ...wineRows(d.sc_product_guid),
+    ...dinputRows(d.sdl_path ? [d.sdl_path] : d.hid_interfaces.map((i) => i.path), d.sc_product_guid),
     ["sdl", `index ${d.index} · instance ${d.sdl_instance_id} · type ${d.sdl_type} · guid ${d.sdl_guid}`],
     ["sdl name", d.sdl_name],
     ["sdl path", d.sdl_path ?? "—"],
@@ -2195,8 +2218,10 @@ function eventLine(ev: LoggedInput): string {
   return `${clock(ev.at)} t${ev.timestamp}  #${d?.index ?? "?"} i${ev.instance_id} ${nameOfEvent(ev)}  ${eventText(ev)}  ${tokenText(ev)}`;
 }
 
-// Text dump of the Device List tile.
-function listText(): string {
+// Text dump of the Device List tile, followed by the game's side read from
+// its files (the device lines of the game log, the device part of the
+// bindings file and every bound input), which the tile does not show.
+async function listText(): Promise<string> {
   const lines = [`BindSight device list ${new Date().toISOString()}`, props.systemLine, ""];
   for (const d of props.devices) {
     lines.push(`sdl #${d.index} ${deviceName(d)}`);
@@ -2207,6 +2232,13 @@ function listText(): string {
     for (const [k, v] of hidOnlyRows(h)) lines.push(`    ${k.padEnd(15)} ${v}`);
   }
   if (!props.devices.length && !props.hidOnly.length) lines.push("    none");
+  lines.push("");
+  try {
+    lines.push(await invoke<string>("game_files_report"));
+  } catch (e) {
+    console.error("game files report failed", e);
+    lines.push(`game files error: ${e}`);
+  }
   return lines.join("\n") + "\n";
 }
 
@@ -2220,7 +2252,7 @@ function eventsText(): string {
 
 // Save one tile's dump via the save dialog. The text is built after the
 // dialog closes, so events that arrived meanwhile are included.
-async function saveText(name: string, text: () => string, done: string) {
+async function saveText(name: string, text: () => string | Promise<string>, done: string) {
   try {
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
     const dest = await save({
@@ -2228,7 +2260,7 @@ async function saveText(name: string, text: () => string, done: string) {
       filters: [{ name: "Text", extensions: ["txt"] }],
     });
     if (!dest) return;
-    await invoke("write_text_file", { path: dest, text: text() });
+    await invoke("write_text_file", { path: dest, text: await text() });
     emit("notify", done, "ok");
   } catch (e) {
     emit("notify", String(e), "error");

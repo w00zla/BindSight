@@ -9,15 +9,18 @@
 //! take no slot and are skipped.
 //!
 //! Windows only, and diagnostics only: SC's order comes from `Game.log`
-//! (`order::assign`), never a live enumeration. `list` + `to_order` are kept
-//! for the `dinput_order` example; the pure helpers compile everywhere for the
+//! (`order::assign`), never a live enumeration. `list` feeds the Device
+//! List's `dinput` rows (`dinput_devices`) and, with `to_order`, the
+//! `dinput_order` example; the pure helpers compile everywhere for the
 //! tests.
+
+use serde::Serialize;
 
 use crate::order::DeviceOrder;
 use crate::scdata::JoystickDevice;
 
 /// One device as DirectInput lists it, in enumeration order.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DiDevice {
     pub product_name: String,
     pub instance_name: String,

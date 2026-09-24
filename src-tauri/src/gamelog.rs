@@ -68,6 +68,15 @@ fn line_timestamp(line: &str) -> Option<&str> {
     Some(&inner[..end])
 }
 
+/// The device lines of a `Game.log` verbatim, for the Device List export:
+/// the joysticks and pads the game connected at its start and every
+/// `pp_resortdevices` outcome (`N actions moved from js1 to js2`).
+pub fn device_lines(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter(|l| l.contains(MARKER) || l.contains("Connected xinput") || l.contains("actions moved from"))
+        .collect()
+}
+
 /// Read and parse a `Game.log`. The error names the file and says what is
 /// wrong with it (missing, unreadable, or without a joystick line).
 pub fn read(path: &Path) -> Result<DeviceOrder, String> {
@@ -104,6 +113,24 @@ mod tests {
         assert_eq!(e.joysticks[1].instance, 2);
         assert_eq!(e.joysticks[1].product_guid.as_deref(), Some("{0201231D-0000-0000-0000-504944564944}"));
         assert_eq!(e.timestamp.as_deref(), Some("2026-09-08T21:06:00.789Z"));
+    }
+
+    #[test]
+    fn device_lines_keep_joysticks_pads_and_resorts_verbatim() {
+        let log = "<t0> Some unrelated line\r\n\
+<t1> - Connected joystick0:  VKBsim Gladiator EVO  R    {0200231D-0000-0000-0000-504944564944}\r\n\
+<t2> - Connected xinput0: Gamepad\r\n\
+<t3> 12 actions moved from js1 to js2\r\n\
+<t4> Found 13 audio input devices\n";
+        assert_eq!(
+            device_lines(log),
+            vec![
+                "<t1> - Connected joystick0:  VKBsim Gladiator EVO  R    {0200231D-0000-0000-0000-504944564944}",
+                "<t2> - Connected xinput0: Gamepad",
+                "<t3> 12 actions moved from js1 to js2",
+            ]
+        );
+        assert!(device_lines("").is_empty());
     }
 
     #[test]

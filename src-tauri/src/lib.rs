@@ -169,6 +169,74 @@ fn wine_keys(devices: State<input::DeviceList>) -> Vec<wineorder::WineKey> {
     }
 }
 
+/// DirectInput's game controllers in enumeration order, for the Device
+/// List's `dinput` rows (diagnostics, never the order): empty off Windows or
+/// when the enumeration fails.
+#[tauri::command]
+fn dinput_devices() -> Vec<dinput::DiDevice> {
+    #[cfg(windows)]
+    {
+        dinput::list().unwrap_or_else(|e| {
+            warn!("DirectInput enumeration failed: {e}");
+            Vec::new()
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
+
+/// The game's side of the Device List export, read fresh from disk: the
+/// device lines of `Game.log`, the device part of `actionmaps.xml` verbatim
+/// and every bound input per device. Reads `Game.log` outside the watch
+/// thread on purpose: once per Save, never under the lock. A file that cannot be read says so in
+/// its section.
+#[tauri::command]
+fn game_files_report(data: State<Mutex<AppData>>) -> String {
+    let (env, base) = {
+        let data = data.lock().unwrap();
+        (data.config.active_env.clone(), data.config.base_path().to_string())
+    };
+    let read = |path: &std::path::Path| std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned());
+    let mut lines = vec![format!("environment {env}"), String::new()];
+
+    lines.push("game log".to_string());
+    match read(&config::game_log_path(&base)) {
+        Ok(text) => {
+            let found = gamelog::device_lines(&text);
+            if found.is_empty() {
+                lines.push("    none".to_string());
+            }
+            lines.extend(found.iter().map(|l| format!("    {l}")));
+        }
+        Err(e) => lines.push(format!("    error: {e}")),
+    }
+
+    lines.push("bindings file".to_string());
+    match read(&config::actionmaps_path(&base)) {
+        Ok(text) => {
+            match scdata::device_section(&text) {
+                Some(section) => lines.extend(section.lines().map(|l| format!("    {l}"))),
+                None => lines.push("    no <ActionProfiles> element".to_string()),
+            }
+            lines.push("bound inputs".to_string());
+            match scdata::parse_actionmaps(&text) {
+                Ok(file) => {
+                    let inputs = scdata::bound_inputs(&file.rebinds);
+                    if inputs.is_empty() {
+                        lines.push("    none".to_string());
+                    }
+                    lines.extend(inputs.iter().map(|(device, tokens)| format!("    {device:<15} {}", scdata::compact_numbered(tokens).join(" "))));
+                }
+                Err(e) => lines.push(format!("    error: {e}")),
+            }
+        }
+        Err(e) => lines.push(format!("    error: {e}")),
+    }
+    lines.join("\n") + "\n"
+}
+
 /// Return the SC action master list of the configured install.
 #[tauri::command]
 fn get_actions(data: State<Mutex<AppData>>) -> Vec<scdata::ActionMap> {
@@ -1349,6 +1417,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_devices,
             wine_keys,
+            dinput_devices,
+            game_files_report,
             hid_only_devices,
             ack_close,
             kblayout::keyboard_layout,

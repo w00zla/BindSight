@@ -144,7 +144,7 @@ fn rest_of(token: &str) -> &str {
 
 /// Numeric-aware string compare: alternating digit/non-digit runs, digit runs
 /// compared by value, so `"button2"` sorts before `"button10"`.
-fn natural_cmp(a: &str, b: &str) -> Ordering {
+pub(crate) fn natural_cmp(a: &str, b: &str) -> Ordering {
     let mut a = a.chars().peekable();
     let mut b = b.chars().peekable();
     loop {

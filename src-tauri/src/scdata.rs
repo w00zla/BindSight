@@ -492,6 +492,95 @@ pub fn parse_rebind(input: &str) -> Option<RebindTarget> {
     Some(RebindTarget { kind: DeviceKind::Joystick, instance, token: (!token.is_empty()).then(|| token.to_string()) })
 }
 
+/// The device part of an `actionmaps.xml` verbatim, for the Device List
+/// export: from `<ActionProfiles` up to its first `<actionmap>` (device
+/// options, the `<options>` device map, modifiers), or up to
+/// `</ActionProfiles>` when it has none. `None` without an
+/// `<ActionProfiles` element. Comments and CDATA are skipped when searching.
+pub fn device_section(xml: &str) -> Option<&str> {
+    let masked = crate::xmltext::mask_markup(xml);
+    let start = find_element(&masked, "ActionProfiles", 0)?;
+    let end = find_element(&masked, "actionmap", start + 1)
+        .or_else(|| masked[start..].find("</ActionProfiles").map(|i| start + i))
+        .unwrap_or(xml.len());
+    Some(xml[start..end].trim_end())
+}
+
+/// Byte offset of the first `<name` start tag at or after `from` whose name
+/// ends there (`<actionmap` but not `<actionmaps`).
+fn find_element(masked: &str, name: &str, from: usize) -> Option<usize> {
+    let needle = format!("<{name}");
+    let mut at = from;
+    while let Some(i) = masked.get(at..)?.find(&needle) {
+        let pos = at + i;
+        match masked.as_bytes().get(pos + needle.len()) {
+            Some(b) if b.is_ascii_whitespace() || *b == b'>' || *b == b'/' => return Some(pos),
+            None => return None,
+            _ => at = pos + needle.len(),
+        }
+    }
+    None
+}
+
+/// Collapse runs of consecutive numbered tokens, for the Device List export:
+/// `button1 button2 button3` -> `button1-3`. Expects the numeric-aware order
+/// of [`bound_inputs`]; tokens without a trailing number stay as they are.
+pub fn compact_numbered(tokens: &[String]) -> Vec<String> {
+    let split = |t: &str| -> Option<(String, u64)> {
+        let digits = t.len() - t.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+        if digits == 0 || digits == t.len() {
+            return None;
+        }
+        let (stem, num) = t.split_at(t.len() - digits);
+        Some((stem.to_string(), num.parse().ok()?))
+    };
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        let Some((stem, first)) = split(&tokens[i]) else {
+            out.push(tokens[i].clone());
+            i += 1;
+            continue;
+        };
+        let mut last = first;
+        let mut j = i + 1;
+        while j < tokens.len() && split(&tokens[j]).is_some_and(|(s, n)| s == stem && Some(n) == last.checked_add(1)) {
+            last += 1;
+            j += 1;
+        }
+        out.push(if last > first { format!("{stem}{first}-{last}") } else { tokens[i].clone() });
+        i = j;
+    }
+    out
+}
+
+/// Every bound input per device (`js1`, `kb1`, …), for the Device List
+/// export: the tokens without their prefix, deduplicated and sorted
+/// numeric-aware; devices ordered keyboard, gamepad, then `jsN` by number.
+/// Blank rebinds are left out.
+pub fn bound_inputs(rebinds: &[Rebind]) -> Vec<(String, Vec<String>)> {
+    let mut by_device: std::collections::BTreeMap<(u8, u32), Vec<String>> = std::collections::BTreeMap::new();
+    for r in rebinds {
+        let Some(target) = parse_rebind(&r.input) else { continue };
+        let Some(token) = target.token else { continue };
+        let rank = match target.kind {
+            DeviceKind::Keyboard => 0,
+            DeviceKind::Gamepad => 1,
+            DeviceKind::Joystick => 2,
+        };
+        by_device.entry((rank, target.instance)).or_default().push(token);
+    }
+    by_device
+        .into_iter()
+        .map(|((rank, instance), mut tokens)| {
+            tokens.sort_by(|a, b| crate::diff::natural_cmp(a, b));
+            tokens.dedup();
+            let prefix = [DeviceKind::Keyboard, DeviceKind::Gamepad, DeviceKind::Joystick][rank as usize].token_prefix();
+            (format!("{prefix}{instance}"), tokens)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -796,5 +885,75 @@ mod tests {
             .unwrap();
         assert_eq!(flight.actionmap, "seat_general");
         assert_eq!(parse_js_binding(&flight.input), Some((1, "button6".to_string())));
+    }
+
+    #[test]
+    fn device_section_is_the_part_before_the_first_actionmap() {
+        let xml = "<ActionMaps>\r\n <!-- <actionmap name=\"x\"> -->\r\n <ActionProfiles version=\"1\" profileName='default'>\r\n  <deviceoptions name=\"S {G}\">\r\n   <option input=\"x\" deadzone=\"0.1\"/>\r\n  </deviceoptions>\r\n  <options type=\"joystick\" instance=\"1\" Product=\"S {G}\"/>\r\n  <modifiers />\r\n  <actionmap name=\"seat_general\">\r\n  </actionmap>\r\n </ActionProfiles>\r\n</ActionMaps>\r\n";
+        let section = device_section(xml).unwrap();
+        assert!(section.starts_with("<ActionProfiles version=\"1\""));
+        assert!(section.ends_with("<modifiers />"));
+        assert!(section.contains("<options type=\"joystick\" instance=\"1\" Product=\"S {G}\"/>"));
+        assert!(!section.contains("seat_general"));
+    }
+
+    #[test]
+    fn device_section_without_actionmap_ends_at_the_profile_close() {
+        let xml = "<ActionMaps><ActionProfiles><options type=\"joystick\" instance=\"1\"/><actionmaps/></ActionProfiles></ActionMaps>";
+        assert_eq!(
+            device_section(xml),
+            Some("<ActionProfiles><options type=\"joystick\" instance=\"1\"/><actionmaps/>")
+        );
+    }
+
+    #[test]
+    fn device_section_needs_a_profile_and_never_panics() {
+        assert_eq!(device_section("<ActionMaps/>"), None);
+        assert_eq!(device_section(""), None);
+        for xml in ["<ActionProfiles", "<ActionProfiles><actionmap", "<!-- <ActionProfiles> -->", "<ActionProfiles>Grüße<actionmap>"] {
+            let _ = device_section(xml);
+        }
+        assert_eq!(device_section("<ActionProfiles>Grüße<actionmap>"), Some("<ActionProfiles>Grüße"));
+    }
+
+    #[test]
+    fn bound_inputs_per_device_sorted_and_without_blanks() {
+        let rebind = |input: &str| Rebind { actionmap: "m".into(), action: "a".into(), input: input.into(), attrs: Vec::new() };
+        let rebinds = [
+            rebind("js2_button10"),
+            rebind("js2_button2"),
+            rebind("js2_button2"),
+            rebind("js10_x"),
+            rebind("js2_ "),
+            rebind("js3_ "),
+            rebind("kb1_lalt+x"),
+            rebind("gp1_a"),
+            rebind("mouse1"),
+        ];
+        assert_eq!(
+            bound_inputs(&rebinds),
+            vec![
+                ("kb1".to_string(), vec!["lalt+x".to_string()]),
+                ("gp1".to_string(), vec!["a".to_string()]),
+                ("js2".to_string(), vec!["button2".to_string(), "button10".to_string()]),
+                ("js10".to_string(), vec!["x".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn compact_numbered_collapses_runs_only() {
+        let tokens: Vec<String> =
+            ["button1", "button2", "button3", "button5", "button9", "button10", "f1", "hat1_up", "mouse1", "mouse2", "x", "007"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        assert_eq!(
+            compact_numbered(&tokens),
+            vec!["button1-3", "button5", "button9-10", "f1", "hat1_up", "mouse1-2", "x", "007"]
+        );
+        assert!(compact_numbered(&[]).is_empty());
+        let huge = vec![format!("button{}", u64::MAX), "button0".to_string()];
+        assert_eq!(compact_numbered(&huge), huge);
     }
 }

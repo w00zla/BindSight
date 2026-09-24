@@ -30,6 +30,7 @@ import type {
   ClashReport,
   HidOnlyDevice,
   WineKey,
+  DiDevice,
   Config,
   CurrentInput,
   DeviceInfo,
@@ -141,6 +142,8 @@ const currentHeld = computed(() => {
 const clash = ref<ClashReport | null>(null);
 // The HID interfaces Wine registers (Linux): the Device List's "wine" row.
 const wineKeys = ref<WineKey[]>([]);
+// DirectInput's game controllers (Windows): the Device List's "dinput" row.
+const dinputDevices = ref<DiDevice[]>([]);
 // Joystick-class HID devices SDL does not list: the Device List's tail.
 const hidOnly = ref<HidOnlyDevice[]>([]);
 // The install's version and game-data load state (updated via `scdata-changed`).
@@ -1225,6 +1228,13 @@ async function loadDeviceInfo() {
     console.warn("wine keys failed", e);
     wineKeys.value = [];
   }
+  // DirectInput's enumeration for the Device List; empty off Windows.
+  try {
+    dinputDevices.value = await invoke<DiDevice[]>("dinput_devices");
+  } catch (e) {
+    console.warn("dinput devices failed", e);
+    dinputDevices.value = [];
+  }
   try {
     hidOnly.value = await invoke<HidOnlyDevice[]>("hid_only_devices");
   } catch (e) {
@@ -1572,6 +1582,7 @@ onUnmounted(() => {
       :isUnseen="deviceUnseen"
       :clash="clash"
       :wineKeys="wineKeys"
+      :dinputDevices="dinputDevices"
       :hidOnly="hidOnly"
       :systemLine="systemLine"
       @choose="setMapChoice"

@@ -105,7 +105,11 @@ presentational components:
   profiles panel are resizable.
 - `ImageMapEditor` — the Devices mode (Konva via `vue-konva`, three columns:
   devices + image-maps, canvas, live input + shapes); also hosts Device Info
-  (Device List and Device Events tiles, each with its own Save).
+  (Device List and Device Events tiles, each with its own Save). The Device
+  List's Save appends what the tile does not show, read fresh from disk
+  (`game_files_report`): the device lines of `Game.log`, the device part of
+  `actionmaps.xml` verbatim (`scdata::device_section`) and every bound input
+  per device (`scdata::bound_inputs`, numbered runs compacted).
   `DeviceImage.vue` is the plain-SVG viewer.
 - Dialogs and widgets: `SettingsDialog` (own-styled checkboxes, WebKitGTK
   would paint GTK's), `ConfirmDialog` (title, optional subtitle, required
@@ -246,10 +250,13 @@ presentational components:
   next start will not see them, and that is the clash the Monitor
   predicts. `Assignment::describe_source` is the app-log line. A live
   enumeration never was SC's rule; `dinput.rs` / `wineorder.rs` stay only for
-  the `dinput_order` / `wine_order` diagnostics (and `wine_keys`), no longer
+  the `dinput_order` / `wine_order` diagnostics (and `wine_keys` /
+  `dinput_devices`, the Device List's `wine` / `dinput` rows), no longer
   wired into the order — nothing composes them, only their pieces
   (`dinput::list`/`to_order`, `wineorder::wine_devices`/`rank`) feed the
-  examples. No usable log means no order — there is no live fallback.
+  examples and those rows. The `dinput` row is matched to a device by its
+  path, so identical devices (same Product GUID) stay apart. No usable log
+  means no order — there is no live fallback.
 - `dinput.rs` — Windows: DirectInput 8 `EnumDevices(DI8DEVCLASS_GAMECTRL,
   DIEDFL_ATTACHEDONLY)` via `windows-sys` with hand-rolled COM vtables
   (windows-sys ships none). The rank is `jsN`, `guidProduct` is byte for
@@ -283,9 +290,11 @@ presentational components:
   (`lib.rs::refresh_device_order`, logged on every change). Parsing fails
   soft, never panics.
 - `logwatch.rs` — the `Game.log` watch (pure state machine; the thread is
-  `lib.rs::spawn_game_log_watch`, **the only reader of the log**, always
-  outside the `AppData` lock): a metadata poll every 2 s; the first poll and
-  an environment change `Adopt` the file (one full read); a *new* file
+  `lib.rs::spawn_game_log_watch`, **the only reader of the log** for the
+  order, always outside the `AppData` lock; the one other read is the
+  Device List export's `game_files_report`, once per Save): a metadata
+  poll every 2 s; the first poll and an environment change `Adopt` the
+  file (one full read); a *new* file
   (shorter, other creation time, appeared / vanished — NTFS name tunneling
   keeps the creation time on a quick recreate) is read incrementally
   (`Tail`: only the bytes appended since the last read) for the whole 90 s

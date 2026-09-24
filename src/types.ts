@@ -289,6 +289,20 @@ export interface WineKey {
   is_gamepad: boolean;
 }
 
+// A game controller as DirectInput enumerates it (Windows, Device List
+// only): diagnostics, never the game's order. `path` is empty when it could
+// not be read.
+export interface DiDevice {
+  product_name: string;
+  instance_name: string;
+  product_guid: string;
+  instance_guid: string;
+  dev_type: number;
+  usage_page: number;
+  usage: number;
+  path: string;
+}
+
 // A joystick as the game's order has it: its jsN, name and GUID.
 export interface JoystickDevice {
   instance: number;
