@@ -226,6 +226,8 @@ export interface SlotStatus {
   sc_product_guid: string | null;
   name: string | null;
   clash: boolean;
+  // SDL instance id of the attached device on this slot; null if SDL does not list it.
+  sdl_instance_id: number | null;
 }
 
 // A saved slot whose device is not in SC's list — it dangles and shifts the rest.

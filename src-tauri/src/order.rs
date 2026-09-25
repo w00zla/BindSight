@@ -22,6 +22,8 @@
 //! (`gamelog.rs`: the game's own list of what it saw at its last start).
 //! The live enumeration (`dinput.rs` / `wineorder.rs`) is diagnostics only.
 
+use std::collections::HashMap;
+
 use serde::Serialize;
 
 use crate::scdata::JoystickDevice;
@@ -101,6 +103,41 @@ impl Assignment {
             }
         }
     }
+}
+
+/// An attached joystick as [`slots_by_device`] sees it.
+pub struct Attached<'a> {
+    /// SDL's per-session instance id.
+    pub id: u32,
+    pub guid: &'a str,
+    /// The OS device path SDL opened.
+    pub path: Option<&'a str>,
+}
+
+/// The `jsN` of each attached joystick, keyed by its SDL instance id. A
+/// GUID the order lists once is that slot. Identical devices (one GUID,
+/// several slots, e.g. vJoy's collections) take that GUID's slots in
+/// ascending order, sorted by their device path — an assumption: on Windows
+/// the path order is the DirectInput order seen for vJoy's collections, the
+/// game's own rule for identical devices is unverified. A device beyond its
+/// GUID's slot count gets none.
+pub fn slots_by_device(order: &DeviceOrder, attached: &[Attached]) -> HashMap<u32, u32> {
+    let mut devices: Vec<&Attached> = attached.iter().collect();
+    devices.sort_by_key(|d| (d.path.is_none(), d.path.map(str::to_ascii_lowercase), d.id));
+    let mut slots: Vec<&JoystickDevice> = order.joysticks.iter().collect();
+    slots.sort_by_key(|j| j.instance);
+    let mut used = vec![false; slots.len()];
+    let mut out = HashMap::new();
+    for d in devices {
+        let hit = slots.iter().enumerate().find(|(n, j)| {
+            !used[*n] && j.product_guid.as_deref().is_some_and(|g| g.eq_ignore_ascii_case(d.guid))
+        });
+        if let Some((n, j)) = hit {
+            used[n] = true;
+            out.insert(d.id, j.instance);
+        }
+    }
+    out
 }
 
 /// The logged enumeration reduced to the joysticks attached now (`attached`:
@@ -203,6 +240,41 @@ mod tests {
         assert_eq!(o.instance_for_guid(&A.to_lowercase()), Some(1));
         assert_eq!(o.instance_for_guid(B), Some(2));
         assert_eq!(o.instance_for_guid(C), None);
+    }
+
+    #[test]
+    fn identical_devices_take_their_guids_slots_by_path() {
+        // The measured vJoy setup: two VKBs, three vJoy collections on js3-js5,
+        // SDL listing the collections in reverse (instance ids 4, 3, 2).
+        const V: &str = "{BEAD1234-0000-0000-0000-504944564944}";
+        let o = order(&[(1, A), (2, B), (3, V), (4, V), (5, V)]);
+        let col = |n: u32| format!(r"\\?\HID#HIDCLASS&COL0{n}#1&2D595CA7&0&000{}", n - 1);
+        let (c1, c2, c3) = (col(1), col(2), col(3));
+        let attached = [
+            Attached { id: 4, guid: V, path: Some(&c3) },
+            Attached { id: 3, guid: V, path: Some(&c2) },
+            Attached { id: 2, guid: V, path: Some(&c1) },
+            Attached { id: 1, guid: &A.to_lowercase(), path: Some("x") },
+            Attached { id: 0, guid: B, path: None },
+        ];
+        let slots = slots_by_device(&o, &attached);
+        assert_eq!(slots.get(&2), Some(&3));
+        assert_eq!(slots.get(&3), Some(&4));
+        assert_eq!(slots.get(&4), Some(&5));
+        assert_eq!(slots.get(&1), Some(&1));
+        assert_eq!(slots.get(&0), Some(&2));
+
+        // More identical devices than slots: the surplus gets none; an unlisted GUID none.
+        let o = order(&[(1, V)]);
+        let attached = [
+            Attached { id: 7, guid: V, path: Some(&c2) },
+            Attached { id: 8, guid: V, path: Some(&c1) },
+            Attached { id: 9, guid: C, path: None },
+        ];
+        let slots = slots_by_device(&o, &attached);
+        assert_eq!(slots.get(&8), Some(&1));
+        assert_eq!(slots.get(&7), None);
+        assert_eq!(slots.get(&9), None);
     }
 
     #[test]

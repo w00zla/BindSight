@@ -499,8 +499,7 @@ function deviceForBinding(b: ResolvedBinding): DeviceInfo | undefined {
 function deviceForKind(b: ResolvedBinding): DeviceInfo | undefined {
   if (b.device_kind === "keyboard") return devices.value.find((d) => d.kind === "keyboard");
   if (b.device_kind === "gamepad") return devices.value.find((d) => d.kind === "gamepad" && d.gamepad_slot !== null);
-  const guid = slotByInstance.value.get(b.instance)?.sc_product_guid;
-  return guid ? devices.value.find((d) => sameHardware(d.hardware_id, guid)) : undefined;
+  return joystickOnSlot(b.instance);
 }
 
 // The image-map preview target for a device slot (Bindings tab overlay): the
@@ -512,8 +511,7 @@ function overlayFor(kind: DeviceKind, instance: number): OverlayTarget | null {
   if (kind === "keyboard") device = devices.value.find((d) => d.kind === "keyboard");
   else if (kind === "gamepad") device = devices.value.find((d) => d.kind === "gamepad" && d.gamepad_slot !== null);
   else {
-    const guid = slotByInstance.value.get(instance)?.sc_product_guid;
-    device = guid ? devices.value.find((d) => sameHardware(d.hardware_id, guid)) : undefined;
+    device = joystickOnSlot(instance);
   }
   if (!device) return null;
   const id = chosenMapId(device);
@@ -690,7 +688,7 @@ function bindingCountFor(d: DeviceInfo): number {
   if (d.kind === "gamepad") {
     return d.gamepad_slot === null ? 0 : bindings.value.filter((b) => b.device_kind === "gamepad").length;
   }
-  const n = slotFor(d.sc_product_guid)?.effective_instance;
+  const n = slotOf(d)?.effective_instance;
   return n === undefined ? 0 : bindings.value.filter((b) => b.device_kind === "joystick" && b.instance === n).length;
 }
 
@@ -711,6 +709,19 @@ const slotByGuid = computed<Map<string, SlotStatus>>(() => {
 
 function slotFor(guid: string | null): SlotStatus | null {
   return guid ? slotByGuid.value.get(guid) ?? null : null;
+}
+
+// The slot of an SDL device, by its instance id: identical devices share
+// the GUID, not the slot.
+function slotOf(d: DeviceInfo | undefined): SlotStatus | null {
+  if (d?.kind !== "joystick") return null;
+  return clash.value?.connected.find((s) => s.sdl_instance_id === d.sdl_instance_id) ?? null;
+}
+
+// The SDL joystick on a jsN slot.
+function joystickOnSlot(instance: number): DeviceInfo | undefined {
+  const id = slotByInstance.value.get(instance)?.sdl_instance_id;
+  return id == null ? undefined : devices.value.find((d) => d.kind === "joystick" && d.sdl_instance_id === id);
 }
 
 // Connected-slot status by the jsN SC assigns.
@@ -949,7 +960,7 @@ async function showBinding(p: JoyInput) {
   try {
     if (p.kind === "button" || p.kind === "axis" || p.kind === "hat") {
       const res = await invoke<InputResolution>("resolve_input", {
-        guid: p.guid,
+        instanceId: p.instance_id,
         kind: p.kind,
         index: p.index,
         direction: p.kind === "hat" ? p.direction : null,
@@ -1011,7 +1022,7 @@ function rebindToken(p: JoyInput): string | null {
 // diagonal or centre).
 function eventToken(p: JoyInput): string | null {
   const d = deviceOfEvent(p);
-  const js = () => slotFor(d?.sc_product_guid ?? null)?.effective_instance ?? null;
+  const js = () => slotOf(d)?.effective_instance ?? null;
   switch (p.kind) {
     case "key":
       return `kb1_${p.name}`;
@@ -1485,7 +1496,7 @@ onUnmounted(() => {
           v-for="d in monitorDevices"
           :key="d.index"
           :device="d"
-          :slot="slotFor(d.sc_product_guid)"
+          :slot="slotOf(d)"
           :noOrder="d.kind === 'joystick' && noOrder"
           :bindingCount="bindingCountFor(d)"
           :hidden="isStageHidden(d)"

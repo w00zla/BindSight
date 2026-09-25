@@ -735,7 +735,14 @@ on Windows; delete it to force a re-extract.
   Windows backend even prepends). No usable `Game.log` = no order: the
   joysticks show "no joystick order" and resolve nothing (no live fallback).
   The Monitor, the deck and the Bindings List's column names follow the
-  assigned order.
+  assigned order. **Identical devices** (one Product GUID on several slots,
+  e.g. vJoy's `HIDCLASS&ColNN` collections) take that GUID's slots in
+  ascending order, sorted by their device path (`order::slots_by_device`)
+  — an assumption from one Windows dump where that was the DirectInput
+  order, unverified in-game; on Linux the path is the evdev node, not
+  Wine's sysfs order. Every consumer therefore finds a joystick's slot by
+  its SDL instance id (`SlotStatus::sdl_instance_id`, `resolve_input`),
+  never by GUID.
 - **`pp_resortdevices` logs 0-based slots**: `pp_resortdevices joystick 2 3`
   writes `N actions moved from js1 to js2` into `Game.log` (the same quirk
   as `Connected joystick0` = `js1`). The arguments are 1-based `jsN`. A

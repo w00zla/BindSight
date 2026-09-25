@@ -288,6 +288,9 @@ pub struct SlotStatus {
     /// The device is in the saved profile but under a different `jsN` than it now
     /// gets — every binding on its slot lands on the wrong stick.
     pub clash: bool,
+    /// SDL instance id of the attached device on this slot ([`joystick_slots`]),
+    /// `None` for a device SDL does not list.
+    pub sdl_instance_id: Option<u32>,
 }
 
 /// A saved `<options>` joystick slot whose device is not in SC's order (not
@@ -375,9 +378,14 @@ pub fn analyze_clash(
     // part in the order, and must not turn up as "unseen" either.
     let devices: Vec<&DeviceInfo> = devices.iter().filter(|d| d.kind == DeviceKind::Joystick).collect();
 
+    let device_of_slot: HashMap<u32, u32> =
+        joystick_slots(order, devices.iter().copied()).into_iter().map(|(id, slot)| (slot, id)).collect();
     let mut connected = Vec::with_capacity(order.joysticks.len());
     for j in &order.joysticks {
-        let stored_instance = j.product_guid.as_deref().and_then(|g| instance_for_guid(profile, g));
+        // A GUID listed n times (identical devices) matches its saved slots
+        // in ascending order, as `order::assign` pairs them.
+        let nth = order.joysticks.iter().filter(|o| o.instance < j.instance && guid_eq(o.product_guid.as_deref(), j.product_guid.as_deref())).count();
+        let stored_instance = j.product_guid.as_deref().and_then(|g| saved_instances(profile, g).get(nth).copied());
         let clash = matches!(stored_instance, Some(i) if i != j.instance);
         connected.push(SlotStatus {
             effective_instance: j.instance,
@@ -385,6 +393,7 @@ pub fn analyze_clash(
             sc_product_guid: j.product_guid.clone(),
             name: Some(j.product_name.clone()),
             clash,
+            sdl_instance_id: device_of_slot.get(&j.instance).copied(),
         });
     }
 
@@ -424,6 +433,31 @@ pub fn analyze_clash(
         resort,
         resort_commands,
     }
+}
+
+/// The `jsN` of each attached joystick in `devices`, keyed by SDL instance id
+/// (see [`crate::order::slots_by_device`]; identical devices by path).
+pub fn joystick_slots<'a>(order: &DeviceOrder, devices: impl IntoIterator<Item = &'a DeviceInfo>) -> HashMap<u32, u32> {
+    let attached: Vec<crate::order::Attached> = devices
+        .into_iter()
+        .filter(|d| d.kind == DeviceKind::Joystick)
+        .filter_map(|d| {
+            Some(crate::order::Attached { id: d.sdl_instance_id, guid: d.sc_product_guid.as_deref()?, path: d.sdl_path.as_deref() })
+        })
+        .collect();
+    crate::order::slots_by_device(order, &attached)
+}
+
+/// The slots `<options>` saves for this Product GUID, ascending.
+fn saved_instances(profile: &ActionMapsFile, sc_product_guid: &str) -> Vec<u32> {
+    let mut v: Vec<u32> = profile
+        .joysticks
+        .iter()
+        .filter(|j| guid_eq(j.product_guid.as_deref(), Some(sc_product_guid)))
+        .map(|j| j.instance)
+        .collect();
+    v.sort_unstable();
+    v
 }
 
 /// The slot permutation that fixes the clash: for every device SC lists that
@@ -763,7 +797,43 @@ mod tests {
             sc_product_guid: None,
             name: Some(name.into()),
             clash: stored.is_some_and(|s| s != effective),
+            sdl_instance_id: None,
         }
+    }
+
+    #[test]
+    fn identical_devices_keep_their_own_saved_slots() {
+        // The measured vJoy setup: three collections of one vJoy on js3-js5,
+        // saved there, SDL listing them in reverse.
+        const V: &str = "{BEAD1234-0000-0000-0000-504944564944}";
+        let xml = r#"<ActionMaps>
+          <options type="joystick" instance="1" Product=" VKB R {0200231D-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="2" Product=" VKB L {0201231D-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="3" Product="vJoy - Virtual Joystick  {BEAD1234-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="4" Product="vJoy - Virtual Joystick  {BEAD1234-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="5" Product="vJoy - Virtual Joystick  {BEAD1234-0000-0000-0000-504944564944}"/>
+          <options type="joystick" instance="6"/>
+        </ActionMaps>"#;
+        let profile = parse_actionmaps(xml).unwrap();
+        let vjoy = |id: u32, col: u32| DeviceInfo {
+            sdl_instance_id: id,
+            sdl_path: Some(format!(r"\\?\HID#HIDCLASS&COL0{col}#1&2D595CA7&0&000{}", col - 1)),
+            ..dev(V, "vJoy - Virtual Joystick")
+        };
+        let mut l = dev(VKB_L, "VKB L");
+        l.sdl_instance_id = 0;
+        let mut r = dev(VKB_R, "VKB R");
+        r.sdl_instance_id = 1;
+        let devs = [vjoy(4, 3), vjoy(3, 2), vjoy(2, 1), r, l];
+        // The log enumerates VKB L first; the file's map decides.
+        let log = log_of(&[("VKB L", VKB_L), ("VKB R", VKB_R), ("vJoy", V), ("vJoy", V), ("vJoy", V)]);
+        let o = crate::order::assign(&log, &profile.joysticks).order;
+        let report = analyze_clash(&profile, &devs, Ok(&o));
+        let got: Vec<(u32, Option<u32>, Option<u32>)> =
+            report.connected.iter().map(|s| (s.effective_instance, s.stored_instance, s.sdl_instance_id)).collect();
+        assert_eq!(got, [(1, Some(1), Some(1)), (2, Some(2), Some(0)), (3, Some(3), Some(2)), (4, Some(4), Some(3)), (5, Some(5), Some(4))]);
+        assert!(!report.has_clash);
+        assert!(report.resort.is_empty());
     }
 
     fn missing(stored: u32, name: &str) -> MissingSlot {

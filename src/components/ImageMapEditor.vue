@@ -2078,13 +2078,17 @@ function compactUsages(usages: string[]): string {
 // The `game` row of a joystick (SDL device or hid-only): the jsN the game
 // gives it (its own order from Game.log), how that relates to the slot saved
 // in the bindings file, and that the game lists it as a joystick. A device
-// the order lacks is "not enumerated".
-function joystickGameText(productGuid: string | null): string {
+// the order lacks is "not enumerated". An SDL device (`sdlInstance`) is
+// found by its instance id: identical devices share the GUID, not the slot.
+function joystickGameText(productGuid: string | null, sdlInstance: number | null = null): string {
   const r = props.clash;
   if (!r) return "—";
   if (r.order_error) return "order unknown";
   const guid = productGuid?.toLowerCase();
-  const slot = r.connected.find((s) => !!guid && s.sc_product_guid?.toLowerCase() === guid);
+  const slot =
+    sdlInstance !== null
+      ? r.connected.find((s) => s.sdl_instance_id === sdlInstance)
+      : r.connected.find((s) => !!guid && s.sc_product_guid?.toLowerCase() === guid);
   if (!slot) return "not enumerated";
   let text = `js${slot.effective_instance}`;
   if (slot.stored_instance === null) text += " · not saved";
@@ -2186,7 +2190,7 @@ function deviceRows(d: DeviceInfo): [string, string][] {
         ? `gamepad · slot ${d.gamepad_slot ?? "—"} · ${d.controller_name ?? "—"}${d.wine_gamepad ? " · wine" : ""}`
         : d.kind,
     ],
-    ["game", d.kind === "gamepad" ? gamepadGameText(d) : joystickGameText(d.sc_product_guid)],
+    ["game", d.kind === "gamepad" ? gamepadGameText(d) : joystickGameText(d.sc_product_guid, d.sdl_instance_id)],
     ["hardware id", d.hardware_id ?? "—"],
     ...wineRows(d.sc_product_guid),
     ...dinputRows(d.sdl_path ? [d.sdl_path] : d.hid_interfaces.map((i) => i.path), d.sc_product_guid),

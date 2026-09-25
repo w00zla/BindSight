@@ -748,7 +748,7 @@ struct InputResolution {
 /// descriptor — see `DeviceInfo::axes_error`).
 #[tauri::command]
 fn resolve_input(
-    guid: String,
+    instance_id: u32,
     kind: String,
     index: u8,
     direction: Option<String>,
@@ -759,17 +759,21 @@ fn resolve_input(
     if data.bindings_file.is_none() {
         return InputResolution::default();
     }
-    let Some(sc_guid) = guid::sdl_guid_to_sc_product(&guid) else {
+    let Ok(order) = data.device_order.as_ref() else {
         return InputResolution::default();
     };
-    let Some(instance) = data.device_order.as_ref().ok().and_then(|o| o.instance_for_guid(&sc_guid)) else {
-        return InputResolution::default();
+    // By SDL instance id: identical devices share the GUID, not the slot.
+    let (instance, axis) = {
+        let Ok(list) = devices.lock() else {
+            return InputResolution::default();
+        };
+        let Some(&instance) = bindings::joystick_slots(order, list.iter()).get(&instance_id) else {
+            return InputResolution::default();
+        };
+        let axis = list.iter().find(|d| d.kind == scdata::DeviceKind::Joystick && d.sdl_instance_id == instance_id).and_then(|d| d.axes.get(index as usize).cloned());
+        (instance, axis)
     };
-    let axis_name = || {
-        let list = devices.lock().ok()?;
-        let dev = list.iter().find(|d| d.sdl_guid == guid)?;
-        dev.axes.get(index as usize).cloned()
-    };
+    let axis_name = || axis;
     let token = match kind.as_str() {
         "button" => Some(bindings::button_token(instance, index)),
         "hat" => direction.as_deref().and_then(|d| bindings::hat_token(instance, index, d)),
