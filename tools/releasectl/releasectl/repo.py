@@ -145,3 +145,28 @@ def gather(root: Path) -> Snapshot:
         n = git(root, "rev-list", "--count", f"{snap.live.latest.tag}..{core.MAIN}")
         snap.main_ahead_live = int(n) if n else None
     return snap
+
+
+# --- CI build runs -----------------------------------------------------------
+
+
+def run_for_tag(root: Path, tag: str) -> str | None:
+    """The id of the newest build.yml run a push of `tag` started."""
+    jq = f'map(select(.headBranch == "{tag}")) | .[0].databaseId // empty'
+    out = query(root, "gh", "run", "list", "--workflow", "build.yml", "--event",
+                "push", "--json", "databaseId,headBranch", "--jq", jq)
+    return out.strip() or None if out else None
+
+
+def run_view(root: Path, run_id: str) -> dict | None:
+    out = query(root, "gh", "run", "view", run_id, "--json", "status,conclusion,url,jobs")
+    try:
+        return json.loads(out) if out else None
+    except ValueError:
+        return None
+
+
+def run_failed_log(root: Path, run_id: str, lines: int = 40) -> str:
+    """The tail of the failed steps' log, or empty."""
+    out = query(root, "gh", "run", "view", run_id, "--log-failed") or ""
+    return "\n".join(out.rstrip().splitlines()[-lines:])

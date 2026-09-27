@@ -281,3 +281,36 @@ class Overview(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BuildRuns(unittest.TestCase):
+    def test_a_running_build(self):
+        from datetime import datetime, timezone
+        now = datetime(2026, 9, 27, 11, 0, 30, tzinfo=timezone.utc)
+        data = {"status": "in_progress", "conclusion": "", "url": "https://x/runs/1",
+                "jobs": [
+                    {"name": "Tests", "status": "completed", "conclusion": "success",
+                     "startedAt": "2026-09-27T10:58:54Z", "completedAt": "2026-09-27T11:00:04Z"},
+                    {"name": "Build (linux)", "status": "in_progress", "conclusion": "",
+                     "startedAt": "2026-09-27T11:00:10Z", "completedAt": "0001-01-01T00:00:00Z"},
+                    {"name": "Build (windows)", "status": "queued", "conclusion": "",
+                     "startedAt": "0001-01-01T00:00:00Z", "completedAt": "0001-01-01T00:00:00Z"}]}
+        run = core.parse_run(data, now)
+        self.assertEqual(run.state, "running")
+        self.assertFalse(run.done)
+        self.assertEqual([(j.name, j.state, core.duration(j.seconds)) for j in run.jobs],
+                         [("Tests", "success", "1:10"), ("Build (linux)", "running", "0:20"),
+                          ("Build (windows)", "queued", "")])
+
+    def test_a_finished_build(self):
+        from datetime import datetime, timezone
+        now = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
+        run = core.parse_run({"status": "completed", "conclusion": "failure", "jobs": [
+            {"name": "Tests", "status": "completed", "conclusion": "failure",
+             "startedAt": "2026-09-27T10:00:00Z", "completedAt": "2026-09-27T10:02:05Z"}]}, now)
+        self.assertEqual(run.state, "failure")
+        self.assertTrue(run.done)
+        self.assertEqual(core.duration(run.jobs[0].seconds), "2:05")
+        # Anything unexpected parses without a crash.
+        self.assertEqual(core.parse_run({}, now).jobs, [])
+

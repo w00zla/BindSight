@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 from rich.markup import escape
@@ -151,6 +152,17 @@ def state_cell(state: str) -> Text:
 COLUMNS = ["Channel", "Branch", "vs main", "Listed tag", "State",
            "Newest version", "State", "Warnings"]
 DRAFT_COLUMNS = ["Draft", "For"]
+BUILD_COLUMNS = ["Job", "State", "Time"]
+
+# A build job's state as an icon and a colour.
+JOB_LOOK = {"queued": ("○", NORD["dim"]), "running": ("◐", NORD["yellow"]),
+            "success": ("✓", NORD["green"]), "failure": ("✗", NORD["red"]),
+            "cancelled": ("–", NORD["dim"]), "skipped": ("–", NORD["dim"])}
+
+
+def job_state(state: str) -> Text:
+    icon, colour = JOB_LOOK.get(state, ("?", NORD["dim"]))
+    return Text(f"{icon} {state}", style=colour)
 
 
 def button_bar(buttons: list[tuple[str, str, str]]) -> Horizontal:
@@ -168,7 +180,10 @@ class ReleaseCtl(App):
     .panel:focus-within { border: round $primary; }
     #live-panel { margin: 1 1 1 1; }
     #channels-panel { height: 1fr; }
-    #log { height: 10; }
+    #log { height: 20; }
+    #build-panel { display: none; }
+    #build-head { height: auto; }
+    #build { max-height: 8; }
     #live { height: auto; }
     DataTable { background: $background; height: auto; }
     #channels { height: 1fr; }
@@ -216,6 +231,7 @@ class ReleaseCtl(App):
         Binding("x", "act('remove')", "Remove"),
         Binding("e", "act('notes')", "Notes"),
         Binding("p", "act('publish')", "Publish"),
+        Binding("w", "act('watch')", "Watch build"),
         Binding("g", "act('fetch')", "Fetch"),
         Binding("r", "reload", "Refresh"),
         Binding("d", "toggle_dry", "Dry-run"),
@@ -243,6 +259,10 @@ class ReleaseCtl(App):
             panel.border_title = "Drafts"
             yield DataTable(id="drafts", cursor_type="row", zebra_stripes=True)
             yield button_bar(DRAFT_BUTTONS)
+        with Vertical(id="build-panel", classes="panel") as panel:
+            panel.border_title = "Build"
+            yield Static("", id="build-head")
+            yield DataTable(id="build", cursor_type="none", zebra_stripes=True)
         log = RichLog(id="log", classes="panel", markup=True, wrap=True)
         log.border_title = "Log"
         yield log
@@ -258,6 +278,10 @@ class ReleaseCtl(App):
         self.log_panel = self.query_one(RichLog)
         self.table.add_columns(*COLUMNS)
         self.drafts_table.add_columns(*DRAFT_COLUMNS)
+        self.build_panel = self.query_one("#build-panel", Vertical)
+        self.build_head = self.query_one("#build-head", Static)
+        self.build_table = self.query_one("#build", DataTable)
+        self.build_table.add_columns(*BUILD_COLUMNS)
         self._update_subtitle()
         self.reload()
 
@@ -416,6 +440,56 @@ class ReleaseCtl(App):
         if out:
             self.log_line(out, "" if proc.returncode == 0 else "red")
         return proc.returncode == 0, out
+
+    # --- the Build panel ---
+
+    def watch_build(self, tag: str) -> None:
+        """Follow the build run of a pushed tag in the Build panel; runs in
+        the background, the app stays usable."""
+        self._watch_build(tag)
+
+    @work(exclusive=True, group="build")
+    async def _watch_build(self, tag: str) -> None:
+        self.build_panel.display = True
+        self.build_panel.border_title = f"Build {tag}"
+        self.build_table.clear()
+        self.build_head.update(f"[{NORD['dim']}]waiting for the run of {escape(tag)}…[/]")
+        run_id = None
+        for _ in range(40):  # the run shows up a few seconds after the push
+            run_id = await asyncio.to_thread(repo.run_for_tag, self.root, tag)
+            if run_id:
+                break
+            await asyncio.sleep(3)
+        if not run_id:
+            self.build_head.update(f"[{NORD['red']}]no build run found for {escape(tag)}[/]")
+            self.log_line(f"No build run found for {tag}; check: gh run list", "red")
+            return
+        run = None
+        while True:
+            data = await asyncio.to_thread(repo.run_view, self.root, run_id)
+            if data is not None:
+                run = core.parse_run(data, datetime.now(timezone.utc))
+                self.render_build(run)
+                if run.done:
+                    break
+            await asyncio.sleep(5)
+        if run.state == "success":
+            self.log_line(f"Build of {tag} succeeded; its draft is in Drafts.", "green")
+            self.reload()
+            return
+        self.log_line(f"Build of {tag}: {run.state}. {run.url}", "red")
+        if run.state == "failure":
+            tail = await asyncio.to_thread(repo.run_failed_log, self.root, run_id)
+            if tail:
+                self.log_line(tail, "dim")
+
+    def render_build(self, run: core.RunView) -> None:
+        icon, colour = JOB_LOOK.get(run.state, ("?", NORD["dim"]))
+        self.build_head.update(f"[{colour}]{icon} {run.state}[/]  [{NORD['dim']}]{escape(run.url)}[/]")
+        table = self.build_table
+        table.clear()
+        for job in run.jobs:
+            table.add_row(job.name, job_state(job.state), core.duration(job.seconds))
 
     async def suspended(self, title: str, func) -> None:
         with self.suspend():

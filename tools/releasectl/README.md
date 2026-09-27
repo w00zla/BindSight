@@ -26,6 +26,10 @@ Four panels; each one's buttons act on what it shows:
   Finalize, Remove for the selected row.
 - **Drafts**: the unpublished releases, live and channel — buttons Notes
   and Publish for the selected draft.
+- **Build**: shown once a build is watched — the CI run of a pushed tag,
+  one row per job with its state and time, updated every few seconds in
+  the background. A success reloads the drafts, a failure puts the failed
+  steps' log tail into the Log.
 - **Log**: every command run and its output.
 
 Every action shows the exact commands and waits for a yes. Pushes, GitHub
@@ -38,13 +42,14 @@ switches branches on a dirty tree, and returns to the branch it started on.
 | Key | Action | What it does |
 |---|---|---|
 | `n` | New | Creates `channel/<id>` from main, offers the push. |
-| `b` | Bump channel | Next version of the selected channel (`x.y.z-<id>.<n>`) on its branch: version in Cargo.toml / Cargo.lock / package.json, commit, tag, push, optional CI watch. |
+| `b` | Bump channel | Next version of the selected channel (`x.y.z-<id>.<n>`) on its branch: pull, version in Cargo.toml / Cargo.lock / package.json, commit, tag, push, optional build watch. |
 | `l` | Bump live | The same on main for a live version (`x.y.z`). |
 | `e` | Notes | Opens the selected draft's release notes in `$VISUAL` / `$EDITOR`, then saves them to GitHub. |
 | `p` | Publish | Publishes the selected draft: a channel version as pre-release (CI then moves the channel in `channels.json`), a live version as the latest full release. |
 | `s` | Sync | Merges main into the selected channel branch (live fixes, or a new base after a live release). A conflict aborts the merge and lists the files. |
 | `f` | Finalize | Merges the selected channel into main, then offers Bump live. |
 | `x` | Remove | Removes the channel from `channels.json` on main; offers to delete its merged branch. |
+| `w` | Watch build | Follows the CI run of a pushed tag in the Build panel (offered after every push, too). |
 | `g` | Fetch | `git fetch` of branches and tags. |
 | `r` | Refresh | Re-reads git and GitHub. |
 | `q` | Quit | |

@@ -362,3 +362,62 @@ def build_live(tags: set[str], releases: dict[str, str] | None) -> LiveInfo:
                     newest_state=release_state(newest.tag if newest else None,
                                                releases),
                     drafts=drafts)
+
+
+# --- CI build runs -----------------------------------------------------------
+
+# What `gh run view --json` reports for a job that has not started / ended.
+_NO_TIME = "0001-01-01T00:00:00Z"
+
+
+@dataclass
+class JobRow:
+    name: str
+    state: str  # queued / running / success / failure / cancelled / skipped
+    seconds: int | None  # run time so far or in total; None before the start
+
+
+@dataclass
+class RunView:
+    state: str  # queued / running / success / failure / cancelled
+    url: str
+    jobs: list[JobRow]
+
+    @property
+    def done(self) -> bool:
+        return self.state not in ("queued", "running")
+
+
+def _state(status: str, conclusion: str) -> str:
+    if status != "completed":
+        return "running" if status == "in_progress" else "queued"
+    return conclusion or "failure"
+
+
+def _parse_time(text: str | None):
+    from datetime import datetime
+    if not text or text == _NO_TIME:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def parse_run(data: dict, now) -> RunView:
+    """`gh run view --json status,conclusion,url,jobs` as rows; `now` (an
+    aware datetime) times the jobs still running."""
+    jobs = []
+    for job in data.get("jobs") or []:
+        start = _parse_time(job.get("startedAt"))
+        end = _parse_time(job.get("completedAt")) or (now if start else None)
+        seconds = int((end - start).total_seconds()) if start and end else None
+        jobs.append(JobRow(str(job.get("name", "?")),
+                           _state(job.get("status", ""), job.get("conclusion", "")),
+                           max(seconds, 0) if seconds is not None else None))
+    return RunView(_state(data.get("status", ""), data.get("conclusion", "")),
+                   str(data.get("url", "")), jobs)
+
+
+def duration(seconds: int | None) -> str:
+    return "" if seconds is None else f"{seconds // 60}:{seconds % 60:02d}"

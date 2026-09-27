@@ -11,7 +11,6 @@ import os
 import shlex
 import subprocess
 import tempfile
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -52,6 +51,7 @@ class Ctx(Protocol):
     async def pick(self, title: str, options: list[str]) -> str | None: ...
     async def execute(self, cmd: Cmd) -> tuple[bool, str]: ...
     async def suspended(self, title: str, func) -> None: ...
+    def watch_build(self, tag: str) -> None: ...
 
 
 class Stop(Exception):
@@ -251,42 +251,26 @@ async def bump(ctx: Ctx, version: Version, branch: str) -> None:
 
 async def offer_watch(ctx: Ctx, version: Version) -> None:
     watch = [["gh", "run", "list", "--workflow", "build.yml", "--event", "push"],
-             ["gh", "run", "watch", "<run>", "--exit-status"],
-             ["gh", "release", "view", version.tag, "--json", "url"]]
+             ["gh", "run", "view", "<run>", "--json", "status,conclusion,url,jobs"]]
     if not await ctx.confirm("Watch the CI build?", watch,
-                             note="Read-only; runs in the terminal."):
+                             note="Read-only; the Build panel follows the run."):
         return
     if ctx.dry_run:
         for cmd in watch:
             ctx.note(f"[dry-run] $ {show(cmd)}", "yellow")
         return
-    await ctx.suspended(f"Watching the build of {version.tag}",
-                        lambda: watch_build(ctx.root, version.tag))
+    ctx.watch_build(version.tag)
 
 
-def watch_build(root: Path, tag: str) -> None:
-    """Runs in the terminal while the app is suspended."""
-    print("Waiting for the build run to appear...")
-    run_id = ""
-    jq = f'map(select(.headBranch == "{tag}")) | .[0].databaseId // empty'
-    for _ in range(20):
-        run_id = (repo.query(root, "gh", "run", "list", "--workflow", "build.yml",
-                             "--event", "push", "--json", "databaseId,headBranch",
-                             "--jq", jq) or "").strip()
-        if run_id:
-            break
-        time.sleep(3)
-    if not run_id:
-        print("Could not find the build run; check it with: gh run list")
-        return
-    if subprocess.run(["gh", "run", "watch", run_id, "--exit-status"],
-                      cwd=root).returncode != 0:
-        print(f"The build run failed; see: gh run view {run_id} --web")
-        return
-    url = (repo.query(root, "gh", "release", "view", tag, "--json", "url",
-                      "--jq", ".url") or "").strip()
-    print(f"Draft release: {url}" if url else
-          f"Run succeeded, the draft is not visible yet: gh release view {tag} --web")
+async def watch(ctx: Ctx) -> None:
+    """Follow the build of a pushed tag in the Build panel (read-only)."""
+    tags = sorted(v for v in map(Version.parse, ctx.snap.tags) if v)
+    if not tags:
+        raise Stop("No version tags.")
+    text = await ctx.ask("Watch the build of", "Tag", tags[-1].tag,
+                         validate=lambda t: None if t in ctx.snap.tags else "no such tag")
+    if text:
+        ctx.watch_build(text)
 
 
 # --- channels.json on main ---------------------------------------------------
@@ -597,4 +581,5 @@ ACTIONS = {
     "finalize": finalize,
     "remove": remove_channel,
     "fetch": fetch,
+    "watch": watch,
 }
