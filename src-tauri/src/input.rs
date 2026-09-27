@@ -473,13 +473,28 @@ impl HidTable {
     }
 
     /// The joystick interface's report descriptor, or why it is unavailable.
-    fn descriptor(&self, vid_pid: Option<(u16, u16)>) -> Result<Vec<u8>, String> {
+    /// The interface on SDL's own path wins (see [`interface_on_path`]),
+    /// else the first joystick interface of the vendor/product.
+    fn descriptor(&self, vid_pid: Option<(u16, u16)>, sdl_path: Option<&str>) -> Result<Vec<u8>, String> {
         let api = self.api.as_ref().ok_or("hidapi unavailable")?;
         let info = vid_pid.and_then(|k| self.get(k)).ok_or("no HID device for this vendor/product")?;
-        let path = info.joystick_path.as_ref().ok_or("no HID joystick interface")?;
+        let own = interface_on_path(&info.interfaces, sdl_path).and_then(|i| std::ffi::CString::new(i.path.as_str()).ok());
+        let path = own.as_ref().or(info.joystick_path.as_ref()).ok_or("no HID joystick interface")?;
         let dev = api.open_path(path).map_err(|e| format!("{}: {e}", path.to_string_lossy()))?;
         crate::hid::read_descriptor(&dev)
     }
+}
+
+/// The joystick interface hidapi lists under the path SDL opened. One
+/// vendor/product can carry several joystick collections, each its own
+/// device with its own descriptor (vJoy's `HIDCLASS&ColNN`); on Windows SDL
+/// and hidapi name them by the same path, SDL in upper case. Linux SDL
+/// opens the evdev node, never a hidraw path, so there is no match.
+fn interface_on_path<'a>(interfaces: &'a [HidInterface], sdl_path: Option<&str>) -> Option<&'a HidInterface> {
+    let sdl_path = sdl_path?;
+    interfaces
+        .iter()
+        .find(|i| i.usage_page == 0x01 && matches!(i.usage, 4 | 5 | 8) && i.path.eq_ignore_ascii_case(sdl_path))
 }
 
 fn sdl_type_name(t: sdl2::sys::SDL_JoystickType) -> &'static str {
@@ -514,16 +529,6 @@ fn device_info(stick: &Joystick, index: u32, hid: &HidTable, pad: Option<&PadFac
     let hid_info = vid_pid.and_then(|k| hid.get(k));
     let sc_name = hid_info.and_then(|i| i.name.clone());
     let num_axes = stick.num_axes();
-    let descriptor = hid.descriptor(vid_pid);
-    let (axes, axes_error) = match descriptor.as_ref().map_err(Clone::clone).and_then(|d| crate::hid::sc_axes_from(d, num_axes)) {
-        Ok(axes) => (axes, None),
-        Err(e) => (Vec::new(), Some(e)),
-    };
-    let hid_usages = descriptor
-        .as_ref()
-        .map(|d| crate::hid::axis_usages(d).iter().map(|&(p, u)| crate::hid::usage_name(p, u)).collect())
-        .unwrap_or_default();
-    let hid_descriptor = descriptor.ok().map(|d| d.iter().map(|b| format!("{b:02x}")).collect());
     // Index-based SDL queries the safe wrapper does not expose.
     let i = index as std::os::raw::c_int;
     let (sdl_vendor, sdl_product, sdl_product_version, sdl_type, sdl_path, sdl_serial) = unsafe {
@@ -541,6 +546,16 @@ fn device_info(stick: &Joystick, index: u32, hid: &HidTable, pad: Option<&PadFac
             serial,
         )
     };
+    let descriptor = hid.descriptor(vid_pid, sdl_path.as_deref());
+    let (axes, axes_error) = match descriptor.as_ref().map_err(Clone::clone).and_then(|d| crate::hid::sc_axes_from(d, num_axes)) {
+        Ok(axes) => (axes, None),
+        Err(e) => (Vec::new(), Some(e)),
+    };
+    let hid_usages = descriptor
+        .as_ref()
+        .map(|d| crate::hid::axis_usages(d).iter().map(|&(p, u)| crate::hid::usage_name(p, u)).collect())
+        .unwrap_or_default();
+    let hid_descriptor = descriptor.ok().map(|d| d.iter().map(|b| format!("{b:02x}")).collect());
     let sc_product_guid = sdl_guid_to_sc_product(&sdl_guid);
     let kind = if pad.is_some() { DeviceKind::Gamepad } else { DeviceKind::Joystick };
     DeviceInfo {
@@ -1177,6 +1192,34 @@ fn hat_direction(state: HatState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn iface(path: &str, usage: u16) -> HidInterface {
+        HidInterface {
+            path: path.to_string(),
+            interface_number: -1,
+            usage_page: 0x01,
+            usage,
+            manufacturer: None,
+            product: None,
+            serial: None,
+            release: 0,
+            bus_type: "unknown".to_string(),
+        }
+    }
+
+    #[test]
+    fn descriptor_interface_is_the_one_on_sdls_path() {
+        // vJoy: three joystick collections under one vendor/product.
+        let col = |n: u32| format!(r"\\?\HID#HIDCLASS&Col0{n}#1&2d595ca7&0&000{}#{{4d1e55b2-f16f-11cf-88cb-001111000030}}", n - 1);
+        let list = [iface(&col(1), 4), iface(&col(2), 4), iface(&col(3), 4)];
+        let sdl = col(2).to_uppercase();
+        assert_eq!(interface_on_path(&list, Some(&sdl)).map(|i| i.path.as_str()), Some(col(2).as_str()));
+        // Linux: SDL opens the evdev node, nothing matches (the caller falls back).
+        assert!(interface_on_path(&list, Some("/dev/input/event7")).is_none());
+        assert!(interface_on_path(&list, None).is_none());
+        // Only a joystick-class interface counts, even on the same path.
+        assert!(interface_on_path(&[iface(&col(1), 2)], Some(&col(1))).is_none());
+    }
 
     #[test]
     fn wine_pad_buttons_follow_xinputs_usage_order() {
