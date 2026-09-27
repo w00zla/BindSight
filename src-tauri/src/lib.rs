@@ -580,18 +580,23 @@ fn set_update_check(enabled: bool, app: AppHandle, data: State<Mutex<AppData>>) 
     }
 }
 
-/// Persist the updater's channel (Settings Save).
+/// Persist the updater's channel (App Update dialog): `stable` or a
+/// channel's id.
 #[tauri::command]
-fn set_update_channel(channel: config::UpdateChannel, app: AppHandle, data: State<Mutex<AppData>>) {
+fn set_update_channel(channel: String, app: AppHandle, data: State<Mutex<AppData>>) -> Result<(), String> {
+    if channel != update::STABLE && !update::valid_channel_id(&channel) {
+        return Err(format!("not a channel: {channel:?}"));
+    }
     let mut data = data.lock().unwrap();
     if data.config.update_channel == channel {
-        return;
+        return Ok(());
     }
+    info!("update channel set: {channel}");
     data.config.update_channel = channel;
-    info!("update channel set: {channel:?}");
-    if let Err(e) = config::save(&app, &data.config) {
+    config::save(&app, &data.config).map_err(|e| {
         error!("failed to save config: {e}");
-    }
+        e
+    })
 }
 
 /// Persist the input-preview overlay's size in px (Settings Save).
@@ -748,7 +753,7 @@ struct InputResolution {
 /// descriptor — see `DeviceInfo::axes_error`).
 #[tauri::command]
 fn resolve_input(
-    instance_id: u32,
+    guid: String,
     kind: String,
     index: u8,
     direction: Option<String>,
@@ -759,21 +764,17 @@ fn resolve_input(
     if data.bindings_file.is_none() {
         return InputResolution::default();
     }
-    let Ok(order) = data.device_order.as_ref() else {
+    let Some(sc_guid) = guid::sdl_guid_to_sc_product(&guid) else {
         return InputResolution::default();
     };
-    // By SDL instance id: identical devices share the GUID, not the slot.
-    let (instance, axis) = {
-        let Ok(list) = devices.lock() else {
-            return InputResolution::default();
-        };
-        let Some(&instance) = bindings::joystick_slots(order, list.iter()).get(&instance_id) else {
-            return InputResolution::default();
-        };
-        let axis = list.iter().find(|d| d.kind == scdata::DeviceKind::Joystick && d.sdl_instance_id == instance_id).and_then(|d| d.axes.get(index as usize).cloned());
-        (instance, axis)
+    let Some(instance) = data.device_order.as_ref().ok().and_then(|o| o.instance_for_guid(&sc_guid)) else {
+        return InputResolution::default();
     };
-    let axis_name = || axis;
+    let axis_name = || {
+        let list = devices.lock().ok()?;
+        let dev = list.iter().find(|d| d.sdl_guid == guid)?;
+        dev.axes.get(index as usize).cloned()
+    };
     let token = match kind.as_str() {
         "button" => Some(bindings::button_token(instance, index)),
         "hat" => direction.as_deref().and_then(|d| bindings::hat_token(instance, index, d)),
@@ -1479,6 +1480,7 @@ pub fn run() {
             set_overlay_size,
             set_overlay_position,
             update::check_update,
+            update::update_channels,
             update::install_update,
             diff::compare_bindings
         ])

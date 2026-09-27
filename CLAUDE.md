@@ -128,32 +128,35 @@ presentational components:
   goes to the app log), `Icon` (inline stroke SVGs by name — never emoji),
   `WindowEdges`, `AppFooter` (credits, a `mark` slot before the logo; the
   logo and the link-styled version button open the **App Update dialog**),
-  `VersionDialog` (a `ConfirmDialog`: Current chip = the running version,
-  Update chip = the found version / "Checking…" / a dash, then download
-  progress, an error line, the dev toggle; the updater's buttons after
-  Close).
+  `VersionDialog` (a `ConfirmDialog`: the channel dropdown at the head's
+  right edge, `ConfirmDialog`'s `head` slot — the only
+  place the channel is picked, filled by `update_channels` at every open,
+  a pick saved via `set_update_channel` and checked at once with
+  `check(true)`; a channel shows its id —
+  Current chip = the running version, Update chip = the found version /
+  "Checking…" / a dash, then download progress, an error line, the dev
+  toggle; the updater's buttons after Close).
 - **Updater** (`update.ts`, `UpdateMark.vue`; backend `update.rs`):
   loaded by `App.vue` via dynamic import in every install; it installs
   only when `system_info.updater` is true (see Releases), elsewhere
   (`selfUpdate` false) it checks the same way and a found update gets
   "Open Webpage" (the project's GitHub page) instead of Install;
   in a dev build it is the simulated one
-  (`createUpdater(channel, true)`: a toggle in the dialog fakes an
+  (`createUpdater(true)`: a toggle in the dialog fakes an
   available update and a download, a second one the link-only path, so
   the GUI parts can be looked at; the
   simulation code sits behind `import.meta.env.DEV` and is not in a
-  release). `createUpdater(channel)` returns reactive state (`idle` /
+  release). `createUpdater()` returns reactive state (`idle` /
   `checking` / `current` / `available` / `downloading` / `installing` /
-  `error`), `check()` (`check_update` with the Settings channel),
+  `error`), `check(switched)` (`check_update`; the backend reads the
+  channel from the config),
   `install()` (`install_update`, progress via `update-progress` events,
   the backend restarts the app), the footer `mark` and the dialog
   `buttons()` (Check Update until one is found, then Install). The startup
   check runs last in `onMounted` unless Settings switched it off
   (`Config::update_check`); a found update opens the dialog and puts the
   mark in the footer — **nothing is downloaded or installed without the
-  user's click**. A failed startup check only logs. The dialog shows the
-  channel as a `ConfirmDialog` `badge` next to the title unless it is
-  stable.
+  user's click**. A failed startup check only logs.
 - Shared modules: `imagemap.ts` (image-map types/helpers incl. token <->
   input key, `arcArrowPath`), `keyboard.ts` (webview keyboard capture,
   `KeyboardEvent.code` -> SC key name, feeds the same handler as
@@ -445,7 +448,11 @@ presentational components:
   `global.ini` override; Windows default paths), the active one
   (`Config::base_path()` / `global_ini_override()`), the image-map choice
   per device, the auto-backup, debug-logging and startup update-check
-  switches, the update channel (`UpdateChannel`: `stable` / `prerelease`). An
+  switches, the update channel (`update_channel`, JSON key
+  `update_channel_id`: `stable`, a channel id, or empty = the running
+  build's own channel — its own key because 0.16 and older parse
+  `update_channel` as a `stable` / `prerelease` enum and a failed parse
+  there drops the whole config; this app ignores that old key). An
   older file's
   `ignored_devices` (the Exclude feature of 0.10 – 0.12) is ignored.
   `load` fills missing environments with defaults; no migration of older
@@ -597,20 +604,34 @@ All of it lives in the Devices mode's Device Info view instead.
   `check_update` reads the channel's `latest.json` by hand
   (`update.rs::check_feed`, `semver` against the running version) and the
   dialog links the project page. No feature flags, no runtime switch.
+- **Branches and versions**: `main` is the live line — only validated
+  work lands there, live versions `x.y.z` are tagged there. A channel lives
+  on `channel/<id>` cut from main, its versions are `x.y.z-<id>.<n>` (semver
+  pre-release; id `[a-z][a-z0-9-]{0,31}`, never `stable`). Live fixes the
+  tester needs are merged from main into the branch; after a validated
+  user test the branch is merged into main and the live version is cut
+  and **built again** — nothing is promoted. Semver does the rest:
+  `0.18.0-x.3` < `0.18.0`, so the final replaces the channel version, and a live
+  `0.17.4` < `0.18.0-x.1` never pulls a tester back. A channel version whose base is
+  not above the latest live version is never offered: after a live release
+  an active branch merges main and moves to the next base.
 - **Channels** (`update.rs`, the plugin's JS commands are not used: only
-  the Rust side can pick the endpoint per check): **stable** reads GitHub's
-  `releases/latest/download/latest.json` (never a pre-release);
-  **prerelease** reads `releases/download/prerelease-version/latest.json`,
-  the rolling `prerelease-version` release whose only asset CI replaces
-  with the `latest.json` of every published release, pre-release or stable,
-  so prerelease users get the pre-releases and the finals. **A pre-release
-  is the finished binary under its final version number**: `bump-version.sh 0.14.0`, tag, draft, then publish it ticked as
-  pre-release; if it holds, untick the box (GitHub's `released` event) and
-  it is the stable 0.14.0 — same files, same signatures, no rebuild. If it
-  does not, the next candidate is 0.14.1. No version suffixes anywhere:
-  the version is compiled into the binary and compared with the feed, a
-  promoted `-beta` build would offer itself forever. The GUI says
-  "Pre-Release" (Settings channel, dialog badge).
+  the Rust side can pick the endpoint per check): **stable** is built in
+  and reads `releases/latest/download/latest.json` (never a pre-release).
+  The other channels are `channels.json` on main (`{"channels": [{"id",
+  "tag"}]}`, no display names — the id is shown), read from raw.githubusercontent.com
+  at every check and dialog open (`parse_channels` drops an entry whose
+  tag is not `v<x.y.z>-<id>.<n>`); a channel reads the `latest.json` of
+  its tag's release. CI moves the tag when a channel version is published, removing a
+  channel after its merge is by hand — its testers fall back to stable and
+  get the final. No `channels.json` (HTTP 404) = stable only. The
+  channel in effect (`resolve`): the chosen one while listed, else the
+  running build's own (`channel_of` its version), else stable. Only a
+  newer version is offered, except in the check right after a channel
+  pick (`switched`, the plugin's `version_comparator`): then any other,
+  so a switch back to stable can go down. **Unverified: whether the NSIS
+  and rpm bundlers take a version with a pre-release suffix** — the first
+  channel tag's CI run is the test.
 - **Updater config** (`tauri.conf.json` `plugins.updater`): the minisign
   `pubkey` and the stable endpoint (the plugin's default; `update.rs` sets
   the channel's feed per check).
@@ -630,8 +651,13 @@ All of it lives in the Devices mode's Device Info view instead.
   Windows and Linux updates are keyed `windows-x86_64` / `linux-x86_64`.
 - **The version lives in `src-tauri/Cargo.toml` only** (`tauri.conf.json`
   has none, Tauri takes the crate's; `package.json` and `Cargo.lock` just
-  follow). `scripts/bump-version.sh <x.y.z>` sets all three, commits
-  "Bump version to x.y.z", tags `vx.y.z` and asks before pushing.
+  follow). `tools/releasectl.sh` (a Textual TUI, `tools/releasectl/`)
+  sets all three, commits "Bump version to …", tags `v…` and asks before
+  pushing — a live version only on main, a channel version only on its branch — and
+  manages the rest of the cycle: new channel branch, bump channel / bump
+  live, the CI run of a tag with its steps in a Build tab, a draft's release notes in
+  `$EDITOR`, publish, sync main into a branch, finalize (merge + bump
+  live), remove a channel. Keys and runs in `tools/releasectl/README.md`.
 - **CI** (`.github/workflows/build.yml`): `test` (typecheck + build, cargo
   test, clippy `-D warnings`, on a tag also tag == Cargo.toml version),
   then `build` on ubuntu-24.04 (AppImage, deb, rpm; `NO_STRIP`; 22.04 ships SDL
@@ -640,20 +666,25 @@ All of it lives in the Devices mode's Device Info view instead.
   bundles as workflow artifacts (14 days). A manual run is a **test
   build**: artifacts only, no release, nothing the updater can see. A
   `v*` tag makes a **draft** release with every bundle, the `.sig` files
-  and `latest.json` — nothing is live until the draft is published by
-  hand: ticked as pre-release it feeds the prerelease channel, as a full release
-  everyone. Secrets: `TAURI_SIGNING_PRIVATE_KEY`,
+  and `latest.json` (a channel tag's draft is marked pre-release) — nothing
+  is live until the draft is published by hand: a channel version as a pre-release
+  (its channel), a live one as a full release (everyone). Secrets: `TAURI_SIGNING_PRIVATE_KEY`,
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. A release created by a workflow
-  token never triggers another workflow (GitHub's loop guard), so the feed
-  and README jobs only ever run on a publish by hand.
+  token never triggers another workflow (GitHub's loop guard), so the
+  channel, feed and README jobs only ever run on a publish by hand.
 - **After a publish** (`.github/workflows/release.yml`, events
-  `prereleased` + `released`, tags `v*` only): `prerelease-feed` copies the
-  release's `latest.json` onto the `prerelease-version` release, which
+  `prereleased` + `released`, tags `v*` only): `channel` (pre-releases with
+  a channel tag) points the channel in `channels.json` at the tag — created on
+  its first version, never moved back to an older tag — and
+  commits to main as github-actions[bot]; `prerelease-feed`, the legacy
+  feed only 0.16 and older read (their "Pre-Release" setting; drop it once
+  none is left), copies every published release's `latest.json` onto the
+  `prerelease-version` release, which
   **exists once, made by hand** (`gh release create prerelease-version
   --prerelease --title "Prerelease feed" --notes "…" latest.json`; the
   Actions token uploads fine but was refused creating it, HTTP 403,
   2026-09-15) and the job fails with a clear message if it is missing;
-  `readme` (full releases only, promotions included) runs
+  `readme` (full releases only) runs
   `scripts/readme-updater.sh <version>`, which fills the README's tags —
   `<span id="release_v">…</span>` (the version, `v0.13.0`) and
   `<div id="release_dls">` … `</div>` (the download table, blank lines
@@ -680,7 +711,7 @@ cargo run --example pad_events                  # pad mapping + controller-level
 cargo run --example parse_scdata -- <defaultProfile.xml> <global.ini>  # parser check
 cargo run --release --example p4k_extract -- <Data.p4k> <out dir>      # P4K reader check
 scripts/latest-json.sh <version> <assets dir> [notes]   # updater feed for a release
-scripts/bump-version.sh <x.y.z>                 # version everywhere, commit, tag, offer push
+tools/releasectl.sh                             # releases + channels (TUI): versions, tags, channels.json
 scripts/readme-updater.sh <x.y.z>             # README release tokens (CI runs it)
 ```
 
@@ -735,14 +766,7 @@ on Windows; delete it to force a re-extract.
   Windows backend even prepends). No usable `Game.log` = no order: the
   joysticks show "no joystick order" and resolve nothing (no live fallback).
   The Monitor, the deck and the Bindings List's column names follow the
-  assigned order. **Identical devices** (one Product GUID on several slots,
-  e.g. vJoy's `HIDCLASS&ColNN` collections) take that GUID's slots in
-  ascending order, sorted by their device path (`order::slots_by_device`)
-  — an assumption from one Windows dump where that was the DirectInput
-  order, unverified in-game; on Linux the path is the evdev node, not
-  Wine's sysfs order. Every consumer therefore finds a joystick's slot by
-  its SDL instance id (`SlotStatus::sdl_instance_id`, `resolve_input`),
-  never by GUID.
+  assigned order.
 - **`pp_resortdevices` logs 0-based slots**: `pp_resortdevices joystick 2 3`
   writes `N actions moved from js1 to js2` into `Game.log` (the same quirk
   as `Connected joystick0` = `js1`). The arguments are 1-based `jsN`. A

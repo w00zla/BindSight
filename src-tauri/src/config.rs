@@ -75,9 +75,12 @@ pub struct Config {
     /// switched it off; a manual check stays possible either way.
     #[serde(default = "default_update_check")]
     pub update_check: bool,
-    /// Which release feed the updater reads (see `update.rs`).
-    #[serde(default)]
-    pub update_channel: UpdateChannel,
+    /// The updater's channel (see `update.rs`): `stable`, a channel's
+    /// id from `channels.json`, or empty = the running build's own channel.
+    /// Its own key: 0.16 and older parse `update_channel` as a fixed enum
+    /// and would drop the whole config over an id they do not know.
+    #[serde(default, rename = "update_channel_id")]
+    pub update_channel: String,
     /// The input-preview overlay's size in px (its longer side).
     #[serde(default = "default_overlay_size")]
     pub overlay_size: u32,
@@ -103,16 +106,6 @@ fn default_overlay_size() -> u32 {
     340
 }
 
-/// The updater's channel: stable = GitHub's latest full release,
-/// prerelease = the newest published release including pre-releases.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum UpdateChannel {
-    #[default]
-    Stable,
-    Prerelease,
-}
-
 fn default_auto_backup() -> bool {
     true
 }
@@ -130,7 +123,7 @@ impl Default for Config {
             auto_backup: default_auto_backup(),
             debug_logging: false,
             update_check: default_update_check(),
-            update_channel: UpdateChannel::Stable,
+            update_channel: String::new(),
             overlay_size: default_overlay_size(),
             overlay_position: OverlayPosition::default(),
         }
@@ -265,10 +258,15 @@ mod tests {
         assert!(serde_json::from_str::<Config>(r#"{"debug_logging":true}"#).unwrap().debug_logging);
         assert!(c.update_check);
         assert!(!serde_json::from_str::<Config>(r#"{"update_check":false}"#).unwrap().update_check);
-        assert_eq!(c.update_channel, UpdateChannel::Stable);
-        assert_eq!(serde_json::from_str::<Config>(r#"{"update_channel":"prerelease"}"#).unwrap().update_channel, UpdateChannel::Prerelease);
-        assert!(serde_json::from_str::<Config>(r#"{"update_channel":"nightly"}"#).is_err());
-        assert_eq!(serde_json::to_value(UpdateChannel::Prerelease).unwrap(), "prerelease");
+        // The channel follows the build unless chosen; the old enum key of
+        // 0.16 and older is ignored, and never written.
+        assert_eq!(c.update_channel, "");
+        assert_eq!(serde_json::from_str::<Config>(r#"{"update_channel":"prerelease"}"#).unwrap().update_channel, "");
+        let chosen = serde_json::from_str::<Config>(r#"{"update_channel_id":"joysticks"}"#).unwrap();
+        assert_eq!(chosen.update_channel, "joysticks");
+        let saved = serde_json::to_value(&chosen).unwrap();
+        assert_eq!(saved["update_channel_id"], "joysticks");
+        assert!(saved.get("update_channel").is_none());
         // Overlay defaults, and the position serializes kebab-case.
         assert_eq!(c.overlay_size, 340);
         assert_eq!(c.overlay_position, OverlayPosition::MouseOffset);
