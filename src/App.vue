@@ -1199,9 +1199,11 @@ async function refresh() {
 }
 
 // What tells two device lists apart: the same devices on the same SDL
-// indices with the same slots.
+// indices with the same slots and instance ids — a stick unplugged and back
+// within one enumeration keeps its index but gets a new instance id, and
+// the slots are matched by that id.
 function deviceListKey(list: DeviceInfo[]): string {
-  return JSON.stringify(list.map((d) => [d.index, d.sdl_guid, d.kind, d.gamepad_slot ?? null]));
+  return JSON.stringify(list.map((d) => [d.index, d.sdl_guid, d.kind, d.gamepad_slot ?? null, d.sdl_instance_id]));
 }
 
 // Hot-plug (and startup): re-list the devices and redo the clash report on
