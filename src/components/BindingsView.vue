@@ -1217,6 +1217,10 @@ function axisDue(key: string): boolean {
   return true;
 }
 
+// Errors of resolve_input already logged: one warning per distinct error,
+// not one per input event.
+const resolveErrors = new Set<string>();
+
 // The SC token of an event. Joystick inputs take their jsN from the file
 // (the backend resolves them), keyboard and gamepad tokens come with the
 // held modifiers folded in.
@@ -1230,7 +1234,12 @@ async function tokenOf(p: JoyInput): Promise<string | null> {
       direction: p.kind === "hat" ? p.direction : null,
     });
     return res.token;
-  } catch {
+  } catch (e) {
+    const msg = String(e);
+    if (!resolveErrors.has(msg)) {
+      resolveErrors.add(msg);
+      console.warn("resolving input failed", msg);
+    }
     return null;
   }
 }
@@ -1747,7 +1756,7 @@ async function compareWith(key: string) {
         <template v-else>
           <div
             v-for="fr in flatRows"
-            :key="`${fr.row.actionmap} ${fr.row.action}`"
+            :key="`${fr.row.actionmap}\u0000${fr.row.action}`"
             class="row list-row"
             :class="{ live: liveOn && isLive(fr.row) }"
             @dblclick="openRebind(fr.row, fr.group)"
