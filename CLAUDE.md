@@ -656,7 +656,7 @@ All of it lives in the Devices mode's Device Info view instead.
   pushing — a live version only on main, a channel version only on its branch — and
   manages the rest of the cycle: new channel branch, bump channel / bump
   live, the CI run of a tag with its steps in a Build tab, a draft's release notes in
-  `$EDITOR`, publish, sync main into a branch, finalize (merge + bump
+  `nano`, publish, sync main into a branch, finalize (merge + bump
   live), remove a channel. Keys and runs in `tools/releasectl/README.md`.
 - **CI** (`.github/workflows/build.yml`): `test` (typecheck + build, cargo
   test, clippy `-D warnings`, on a tag also tag == Cargo.toml version),

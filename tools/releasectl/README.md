@@ -12,7 +12,7 @@ tools/releasectl.sh            # creates tools/releasectl/.venv on first run
 tools/releasectl.sh --dry-run  # prints every command instead of running it
 ```
 
-Needs Python 3, `git` and a logged-in `gh`. `d` toggles dry-run at any time.
+Needs Python 3, `git`, `nano` and a logged-in `gh`. `d` toggles dry-run at any time.
 
 ## Screen
 
@@ -22,9 +22,10 @@ the bottom:
 - **Live**: the checked-out branch, the latest live release, main vs
   origin — button Bump live.
 - **Channels**: one row per channel — branch (local / origin, ahead /
-  behind main), the tag `channels.json` lists, the newest channel version,
-  their release states, warnings — buttons New, Bump channel, Sync,
-  Finalize, Remove for the selected row.
+  behind main), *Testers get* (the tag `channels.json` lists, with its
+  release state), *Newest* (the channel's newest tag, with its state; a
+  draft there waits for Publish), warnings — buttons New, Bump channel,
+  Sync, Finalize, Remove for the selected row.
 - **Drafts**: the unpublished releases, live and channel — buttons Notes
   and Publish for the selected draft.
 - **Log** tab: every command run and its output.
@@ -47,7 +48,7 @@ switches branches on a dirty tree, and returns to the branch it started on.
 | `n` | New | Creates `channel/<id>` from main, offers the push. |
 | `b` | Bump channel | Next version of the selected channel (`x.y.z-<id>.<n>`) on its branch: pull, version in Cargo.toml / Cargo.lock / package.json, commit, tag, push, optional build watch. |
 | `l` | Bump live | The same on main for a live version (`x.y.z`). |
-| `e` | Notes | Opens the selected draft's release notes in `$VISUAL` / `$EDITOR`, then saves them to GitHub. |
+| `e` | Notes | Opens the selected draft's release notes in `nano`, then saves them to GitHub. |
 | `p` | Publish | Publishes the selected draft: a channel version as pre-release (CI then moves the channel in `channels.json`), a live version as the latest full release. |
 | `s` | Sync | Merges main into the selected channel branch (live fixes, or a new base after a live release). A conflict aborts the merge and lists the files. |
 | `f` | Finalize | Merges the selected channel into main, then offers Bump live. |

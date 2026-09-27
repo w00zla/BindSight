@@ -284,6 +284,39 @@ class AppTests(unittest.TestCase):
         self.run_app(body)
         self.assertEqual(git(self.repo.work, "show-ref"), before)
 
+    def test_outcome_lines(self):
+        async def body(app, pilot):
+            # Done: a fetch from the local origin.
+            await pilot.press("g")
+            await answer(app, pilot, True, expect="Fetch origin")
+            await idle(app, pilot)
+            # Cancelled: Bump live, Esc on the version.
+            await pilot.press("l")
+            await answer(app, pilot, False, AskScreen)
+            await idle(app, pilot)
+            # Failed: Notes without GitHub.
+            await pilot.press("e")
+            await idle(app, pilot)
+            log = log_text(app)
+            for line in ["▶ Fetch", "✓ Fetch: done", "▶ Bump live", "– Bump live: cancelled",
+                         "▶ Notes", "✗ Notes: failed – GitHub not reachable"]:
+                self.assertIn(line, log)
+
+        self.run_app(body)
+
+    def test_partly_done_names_the_skipped_step(self):
+        async def body(app, pilot):
+            await pilot.press("l")
+            await answer(app, pilot, True, AskScreen)
+            await answer(app, pilot, True, expect="Switch to main")
+            await answer(app, pilot, True, expect="Bump to 0.17.0")
+            await answer(app, pilot, False, expect="Push main")
+            await idle(app, pilot)
+            self.assertIn("✓ Bump live: done, skipped: Push main and v0.17.0?", log_text(app))
+
+        git(self.repo.work, "checkout", "-q", "channel/x")
+        self.run_app(body)
+
     def test_notes_without_github_stops(self):
         async def body(app, pilot):
             await pilot.press("e")

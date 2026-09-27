@@ -149,10 +149,20 @@ STATE_STYLE = {core.DRAFT: NORD["yellow"], core.PRERELEASE: NORD["cyan"],
 def state_cell(state: str) -> Text:
     return Text(state or "-", style=STATE_STYLE.get(state, NORD["dim"]))
 
-COLUMNS = ["Channel", "Branch", "vs main", "Listed tag", "State",
-           "Newest version", "State", "Warnings"]
+
+def tag_cell(tag: str, state: str) -> Text:
+    """A tag with its release state: `v0.18.0-x.2 · draft`."""
+    if not state:
+        return Text(tag)
+    return Text.assemble(tag, (" · ", NORD["dim"]), state_cell(state))
+
+COLUMNS = ["Channel", "Branch", "vs main", "Testers get", "Newest", "Warnings"]
 DRAFT_COLUMNS = ["Draft", "For"]
 BUILD_COLUMNS = ["Job", "State", "Time"]
+
+# Action names for the log's start and outcome lines.
+ACTION_NAMES = {key: label for key, label, _ in LIVE_BUTTONS + CHANNEL_BUTTONS + DRAFT_BUTTONS}
+ACTION_NAMES |= {"fetch": "Fetch", "watch": "Watch build"}
 
 # A build job's state as an icon and a colour.
 JOB_LOOK = {"queued": ("○", NORD["dim"]), "running": ("◐", NORD["yellow"]),
@@ -181,7 +191,7 @@ class ReleaseCtl(App):
     #live-panel { margin: 1 1 1 1; }
     #channels-panel { height: 1fr; }
     /* Log and Build share the bottom as tabs. */
-    #bottom { height: 30; margin: 0 1 1 1; }
+    #bottom { height: 40; margin: 0 1 1 1; }
     #bottom ContentSwitcher { border: round $primary 35%; background: $background;
                               height: 1fr; }
     #bottom Tab { color: $text-muted; }
@@ -249,6 +259,7 @@ class ReleaseCtl(App):
         self.dry_run = dry_run
         self.snap = repo.Snapshot()
         self.busy = False
+        self._ran, self._skipped, self._step_failed = 0, [], False
 
     def compose(self) -> ComposeResult:
         yield Header(icon="⎇")
@@ -337,9 +348,10 @@ class ReleaseCtl(App):
             counts = (f"+{row.ahead}/-{row.behind}" if row.ahead is not None else "")
             table.add_row(
                 Text(row.id, style="bold"), branch or "-", counts,
-                row.listed_tag or ("-" if not row.listed else "(none)"),
-                state_cell(row.listed_state), row.newest.tag if row.newest else "-",
-                state_cell(row.newest_state),
+                tag_cell(row.listed_tag or ("-" if not row.listed else "(none)"),
+                         row.listed_state if row.listed_tag else ""),
+                tag_cell(row.newest.tag if row.newest else "-",
+                         row.newest_state if row.newest else ""),
                 Text("; ".join(row.warnings), style=NORD["red"]) if row.warnings else "",
                 key=row.id)
         if snap.rows:
@@ -390,12 +402,26 @@ class ReleaseCtl(App):
 
     @work(exclusive=True, group="action")
     async def _action_worker(self, name: str) -> None:
+        title = ACTION_NAMES.get(name, name) + (" (dry-run)" if self.dry_run else "")
+        # What the action did, for its outcome line: steps run, steps
+        # declined, a step that failed.
+        self._ran, self._skipped, self._step_failed = 0, [], False
+        self.log_line(f"▶ {title}", "bold")
         try:
             await actions.ACTIONS[name](self)
         except Stop as e:
-            self.log_line(str(e), "red")
+            self.log_line(f"✗ {title}: failed – {e}", "red")
         except Exception as e:  # keep the app alive, show what broke
-            self.log_line(f"{type(e).__name__}: {e}", "red")
+            self.log_line(f"✗ {title}: failed – {type(e).__name__}: {e}", "red")
+        else:
+            if self._step_failed:
+                self.log_line(f"✗ {title}: failed – a step did not succeed, see above", "red")
+            elif self._skipped and not self._ran:
+                self.log_line(f"– {title}: cancelled", "dim")
+            elif self._skipped:
+                self.log_line(f"✓ {title}: done, skipped: {'; '.join(self._skipped)}", "green")
+            else:
+                self.log_line(f"✓ {title}: done", "green")
         finally:
             self.busy = False
             self.reload()
@@ -417,16 +443,31 @@ class ReleaseCtl(App):
             ConfirmScreen(title, cmds, note, sensitive, self.dry_run))
         if not ok:
             self.log_line(f"Skipped: {title}", "dim")
+            self._skipped.append(title)
         return ok
 
     async def ask(self, title: str, prompt: str, value: str = "",
                   validate=None) -> str | None:
-        return await self.push_screen_wait(AskScreen(title, prompt, value, validate))
+        answer = await self.push_screen_wait(AskScreen(title, prompt, value, validate))
+        if answer is None:
+            self._skipped.append(title)
+        return answer
 
     async def pick(self, title: str, options: list[str]) -> str | None:
-        return await self.push_screen_wait(PickScreen(title, options))
+        answer = await self.push_screen_wait(PickScreen(title, options))
+        if answer is None:
+            self._skipped.append(title)
+        return answer
 
     async def execute(self, cmd: Cmd) -> tuple[bool, str]:
+        ok, out = await self._execute(cmd)
+        if ok:
+            self._ran += 1
+        else:
+            self._step_failed = True
+        return ok, out
+
+    async def _execute(self, cmd: Cmd) -> tuple[bool, str]:
         if self.dry_run:
             self.log_line(f"[dry-run] $ {show(cmd)}", "yellow")
             return True, ""

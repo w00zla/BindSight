@@ -430,16 +430,8 @@ def _selected_draft(ctx: Ctx) -> str:
     return tag
 
 
-def _editor() -> list[str]:
-    """$VISUAL / $EDITOR, else the platform's plain editor."""
-    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
-    if editor:
-        return shlex.split(editor, posix=os.name != "nt")
-    return ["notepad"] if os.name == "nt" else ["nano"]
-
-
 async def edit_notes(ctx: Ctx) -> None:
-    """Write a draft's release notes in the editor, then save them to GitHub."""
+    """Write a draft's release notes in nano, then save them to GitHub."""
     tag = _selected_draft(ctx)
     body = repo.query(ctx.root, "gh", "release", "view", tag, "--json", "body",
                       "--jq", ".body")
@@ -450,7 +442,7 @@ async def edit_notes(ctx: Ctx) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(body.rstrip("\n") + "\n" if body.strip() else "")
-        editor = [*_editor(), str(path)]
+        editor = ["nano", str(path)]
         save = ["gh", "release", "edit", tag, "--notes-file", str(path)]
         if ctx.dry_run:
             for cmd in (editor, save):
