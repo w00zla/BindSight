@@ -1,6 +1,6 @@
 [package]
 name = "bindsight"
-version = "0.17.0"
+version = "0.17.1-beta-ed.1"
 description = "Star Citizen Binding Visualizer & Mapper"
 authors = ["w00zla"]
 license = "MIT"
