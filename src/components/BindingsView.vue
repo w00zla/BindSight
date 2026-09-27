@@ -1224,7 +1224,7 @@ async function tokenOf(p: JoyInput): Promise<string | null> {
   if (p.kind === "key" || p.kind === "padbutton" || p.kind === "padaxis") return props.inputToken(p);
   try {
     const res = await invoke<{ token: string | null; actions: BoundAction[] }>("resolve_input", {
-      guid: p.guid,
+      instanceId: p.instance_id,
       kind: p.kind,
       index: p.index,
       direction: p.kind === "hat" ? p.direction : null,
