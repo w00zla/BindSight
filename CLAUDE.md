@@ -673,8 +673,11 @@ All of it lives in the Devices mode's Device Info view instead.
   token never triggers another workflow (GitHub's loop guard), so the
   channel, feed and README jobs only ever run on a publish by hand.
 - **After a publish** (`.github/workflows/release.yml`, events
-  `prereleased` + `released`, tags `v*` only): `channel` (pre-releases with
-  a channel tag) points the channel in `channels.json` at the tag — created on
+  `published` + `released`, tags `v*` only — CI drafts a channel version
+  already marked pre-release, and publishing such a draft fires only
+  `published`, never `prereleased`; a manual run with a `tag` input redoes
+  channel and feed for a release already published): `channel`
+  (pre-releases with a channel tag) points the channel in `channels.json` at the tag — created on
   its first version, never moved back to an older tag — and
   commits to main as github-actions[bot]; `prerelease-feed`, the legacy
   feed only 0.16 and older read (their "Pre-Release" setting; drop it once

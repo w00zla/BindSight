@@ -13,26 +13,38 @@
 #   --prerelease --title "Prerelease feed" --notes "…" latest.json
 # - the README (full releases only): its release tags point at it.
 # Only `v*` tags: the feed release itself is skipped.
+#
+# Triggers: `published` for the channel and the feed — CI drafts a channel
+# version already marked pre-release, and publishing such a draft fires
+# `published` only, never `prereleased` — and `released` for the README (a
+# full release fires both, so each job runs once). A manual run with a tag
+# redoes the channel and the feed for a release already published.
 name: Release published
 
 on:
   release:
-    types: [prereleased, released]
+    types: [published, released]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Published release tag (vx.y.z or vx.y.z-<channel>.<n>)"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 env:
-  TAG: ${{ github.event.release.tag_name }}
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
   GH_TOKEN: ${{ github.token }}
 
 jobs:
   prerelease-feed:
     name: Prerelease feed
-    if: startsWith(github.event.release.tag_name, 'v')
+    if: (github.event_name == 'workflow_dispatch' || github.event.action == 'published') && startsWith(github.event.release.tag_name || inputs.tag, 'v')
     runs-on: ubuntu-24.04
     steps:
-      - name: Point prerelease-version at ${{ github.event.release.tag_name }}
+      - name: Point prerelease-version at ${{ github.event.release.tag_name || inputs.tag }}
         run: |
           if ! gh release view prerelease-version --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "The prerelease-version feed release does not exist; create it once by hand (see the header of this workflow)." >&2
@@ -44,13 +56,13 @@ jobs:
 
   channel:
     name: Channel
-    if: github.event.action == 'prereleased' && startsWith(github.event.release.tag_name, 'v')
+    if: (github.event_name == 'workflow_dispatch' || (github.event.action == 'published' && github.event.release.prerelease)) && startsWith(github.event.release.tag_name || inputs.tag, 'v')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
           ref: main
-      - name: Point the channel at ${{ github.event.release.tag_name }}
+      - name: Point the channel at ${{ github.event.release.tag_name || inputs.tag }}
         run: |
           version=${TAG#v}
           if ! printf '%s\n' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-[a-z][a-z0-9-]{0,31}\.(0|[1-9][0-9]*)$'; then
