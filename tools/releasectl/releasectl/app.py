@@ -15,7 +15,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (Button, DataTable, Footer, Header, Input, Label,
-                             OptionList, RichLog, Static)
+                             OptionList, RichLog, Static, TabbedContent, TabPane)
 
 from . import actions, core, repo
 from .actions import Cmd, FileWrite, Stop, show
@@ -180,10 +180,15 @@ class ReleaseCtl(App):
     .panel:focus-within { border: round $primary; }
     #live-panel { margin: 1 1 1 1; }
     #channels-panel { height: 1fr; }
-    #log { height: 20; }
-    #build-panel { display: none; }
-    #build-head { height: auto; }
-    #build { max-height: 8; }
+    /* Log and Build share the bottom as tabs. */
+    #bottom { height: 30; margin: 0 1 1 1; }
+    #bottom ContentSwitcher { border: round $primary 35%; background: $background;
+                              height: 1fr; }
+    #bottom Tab { color: $text-muted; }
+    #bottom Tab.-active { color: $accent; text-style: bold; }
+    #log { height: 1fr; background: $background; }
+    #build-head { height: auto; padding: 0 1; }
+    #build { height: 1fr; }
     #live { height: auto; }
     DataTable { background: $background; height: auto; }
     #channels { height: 1fr; }
@@ -259,13 +264,13 @@ class ReleaseCtl(App):
             panel.border_title = "Drafts"
             yield DataTable(id="drafts", cursor_type="row", zebra_stripes=True)
             yield button_bar(DRAFT_BUTTONS)
-        with Vertical(id="build-panel", classes="panel") as panel:
-            panel.border_title = "Build"
-            yield Static("", id="build-head")
-            yield DataTable(id="build", cursor_type="none", zebra_stripes=True)
-        log = RichLog(id="log", classes="panel", markup=True, wrap=True)
-        log.border_title = "Log"
-        yield log
+        with TabbedContent(id="bottom", initial="log-tab"):
+            with TabPane("Log", id="log-tab"):
+                yield RichLog(id="log", markup=True, wrap=True)
+            with TabPane("Build", id="build-tab"):
+                yield Static(f"[{NORD['dim']}]No build watched. w follows the CI run of a tag.[/]",
+                             id="build-head")
+                yield DataTable(id="build", cursor_type="none", zebra_stripes=True)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -278,7 +283,7 @@ class ReleaseCtl(App):
         self.log_panel = self.query_one(RichLog)
         self.table.add_columns(*COLUMNS)
         self.drafts_table.add_columns(*DRAFT_COLUMNS)
-        self.build_panel = self.query_one("#build-panel", Vertical)
+        self.tabs = self.query_one("#bottom", TabbedContent)
         self.build_head = self.query_one("#build-head", Static)
         self.build_table = self.query_one("#build", DataTable)
         self.build_table.add_columns(*BUILD_COLUMNS)
@@ -441,17 +446,22 @@ class ReleaseCtl(App):
             self.log_line(out, "" if proc.returncode == 0 else "red")
         return proc.returncode == 0, out
 
-    # --- the Build panel ---
+    # --- the Build tab ---
 
     def watch_build(self, tag: str) -> None:
-        """Follow the build run of a pushed tag in the Build panel; runs in
-        the background, the app stays usable."""
+        """Follow the build run of a pushed tag in the Build tab; runs in the
+        background, the app stays usable."""
         self._watch_build(tag)
+
+    def _build_marker(self, state: str | None) -> None:
+        """The Build tab's title carries the run's state, seen from the Log too."""
+        icon = JOB_LOOK.get(state, ("", ""))[0] if state else ""
+        self.tabs.get_tab("build-tab").label = f"Build {icon}".strip()
 
     @work(exclusive=True, group="build")
     async def _watch_build(self, tag: str) -> None:
-        self.build_panel.display = True
-        self.build_panel.border_title = f"Build {tag}"
+        self.tabs.active = "build-tab"
+        self._build_marker("queued")
         self.build_table.clear()
         self.build_head.update(f"[{NORD['dim']}]waiting for the run of {escape(tag)}…[/]")
         run_id = None
@@ -461,6 +471,7 @@ class ReleaseCtl(App):
                 break
             await asyncio.sleep(3)
         if not run_id:
+            self._build_marker(None)
             self.build_head.update(f"[{NORD['red']}]no build run found for {escape(tag)}[/]")
             self.log_line(f"No build run found for {tag}; check: gh run list", "red")
             return
@@ -469,10 +480,11 @@ class ReleaseCtl(App):
             data = await asyncio.to_thread(repo.run_view, self.root, run_id)
             if data is not None:
                 run = core.parse_run(data, datetime.now(timezone.utc))
-                self.render_build(run)
+                self.render_build(run, tag)
                 if run.done:
                     break
             await asyncio.sleep(5)
+        self.tabs.active = "log-tab"
         if run.state == "success":
             self.log_line(f"Build of {tag} succeeded; its draft is in Drafts.", "green")
             self.reload()
@@ -483,13 +495,21 @@ class ReleaseCtl(App):
             if tail:
                 self.log_line(tail, "dim")
 
-    def render_build(self, run: core.RunView) -> None:
+    def render_build(self, run: core.RunView, tag: str = "") -> None:
+        """Jobs, and the steps of those running or failed."""
         icon, colour = JOB_LOOK.get(run.state, ("?", NORD["dim"]))
-        self.build_head.update(f"[{colour}]{icon} {run.state}[/]  [{NORD['dim']}]{escape(run.url)}[/]")
+        self._build_marker(run.state)
+        self.build_head.update(f"[{colour}]{icon} {run.state}[/]  [b]{escape(tag)}[/]  "
+                               f"[{NORD['dim']}]{escape(run.url)}[/]")
         table = self.build_table
         table.clear()
         for job in run.jobs:
-            table.add_row(job.name, job_state(job.state), core.duration(job.seconds))
+            table.add_row(Text(job.name, style="bold"), job_state(job.state),
+                          core.duration(job.seconds))
+            if job.expanded:
+                for step in job.steps:
+                    table.add_row(Text("    " + step.name), job_state(step.state),
+                                  core.duration(step.seconds))
 
     async def suspended(self, title: str, func) -> None:
         with self.suspend():

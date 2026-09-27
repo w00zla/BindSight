@@ -16,7 +16,8 @@ Needs Python 3, `git` and a logged-in `gh`. `d` toggles dry-run at any time.
 
 ## Screen
 
-Four panels; each one's buttons act on what it shows:
+Three panels, each one's buttons acting on what it shows, and two tabs at
+the bottom:
 
 - **Live**: the checked-out branch, the latest live release, main vs
   origin — button Bump live.
@@ -26,11 +27,13 @@ Four panels; each one's buttons act on what it shows:
   Finalize, Remove for the selected row.
 - **Drafts**: the unpublished releases, live and channel — buttons Notes
   and Publish for the selected draft.
-- **Build**: shown once a build is watched — the CI run of a pushed tag,
-  one row per job with its state and time, updated every few seconds in
-  the background. A success reloads the drafts, a failure puts the failed
-  steps' log tail into the Log.
-- **Log**: every command run and its output.
+- **Log** tab: every command run and its output.
+- **Build** tab: the CI run of a pushed tag, one row per job with its
+  state and time, the steps of the jobs running or failed below them,
+  updated every few seconds in the background. Watching switches to it,
+  the end back to the Log; the tab title carries the run's state. A
+  success reloads the drafts, a failure puts the failed steps' log tail
+  into the Log.
 
 Every action shows the exact commands and waits for a yes. Pushes, GitHub
 release edits and commits on main ask separately and start on Cancel. The
@@ -49,7 +52,7 @@ switches branches on a dirty tree, and returns to the branch it started on.
 | `s` | Sync | Merges main into the selected channel branch (live fixes, or a new base after a live release). A conflict aborts the merge and lists the files. |
 | `f` | Finalize | Merges the selected channel into main, then offers Bump live. |
 | `x` | Remove | Removes the channel from `channels.json` on main; offers to delete its merged branch. |
-| `w` | Watch build | Follows the CI run of a pushed tag in the Build panel (offered after every push, too). |
+| `w` | Watch build | Follows the CI run of a pushed tag in the Build tab (offered after every push, too). |
 | `g` | Fetch | `git fetch` of branches and tags. |
 | `r` | Refresh | Re-reads git and GitHub. |
 | `q` | Quit | |

@@ -314,3 +314,28 @@ class BuildRuns(unittest.TestCase):
         # Anything unexpected parses without a crash.
         self.assertEqual(core.parse_run({}, now).jobs, [])
 
+    def test_steps_in_order_and_which_jobs_open(self):
+        from datetime import datetime, timezone
+        now = datetime(2026, 9, 27, 11, 1, 0, tzinfo=timezone.utc)
+        step = lambda n, name, status, conclusion, start, end: {
+            "number": n, "name": name, "status": status, "conclusion": conclusion,
+            "startedAt": start, "completedAt": end}
+        z = "0001-01-01T00:00:00Z"
+        run = core.parse_run({"status": "in_progress", "jobs": [
+            {"name": "Tests", "status": "completed", "conclusion": "success",
+             "startedAt": "2026-09-27T10:58:00Z", "completedAt": "2026-09-27T10:59:00Z",
+             "steps": [step(1, "Set up job", "completed", "success",
+                            "2026-09-27T10:58:00Z", "2026-09-27T10:58:02Z")]},
+            {"name": "Build (linux)", "status": "in_progress", "conclusion": "",
+             "startedAt": "2026-09-27T10:59:00Z", "completedAt": z,
+             "steps": [step(3, "Upload", "queued", "", z, z),
+                       step(2, "Build bundles", "in_progress", "", "2026-09-27T11:00:00Z", z),
+                       step(1, "Set up job", "completed", "success",
+                            "2026-09-27T10:59:00Z", "2026-09-27T10:59:03Z")]}]}, now)
+        tests, linux = run.jobs
+        self.assertFalse(tests.expanded)
+        self.assertTrue(linux.expanded)
+        self.assertEqual([(s.name, s.state, core.duration(s.seconds)) for s in linux.steps],
+                         [("Set up job", "success", "0:03"), ("Build bundles", "running", "1:00"),
+                          ("Upload", "queued", "")])
+

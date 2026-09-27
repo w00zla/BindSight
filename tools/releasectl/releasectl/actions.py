@@ -253,7 +253,7 @@ async def offer_watch(ctx: Ctx, version: Version) -> None:
     watch = [["gh", "run", "list", "--workflow", "build.yml", "--event", "push"],
              ["gh", "run", "view", "<run>", "--json", "status,conclusion,url,jobs"]]
     if not await ctx.confirm("Watch the CI build?", watch,
-                             note="Read-only; the Build panel follows the run."):
+                             note="Read-only; the Build tab follows the run."):
         return
     if ctx.dry_run:
         for cmd in watch:
@@ -263,7 +263,7 @@ async def offer_watch(ctx: Ctx, version: Version) -> None:
 
 
 async def watch(ctx: Ctx) -> None:
-    """Follow the build of a pushed tag in the Build panel (read-only)."""
+    """Follow the build of a pushed tag in the Build tab (read-only)."""
     tags = sorted(v for v in map(Version.parse, ctx.snap.tags) if v)
     if not tags:
         raise Stop("No version tags.")

@@ -371,10 +371,23 @@ _NO_TIME = "0001-01-01T00:00:00Z"
 
 
 @dataclass
-class JobRow:
+class StepRow:
     name: str
     state: str  # queued / running / success / failure / cancelled / skipped
     seconds: int | None  # run time so far or in total; None before the start
+
+
+@dataclass
+class JobRow:
+    name: str
+    state: str
+    seconds: int | None
+    steps: list[StepRow] = field(default_factory=list)
+
+    @property
+    def expanded(self) -> bool:
+        """Its steps are shown: while it runs, and when it failed."""
+        return self.state in ("running", "failure")
 
 
 @dataclass
@@ -404,17 +417,23 @@ def _parse_time(text: str | None):
         return None
 
 
+def _timed(item: dict, now) -> tuple[str, str, int | None]:
+    """(name, state, seconds) of a job or step; `now` times a running one."""
+    start = _parse_time(item.get("startedAt"))
+    end = _parse_time(item.get("completedAt")) or (now if start else None)
+    seconds = int((end - start).total_seconds()) if start and end else None
+    return (str(item.get("name", "?")), _state(item.get("status", ""), item.get("conclusion", "")),
+            max(seconds, 0) if seconds is not None else None)
+
+
 def parse_run(data: dict, now) -> RunView:
-    """`gh run view --json status,conclusion,url,jobs` as rows; `now` (an
-    aware datetime) times the jobs still running."""
+    """`gh run view --json status,conclusion,url,jobs` as rows, each job
+    with its steps; `now` (an aware datetime) times what still runs."""
     jobs = []
     for job in data.get("jobs") or []:
-        start = _parse_time(job.get("startedAt"))
-        end = _parse_time(job.get("completedAt")) or (now if start else None)
-        seconds = int((end - start).total_seconds()) if start and end else None
-        jobs.append(JobRow(str(job.get("name", "?")),
-                           _state(job.get("status", ""), job.get("conclusion", "")),
-                           max(seconds, 0) if seconds is not None else None))
+        steps = sorted((s for s in job.get("steps") or [] if isinstance(s, dict)),
+                       key=lambda s: s.get("number", 0))
+        jobs.append(JobRow(*_timed(job, now), steps=[StepRow(*_timed(s, now)) for s in steps]))
     return RunView(_state(data.get("status", ""), data.get("conclusion", "")),
                    str(data.get("url", "")), jobs)
 
