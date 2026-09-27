@@ -1,16 +1,54 @@
 <script setup lang="ts">
-// The App Update dialog (footer: version, logo or update mark): the
-// running version and the update state — one chip per row, the download
-// progress, the updater's buttons (an install without the updater — bare
-// executable, deb / rpm — links the project page instead of installing).
-import { computed } from "vue";
+// The App Update dialog (footer: version, logo or update mark): the update
+// channel picker in the head, the running version and the update state —
+// one row each, the
+// download progress, the updater's buttons (an install without the updater
+// — bare executable, deb / rpm — links the project page instead of
+// installing). The channels come from the repo's channels.json at every
+// open; a pick is saved and checked at once, and that check offers any
+// other version, so a switch back to stable can reach a lower one.
+import { computed, onMounted, ref } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import ConfirmDialog, { type ConfirmButton } from "./ConfirmDialog.vue";
+import Dropdown from "./Dropdown.vue";
 import type { Updater } from "../update";
-import type { UpdateChannel } from "../types";
+import type { ChannelList, UpdateChannel } from "../types";
 
-// `channel`: shown as a chip next to the title unless it is the stable one.
-const props = defineProps<{ version: string; updater: Updater | null; channel: UpdateChannel }>();
+const props = defineProps<{ version: string; updater: Updater | null }>();
 const emit = defineEmits<{ close: [] }>();
+
+// Empty until `update_channels` answers (or when it failed: offline).
+const channels = ref<UpdateChannel[]>([]);
+const channel = ref("");
+// A channel shows its id, as channels.json has it.
+const channelOptions = computed(() => channels.value.map((c) => ({ value: c.id, label: c.id === "stable" ? "Stable" : c.id })));
+
+onMounted(async () => {
+  try {
+    const list = await invoke<ChannelList>("update_channels");
+    channels.value = list.channels;
+    channel.value = list.current;
+  } catch (e) {
+    console.warn("update channels unavailable", e);
+  }
+});
+
+const busy = computed(() => {
+  const s = props.updater?.state;
+  return s === "checking" || s === "downloading" || s === "installing";
+});
+
+async function pickChannel(id: string) {
+  if (id === channel.value || busy.value) return;
+  try {
+    await invoke("set_update_channel", { channel: id });
+  } catch (e) {
+    console.error("update channel not saved", e);
+    return;
+  }
+  channel.value = id;
+  void props.updater?.check(true);
+}
 
 const buttons = computed<ConfirmButton[]>(() => [
   { label: "Close", kind: "outline", value: "close", side: "left" },
@@ -61,11 +99,19 @@ function choose(value: string) {
 <template>
   <ConfirmDialog
     title="App Update"
-    :badge="channel === 'stable' ? undefined : 'Pre-Release'"
     icon="download"
     :buttons="buttons"
     @choose="choose"
   >
+    <template v-if="updater" #head>
+      <Dropdown
+        :modelValue="channel"
+        :options="channelOptions"
+        placeholder="–"
+        variant="small"
+        @update:modelValue="pickChannel"
+      />
+    </template>
     <div class="rows">
       <div class="row">
         <span class="label">Current Version:</span>

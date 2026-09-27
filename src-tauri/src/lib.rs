@@ -580,18 +580,23 @@ fn set_update_check(enabled: bool, app: AppHandle, data: State<Mutex<AppData>>) 
     }
 }
 
-/// Persist the updater's channel (Settings Save).
+/// Persist the updater's channel (App Update dialog): `stable` or a
+/// channel's id.
 #[tauri::command]
-fn set_update_channel(channel: config::UpdateChannel, app: AppHandle, data: State<Mutex<AppData>>) {
+fn set_update_channel(channel: String, app: AppHandle, data: State<Mutex<AppData>>) -> Result<(), String> {
+    if channel != update::STABLE && !update::valid_channel_id(&channel) {
+        return Err(format!("not a channel: {channel:?}"));
+    }
     let mut data = data.lock().unwrap();
     if data.config.update_channel == channel {
-        return;
+        return Ok(());
     }
+    info!("update channel set: {channel}");
     data.config.update_channel = channel;
-    info!("update channel set: {channel:?}");
-    if let Err(e) = config::save(&app, &data.config) {
+    config::save(&app, &data.config).map_err(|e| {
         error!("failed to save config: {e}");
-    }
+        e
+    })
 }
 
 /// Persist the input-preview overlay's size in px (Settings Save).
@@ -1475,6 +1480,7 @@ pub fn run() {
             set_overlay_size,
             set_overlay_position,
             update::check_update,
+            update::update_channels,
             update::install_update,
             diff::compare_bindings
         ])

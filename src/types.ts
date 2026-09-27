@@ -93,9 +93,17 @@ export type JoyInput =
 export type LoggedInput = JoyInput & { id: number; at: number; token: string | null };
 
 // The backend's environment facts (app version, OS, toolkit versions).
-// The updater's channel: stable = the latest full release, prerelease =
-// the newest published release including pre-releases.
-export type UpdateChannel = "stable" | "prerelease";
+// An update channel the App Update dialog offers: `stable`, or a
+// channel from the repo's channels.json.
+export interface UpdateChannel {
+  id: string;
+}
+
+// `update_channels`: the channels to pick from and the one a check reads.
+export interface ChannelList {
+  channels: UpdateChannel[];
+  current: string;
+}
 
 // Where the input-preview overlay appears: pinned to a screen corner, or
 // offset from the mouse pointer.
@@ -142,8 +150,6 @@ export interface Config {
   debug_logging: boolean;
   // Check for an update at startup (never installs anything unasked).
   update_check: boolean;
-  // Which release feed the updater reads.
-  update_channel: UpdateChannel;
   // The input-preview overlay's size in px (its longer side).
   overlay_size: number;
   // Where the input-preview overlay appears.

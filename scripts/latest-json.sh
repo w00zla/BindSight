@@ -8,8 +8,8 @@
 # Usage: scripts/latest-json.sh <version> <assets dir> [notes file] > latest.json
 #
 # Upload latest.json to the GitHub release `v<version>` next to the assets;
-# the app reads it from releases/latest/download/latest.json (stable) or via
-# the prerelease-version release (prerelease channel).
+# the app reads it from releases/latest/download/latest.json (stable) or
+# from the release a channel in channels.json names.
 set -eu
 
 if [ $# -lt 2 ]; then

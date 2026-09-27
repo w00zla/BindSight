@@ -5,14 +5,13 @@ import { open } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import Dropdown, { type DropdownOption } from "./Dropdown.vue";
-import { ENVIRONMENTS, type Environment, type OverlayPosition, type UpdateChannel } from "../types";
+import { ENVIRONMENTS, type Environment, type OverlayPosition } from "../types";
 
 const props = defineProps<{
   environments: Record<string, Environment>;
   autoBackup: boolean;
   debugLogging: boolean;
   updateCheck: boolean;
-  updateChannel: UpdateChannel;
   overlaySize: number;
   overlayPosition: OverlayPosition;
 }>();
@@ -31,7 +30,6 @@ const emit = defineEmits<{
       autoBackup: boolean;
       debugLogging: boolean;
       updateCheck: boolean;
-      updateChannel: UpdateChannel;
       overlaySize: number;
       overlayPosition: OverlayPosition;
     },
@@ -68,11 +66,6 @@ function onNoBackupChoose(value: string) {
 }
 const debugLogging = ref(props.debugLogging);
 const updateCheck = ref(props.updateCheck);
-const updateChannel = ref<string>(props.updateChannel);
-const CHANNELS: DropdownOption[] = [
-  { value: "stable", label: "Stable" },
-  { value: "prerelease", label: "Pre-Release" },
-];
 const overlaySize = ref(props.overlaySize);
 const overlayPosition = ref<string>(props.overlayPosition);
 const OVERLAY_POSITIONS: DropdownOption[] = [
@@ -182,10 +175,6 @@ async function browseIni(slug: string) {
           <div class="panel-title">Application</div>
           <div class="row between">
             <label class="check"><input v-model="updateCheck" type="checkbox" /> Check for updates at startup</label>
-            <span class="channel">
-              Channel
-              <Dropdown v-model="updateChannel" :options="CHANNELS" variant="outline" up />
-            </span>
           </div>
           <div class="row between">
             <label class="check"><input v-model="debugLogging" type="checkbox" /> Enable debug logging</label>
@@ -196,7 +185,7 @@ async function browseIni(slug: string) {
 
       <div class="foot">
         <button type="button" class="btn outline" @click="emit('close')">Cancel</button>
-        <button type="button" class="btn primary" @click="emit('save', { environments: envs, autoBackup, debugLogging, updateCheck, updateChannel: updateChannel as UpdateChannel, overlaySize, overlayPosition: overlayPosition as OverlayPosition })">
+        <button type="button" class="btn primary" @click="emit('save', { environments: envs, autoBackup, debugLogging, updateCheck, overlaySize, overlayPosition: overlayPosition as OverlayPosition })">
           <Icon name="save" :size="14" />
           Save
         </button>
@@ -337,7 +326,7 @@ async function browseIni(slug: string) {
   color: var(--text-2);
 }
 
-/* The channel picker, parked at the row's right edge like the buttons. */
+/* The position picker, parked at the row's right edge like the buttons. */
 .channel {
   display: flex;
   align-items: center;

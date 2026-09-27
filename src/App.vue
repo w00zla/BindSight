@@ -48,7 +48,6 @@ import type {
   SlotStatus,
   SystemInfo,
   ToastType,
-  UpdateChannel,
 } from "./types";
 import {
   inputKey,
@@ -187,8 +186,6 @@ const debugLogging = ref(false);
 // Check for an update at startup (Settings); the dialog's manual check is
 // always available.
 const updateCheck = ref(true);
-// Which release feed the updater reads (Settings).
-const updateChannel = ref<UpdateChannel>("stable");
 // The input-preview overlay's size in px and where it appears (Settings).
 const overlaySize = ref(340);
 const overlayPosition = ref<OverlayPosition>("mouse-offset");
@@ -785,7 +782,6 @@ async function applySettings(s: {
   autoBackup: boolean;
   debugLogging: boolean;
   updateCheck: boolean;
-  updateChannel: UpdateChannel;
   overlaySize: number;
   overlayPosition: OverlayPosition;
 }) {
@@ -803,8 +799,6 @@ async function applySettings(s: {
     setDebugLogging(s.debugLogging);
     await invoke("set_update_check", { enabled: s.updateCheck });
     updateCheck.value = s.updateCheck;
-    await invoke("set_update_channel", { channel: s.updateChannel });
-    updateChannel.value = s.updateChannel;
     await invoke("set_overlay_size", { size: s.overlaySize });
     overlaySize.value = s.overlaySize;
     await invoke("set_overlay_position", { position: s.overlayPosition });
@@ -1303,7 +1297,7 @@ onMounted(async () => {
     try {
       const { createUpdater } = await import("./update");
       const self = systemInfo.value.updater;
-      updater.value = createUpdater(() => updateChannel.value, import.meta.env.DEV && !self, self || import.meta.env.DEV);
+      updater.value = createUpdater(import.meta.env.DEV && !self, self || import.meta.env.DEV);
     } catch (e) {
       console.error("updater unavailable", e);
     }
@@ -1391,7 +1385,6 @@ onMounted(async () => {
     debugLogging.value = cfg.debug_logging;
     setDebugLogging(cfg.debug_logging);
     updateCheck.value = cfg.update_check;
-    updateChannel.value = cfg.update_channel;
     overlaySize.value = cfg.overlay_size;
     overlayPosition.value = cfg.overlay_position;
     mapChoices.value = cfg.imagemap_choices ?? {};
@@ -1464,7 +1457,6 @@ onUnmounted(() => {
       :autoBackup="autoBackup"
       :debugLogging="debugLogging"
       :updateCheck="updateCheck"
-      :updateChannel="updateChannel"
       :overlaySize="overlaySize"
       :overlayPosition="overlayPosition"
       @close="showSettings = false"
@@ -1600,7 +1592,6 @@ onUnmounted(() => {
       v-if="showVersion"
       :version="systemInfo?.app_version ?? ''"
       :updater="updater"
-      :channel="updateChannel"
       @close="showVersion = false"
     />
     <Toasts :toasts="toasts" />

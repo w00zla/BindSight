@@ -3,7 +3,8 @@
 // buttons (VersionDialog.vue reads the state). Nothing is downloaded or
 // installed without a click. The work happens in the backend (`update.rs`:
 // `check_update`, `install_update` with `update-progress` events), because
-// only that side can pick the channel's feed per check. Only an install the
+// only that side can pick the channel's feed per check (the channel is a
+// setting the App Update dialog changes, `set_update_channel`). Only an install the
 // updater can replace (`SystemInfo.updater`: the Windows installer and the
 // AppImage) installs; the bare executable and deb / rpm only check and get
 // a button to the project page instead (`selfUpdate` false).
@@ -13,7 +14,6 @@ import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import UpdateMark from "./components/UpdateMark.vue";
 import type { ConfirmButton } from "./components/ConfirmDialog.vue";
-import type { UpdateChannel } from "./types";
 
 // idle: no check yet; current: up to date; available: an update waits for
 // the user's click; downloading / installing: after it; error: the last
@@ -47,7 +47,9 @@ export interface Updater {
   // The footer's mark while an update waits (UpdateMark.vue).
   mark: Component;
   // Check the channel's feed; true when an update is available.
-  check(): Promise<boolean>;
+  // `switched`: the user just picked another channel, so any other version
+  // is offered, a lower one too.
+  check(switched?: boolean): Promise<boolean>;
   // Download and install the available update; the app restarts after.
   install(): Promise<void>;
   // Open the project's GitHub page (installs without updater).
@@ -60,11 +62,11 @@ export interface Updater {
   simulateLinkOnly(on: boolean): void;
 }
 
-// `channel`: the Settings choice, read at every check. `simulate`: a
+// `simulate`: a
 // dev-only stand-in (never talks to the backend) instead of the real thing;
 // a release build drops the simulation code. `selfUpdate`: the install can
 // replace itself (Install), else the project page is linked.
-export function createUpdater(channel: () => UpdateChannel, simulate = false, selfUpdate = true): Updater {
+export function createUpdater(simulate = false, selfUpdate = true): Updater {
   let fakeTimer: ReturnType<typeof setInterval> | null = null;
 
   const u: Updater = reactive({
@@ -76,7 +78,7 @@ export function createUpdater(channel: () => UpdateChannel, simulate = false, se
     error: "",
     mark: markRaw(UpdateMark),
 
-    async check() {
+    async check(switched = false) {
       if (import.meta.env.DEV && u.simulated !== null) {
         // A fake check: "Checking…" for a moment, then what the toggle says.
         if (u.state !== "idle" && u.state !== "current" && u.state !== "available") return false;
@@ -89,7 +91,7 @@ export function createUpdater(channel: () => UpdateChannel, simulate = false, se
       u.state = "checking";
       u.error = "";
       try {
-        const found = await invoke<UpdateInfo | null>("check_update", { channel: channel() });
+        const found = await invoke<UpdateInfo | null>("check_update", { switched });
         if (!found) {
           u.info = null;
           u.state = "current";

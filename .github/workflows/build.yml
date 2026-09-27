@@ -4,8 +4,10 @@
 #   workflow artifacts (14 days). No release, nothing the updater can see.
 # - Tag `v*`: tests, then a *draft* release with every bundle, the updater
 #   signatures and latest.json. Nothing goes live until the draft is
-#   published by hand — as a pre-release for the prerelease channel, or as a
-#   full release for everyone (see release.yml).
+#   published by hand. A live tag (`vx.y.z`, on main) becomes a full release
+#   for everyone; a channel tag (`vx.y.z-<channel>.<n>`, on channel/<channel>) is
+#   drafted as a pre-release, and publishing it moves its channel in
+#   channels.json (see release.yml).
 #
 # Secrets: TAURI_SIGNING_PRIVATE_KEY (the minisign key, one line),
 # TAURI_SIGNING_PRIVATE_KEY_PASSWORD (empty if the key has none).
@@ -156,5 +158,10 @@ jobs:
         run: |
           scripts/latest-json.sh "$VERSION" assets > assets/latest.json
           cat assets/latest.json
-          gh release create "v$VERSION" --draft --title "BindSight v$VERSION" --notes "" assets/*
-          echo "Draft release v$VERSION created — publish it on GitHub (pre-release = prerelease channel)."
+          case $VERSION in
+          *-*) pre=--prerelease ;;
+          *) pre= ;;
+          esac
+          # shellcheck disable=SC2086  # $pre is one flag or nothing
+          gh release create "v$VERSION" --draft $pre --title "BindSight v$VERSION" --notes "" assets/*
+          echo "Draft release v$VERSION created — publish it on GitHub."
