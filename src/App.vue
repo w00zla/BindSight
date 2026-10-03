@@ -12,6 +12,7 @@ import ImageStage from "./components/ImageStage.vue";
 import LastInputCard from "./components/LastInputCard.vue";
 import BindingsDeck from "./components/BindingsDeck.vue";
 import BindingsView from "./components/BindingsView.vue";
+import ConfigView from "./components/ConfigView.vue";
 import Toasts from "./components/Toasts.vue";
 import WindowEdges from "./components/WindowEdges.vue";
 import { deviceKey, deviceName } from "./devices";
@@ -147,6 +148,8 @@ const dinputDevices = ref<DiDevice[]>([]);
 const hidOnly = ref<HidOnlyDevice[]>([]);
 // The install's version and game-data load state (updated via `scdata-changed`).
 const scStatus = ref<ScStatus | null>(null);
+// The game environment and version, for the Axis Test report's head.
+const gameLine = computed(() => `game ${activeEnv.value} ${scStatus.value?.version?.label ?? "version unknown"}`);
 // The first game-data load after start is still running: the startup tile
 // covers every mode until it ends, whatever its outcome.
 const starting = ref(true);
@@ -391,15 +394,16 @@ async function onMapsSaved() {
   await reloadMaps();
 }
 
-// The editor and the Bindings mode guard their unsaved changes; leaving
-// Devices or Bindings can be refused.
+// The editor, the Bindings and the Config mode guard their unsaved changes;
+// leaving Devices, Bindings or Config can be refused.
 const editor = ref<InstanceType<typeof ImageMapEditor> | null>(null);
 const bindingsView = ref<InstanceType<typeof BindingsView> | null>(null);
+const configView = ref<InstanceType<typeof ConfigView> | null>(null);
 
-// Pending rebinds settled (saved, discarded, or none)? Anything that re-reads
-// or swaps the bindings file underneath them asks first.
+// Pending rebinds / settings settled (saved, discarded, or none)? Anything
+// that re-reads or swaps the game's files underneath them asks first.
 async function bindingsSettled(): Promise<boolean> {
-  return (await bindingsView.value?.requestLeave()) !== false;
+  return (await bindingsView.value?.requestLeave()) !== false && (await configView.value?.requestLeave()) !== false;
 }
 
 // Both modes' unsaved changes settled — before the window goes away.
@@ -414,7 +418,7 @@ async function setMode(m: Mode) {
   if (mode.value === "devices" && m !== "devices") {
     if ((await editor.value?.requestLeave()) === false) return;
   }
-  if (mode.value === "bindings" && m !== "bindings") {
+  if ((mode.value === "bindings" || mode.value === "config") && m !== mode.value) {
     if (!(await bindingsSettled())) return;
   }
   mode.value = m;
@@ -875,13 +879,13 @@ async function onGameLogChanged(started: boolean) {
 
 // The backend saw the bindings file change (not by this app) and re-read it:
 // same follow-up as a reload, with a word about it.
-async function onBindingsChanged(s: LoadStatus) {
+async function onBindingsChanged(s: LoadStatus, what: string) {
   takeStatus(s);
   await loadClash();
   if (s.loaded) {
-    notify("Game bindings changed, reloaded", "hint");
+    notify(`${what} changed, reloaded`, "hint");
   } else {
-    notify(s.error ?? "Game bindings changed, load failed", "error");
+    notify(s.error ?? `${what} changed, load failed`, "error");
   }
 }
 
@@ -1116,7 +1120,7 @@ async function onSaved(s: LoadStatus) {
   }
 }
 
-// A backup was written back over actionmaps.xml — same follow-up as a reload.
+// Resort's swap was written into actionmaps.xml — same follow-up as a reload.
 async function onApplied(s: LoadStatus) {
   takeStatus(s);
   await loadClash();
@@ -1127,6 +1131,7 @@ async function onApplied(s: LoadStatus) {
   }
 }
 
+// A profile or backup was applied (either mode) — same follow-up as a reload.
 async function onRestored(s: LoadStatus) {
   takeStatus(s);
   await loadClash();
@@ -1356,9 +1361,11 @@ onMounted(async () => {
     unlisten.push(await listen<{ started: boolean }>("gamelog-changed", (e) => onGameLogChanged(e.payload.started)));
   });
   // The bindings file changed on disk (the game's console, an editor) and
-  // the backend re-read it.
+  // the backend re-read it; `settings-changed` when only the game's
+  // settings file did.
   await step("Bindings file events", async () => {
-    unlisten.push(await listen<LoadStatus>("bindings-changed", (e) => onBindingsChanged(e.payload)));
+    unlisten.push(await listen<LoadStatus>("bindings-changed", (e) => onBindingsChanged(e.payload, "Game bindings")));
+    unlisten.push(await listen<LoadStatus>("settings-changed", (e) => onBindingsChanged(e.payload, "Settings")));
   });
   // Registered before the initial fetch below, so a load finishing in
   // between is not missed.
@@ -1563,6 +1570,23 @@ onUnmounted(() => {
       @copy="copyResortCommands"
     />
 
+    <ConfigView
+      v-else-if="mode === 'config'"
+      :key="activeEnv"
+      ref="configView"
+      :devices="orderedDevices"
+      :logOnly="logOnlyJoysticks"
+      :slotFor="slotFor"
+      :isUnseen="deviceUnseen"
+      :noOrder="noOrder"
+      :bindings="bindings"
+      :actionMaps="actionMaps"
+      :hasCurrent="currentLoaded"
+      @notify="notify"
+      @saved="onSaved"
+      @restored="onRestored"
+    />
+
     <ImageMapEditor
       v-else-if="mode === 'devices'"
       :key="activeEnv"
@@ -1577,6 +1601,7 @@ onUnmounted(() => {
       :dinputDevices="dinputDevices"
       :hidOnly="hidOnly"
       :systemLine="systemLine"
+      :gameLine="gameLine"
       @choose="setMapChoice"
       @notify="notify"
       @saved="onMapsSaved"

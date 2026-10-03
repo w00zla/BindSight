@@ -7,6 +7,15 @@ export const ICONS = {
   // Two inputs wired to one action: the binding.
   bindings: '<rect x="3" y="4" width="7" height="6" rx="1"/><rect x="3" y="14" width="7" height="6" rx="1"/><rect x="14" y="9" width="7" height="6" rx="1"/><path d="M10 7h2a2 2 0 0 1 2 2"/><path d="M10 17h2a2 2 0 0 0 2-2"/>',
   devices: '<path d="M12 13V7"/><circle cx="12" cy="5" r="2"/><path d="M5 17h14l-1.5-4h-11z"/><path d="M4 17v2h16v-2"/>',
+  // Two sliders: the Config mode (device settings).
+  config: '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
+  // A curve in its axes: a sensitivity curve.
+  curve: '<path d="M4 20C10 20 14 14 20 4"/><path d="M4 4v16h16"/>',
+  // Two opposed arrows: inversion.
+  invert: '<path d="M7 4v16M7 20l-3-3M7 20l3-3M17 20V4M17 4l-3 3M17 4l3 3"/>',
+  // Crossed axes around a centre: deadzone and saturation.
+  axis: '<path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="3"/>',
+  mouse: '<rect x="7" y="3" width="10" height="18" rx="5"/><path d="M12 7v3"/>',
   // Device kinds (the Devices icon above doubles as the joystick).
   keyboard: '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
   // A plain question mark: the editor controls toggle.

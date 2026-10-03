@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
 
-use crate::scdata::{self, ActionMap};
+use crate::devconfig::{self, ConfigLabels};
+use crate::scdata::{self, ActionMap, OptionTree};
 use crate::{cryxml, p4k};
 
 /// The files inside `Data.p4k`: the action master list, the input token
@@ -31,14 +32,22 @@ const TOKENS_FILE: &str = "tokens.json";
 /// loading with silently missing fields (serde fills a missing `Option`
 /// with `None`). 2 = keyboard / gamepad defaults and `kb1_` / `gp1_` labels,
 /// 3 = the mouse default (`mouse_default`) and `kb1_mouse*` labels, 4 = labels
-/// flatten a literal `\n` to a space.
-const CACHE_FORMAT: u32 = 4;
+/// flatten a literal `\n` to a space, 5 = the option trees and the device
+/// settings labels, 6 = those labels fall back to English instead of "",
+/// 7 = the option trees without their title.
+const CACHE_FORMAT: u32 = 7;
 
-/// `scdata.json`: the action master list behind its format stamp.
+/// `scdata.json`: the action master list, the option trees and the device
+/// settings labels behind its format stamp. The defaults only let an older
+/// cache reach the format check.
 #[derive(Serialize, Deserialize)]
 struct CachedActions {
     format: u32,
     actionmaps: Vec<ActionMap>,
+    #[serde(default)]
+    options: Vec<OptionTree>,
+    #[serde(default)]
+    config_labels: ConfigLabels,
 }
 
 /// Display labels for input tokens (e.g. `"button9"` -> `"Button 9"`).
@@ -79,6 +88,10 @@ struct ManifestData {
 pub struct ScData {
     pub actions: Vec<ActionMap>,
     pub tokens: TokenLabels,
+    /// The option trees (inversion / sensitivity curves) per device kind.
+    pub options: Vec<OptionTree>,
+    /// The labels of the device settings outside the option trees.
+    pub config_labels: ConfigLabels,
 }
 
 /// Files an SC environment must have, relative to its base path. Checked
@@ -190,12 +203,17 @@ fn read_cache(dir: &Path) -> Option<ScData> {
             return None;
         }
     };
-    Some(ScData { actions: actions.actionmaps, tokens })
+    Some(ScData { actions: actions.actionmaps, tokens, options: actions.options, config_labels: actions.config_labels })
 }
 
 fn write_cache(dir: &Path, data: &ScData) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let cached = CachedActions { format: CACHE_FORMAT, actionmaps: data.actions.clone() };
+    let cached = CachedActions {
+        format: CACHE_FORMAT,
+        actionmaps: data.actions.clone(),
+        options: data.options.clone(),
+        config_labels: data.config_labels.clone(),
+    };
     let actions = serde_json::to_string(&cached).map_err(|e| e.to_string())?;
     // Sorted for stable output.
     let sorted: BTreeMap<_, _> = data.tokens.iter().collect();
@@ -228,7 +246,8 @@ fn extract(p4k: &Path) -> Result<[String; 3], String> {
 
 /// Convert the raw SC files into the app's data: the action master list
 /// (unlabeled actions are SC-internal and dropped, as are actionmaps left
-/// empty) and the input token labels.
+/// empty), the input token labels, the option trees and the device settings
+/// labels.
 pub fn convert(profile_xml: &str, keybinding_xml: &str, global_ini: &str) -> Result<ScData, String> {
     let loc = scdata::parse_localization(global_ini);
     let mut actions = scdata::parse_default_profile(profile_xml, &loc)?;
@@ -237,7 +256,9 @@ pub fn convert(profile_xml: &str, keybinding_xml: &str, global_ini: &str) -> Res
     }
     actions.retain(|map| !map.actions.is_empty());
     let tokens = scdata::parse_token_labels(keybinding_xml, &loc);
-    Ok(ScData { actions, tokens })
+    let options = scdata::parse_option_trees(profile_xml, &loc)?;
+    let config_labels = devconfig::config_labels(&loc);
+    Ok(ScData { actions, tokens, options, config_labels })
 }
 
 /// Number of progress steps a full load reports (see [`load`]); step 1 is
@@ -284,10 +305,11 @@ pub fn load(
     let data = convert(&profile, &keybinding, &global)?;
     let total_actions: usize = data.actions.iter().map(|m| m.actions.len()).sum();
     info!(
-        "sc data converted: {} actionmaps, {} actions, {} tokens",
+        "sc data converted: {} actionmaps, {} actions, {} tokens, {} option trees",
         data.actions.len(),
         total_actions,
-        data.tokens.len()
+        data.tokens.len(),
+        data.options.len()
     );
     progress(3);
     if global_ini.is_none() {
@@ -384,12 +406,16 @@ mod tests {
                 actions: vec![],
             }],
             tokens: HashMap::from([("button1".to_string(), "Button 1".to_string())]),
+            options: vec![OptionTree { kind: scdata::DeviceKind::Joystick, nodes: vec![] }],
+            config_labels: ConfigLabels { mouse_smoothing: "Mouse Smoothing".into(), ..ConfigLabels::default() },
         };
         write_cache(&dir, &data).unwrap();
         let back = read_cache(&dir).unwrap();
         assert_eq!(back.actions.len(), 1);
         assert_eq!(back.actions[0].name, "spaceship_general");
         assert_eq!(back.tokens["button1"], "Button 1");
+        assert_eq!(back.options, data.options);
+        assert_eq!(back.config_labels, data.config_labels);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

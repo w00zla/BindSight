@@ -34,6 +34,23 @@ export function recordEdge(ev: JoyInput): RecordEdge {
   }
 }
 
+// Pad buttons the backend derives from an axis (a trigger past its hold, a
+// stick direction, both triggers): the Device Events log marks them, the
+// Axis Test never takes one as its marker.
+export const DERIVED_PAD_BUTTONS: ReadonlySet<string> = new Set([
+  "triggerl_btn",
+  "triggerr_btn",
+  "triggerl_r_btn",
+  "thumbl_left",
+  "thumbl_right",
+  "thumbl_up",
+  "thumbl_down",
+  "thumbr_left",
+  "thumbr_right",
+  "thumbr_up",
+  "thumbr_down",
+]);
+
 // What tells one physical input from another across its press and release
 // events (the token or key may differ between the two: modifiers, hat
 // direction).

@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { open, save } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
 import ColumnHead from "./ColumnHead.vue";
 import Splitter from "./Splitter.vue";
@@ -11,10 +10,12 @@ import ConfirmDialog, { type ConfirmButton, type ConfirmIcon } from "./ConfirmDi
 import { AXIS_PRESS, KIND_RANK, inputIdentity, kindIcon, recordEdge } from "../devices";
 import Dropdown, { type DropdownOption } from "./Dropdown.vue";
 import ConsoleCommandDialog from "./ConsoleCommandDialog.vue";
+import ApplyDialog from "./ApplyDialog.vue";
+import ProfilesPanel from "./ProfilesPanel.vue";
+import BackupsPanel, { stamp } from "./BackupsPanel.vue";
 import InputOverlay from "./InputOverlay.vue";
 import { persistedRef } from "../persist";
 import { recording } from "../keyboard";
-import { NAME_MAX, sanitizeName, stripNameChars } from "../names";
 import { inputKeysForToken, type OverlayTarget } from "../imagemap";
 import type {
   ActionMap,
@@ -108,7 +109,7 @@ async function onReorderChoose(value: string) {
   }
 }
 
-// --- layout: the left column's width and the Binding Profiles panel's
+// --- layout: the left column's width and the Profiles panel's
 // height, both dragged at a splitter and remembered --------------------------
 
 const LEFT_W = { min: 280, max: 640, def: 380 };
@@ -164,19 +165,6 @@ function onConfirm(value: string) {
 
 function toggleIn<T>(list: T[], item: T): T[] {
   return list.includes(item) ? list.filter((x) => x !== item) : [...list, item];
-}
-
-// --- time formatting -------------------------------------------------------
-
-function pad(n: number): string {
-  return String(n).padStart(2, "0");
-}
-
-// "2026-09-09 13:40:05", local time.
-function stamp(unixSecs: number): string {
-  const d = new Date(unixSecs * 1000);
-  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  return `${date} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 // --- compare sources -------------------------------------------------------
@@ -235,20 +223,17 @@ function ensureKeys() {
 
 // --- loading ---------------------------------------------------------------
 
+// The Profiles and Backups panels load their lists (into `profiles` /
+// `backups`) and own Save Profile, Import, Export and Create Backup.
+const profilesPanel = ref<InstanceType<typeof ProfilesPanel> | null>(null);
+const backupsPanel = ref<InstanceType<typeof BackupsPanel> | null>(null);
+
 async function loadProfiles() {
-  try {
-    profiles.value = await invoke<BindingProfileSummary[]>("list_binding_profiles");
-  } catch (e) {
-    emit("notify", String(e), "error");
-  }
+  await profilesPanel.value?.load();
 }
 
 async function loadBackups() {
-  try {
-    backups.value = await invoke<BackupSummary[]>("list_backups");
-  } catch (e) {
-    emit("notify", String(e), "error");
-  }
+  await backupsPanel.value?.load();
 }
 
 async function runCompare() {
@@ -269,59 +254,10 @@ async function runCompare() {
 
 // --- binding profiles -------------------------------------------------------
 
-async function importProfile() {
-  busy.value = true;
-  try {
-    const src = await open({ multiple: false, filters: [{ name: "Binding profile", extensions: ["xml"] }] });
-    if (!src) return;
-    // Import writes into the game's controls/mappings folder: ask first.
-    const name = src.split(/[\\/]/).pop() ?? src;
-    const choice = await ask(`Import ${name}?`, "download", [
-      { label: "Import", kind: "primary", value: "import" },
-      { label: "Cancel", kind: "outline", value: "cancel" },
-    ]);
-    if (choice !== "import") return;
-    const s = await invoke<BindingProfileSummary>("import_binding_profile", { sourcePath: src });
-    await loadProfiles();
-    bKey.value = `${PROFILE_PREFIX}${s.file}`;
-    await runCompare();
-    emit("notify", `Imported ${s.name}`, "ok");
-  } catch (e) {
-    emit("notify", String(e), "error");
-  } finally {
-    busy.value = false;
-  }
-}
-
-// Save the live file as a new binding profile: the name is asked in a
-// small dialog (letters, digits, space, _ - and brackets, like image-maps).
-const nameDialog = ref<{ name: string } | null>(null);
-const nameInput = ref<HTMLInputElement | null>(null);
-
-function openSaveProfile() {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  nameDialog.value = { name: `Bindings ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` };
-  nextTick(() => {
-    nameInput.value?.focus();
-    nameInput.value?.select();
-  });
-}
-
-async function onNameChoose(value: string) {
-  const d = nameDialog.value;
-  nameDialog.value = null;
-  if (!d || value !== "save") return;
-  busy.value = true;
-  try {
-    const s = await invoke<BindingProfileSummary>("save_binding_profile", { name: sanitizeName(d.name, "") });
-    await loadProfiles();
-    emit("notify", `Saved ${s.name}`, "ok");
-  } catch (e) {
-    emit("notify", String(e), "error");
-  } finally {
-    busy.value = false;
-  }
+// An import picks the new profile (the list was reloaded by then).
+async function afterImport(s: BindingProfileSummary) {
+  bKey.value = `${PROFILE_PREFIX}${s.file}`;
+  await runCompare();
 }
 
 async function deleteProfile(m: BindingProfileSummary) {
@@ -343,54 +279,6 @@ async function deleteProfile(m: BindingProfileSummary) {
   }
 }
 
-async function exportProfile() {
-  const m = bProfile.value;
-  if (!m) return;
-  busy.value = true;
-  try {
-    const dest = await save({ defaultPath: m.file, filters: [{ name: "Binding profile", extensions: ["xml"] }] });
-    if (!dest) return;
-    await invoke("export_binding_profile", { file: m.file, destPath: dest });
-    emit("notify", `Exported ${m.name}`, "ok");
-  } catch (e) {
-    emit("notify", String(e), "error");
-  } finally {
-    busy.value = false;
-  }
-}
-
-// --- backups ---------------------------------------------------------------
-
-// Create Backup: the description is asked in a small dialog, "manual" by
-// default (the backend keeps that for an empty one).
-const backupDialog = ref<{ reason: string } | null>(null);
-const backupInput = ref<HTMLInputElement | null>(null);
-const BACKUP_REASON_MAX = 64;
-
-function openCreateBackup() {
-  backupDialog.value = { reason: "manual" };
-  nextTick(() => {
-    backupInput.value?.focus();
-    backupInput.value?.select();
-  });
-}
-
-async function onBackupChoose(value: string) {
-  const d = backupDialog.value;
-  backupDialog.value = null;
-  if (!d || value !== "create") return;
-  busy.value = true;
-  try {
-    await invoke<BackupSummary>("create_backup", { reason: d.reason.trim() || "manual" });
-    await loadBackups();
-    emit("notify", "Backup created", "ok");
-  } catch (e) {
-    emit("notify", String(e), "error");
-  } finally {
-    busy.value = false;
-  }
-}
-
 // --- apply ----------------------------------------------------------------
 
 // The devices a profile / backup and the live file bind, for the Apply
@@ -401,8 +289,9 @@ interface ApplyDevice {
   label: string;
 }
 
-// `targets`: the live slot a source joystick's bindings land on (the
-// resort that goes with an apply), by device key; unset = the same slot.
+// `targets`: the live slot a source joystick's bindings and settings land
+// on (the resort that goes with an apply), by device key; unset = the same
+// slot.
 const applyDialog = ref<{ devices: ApplyDevice[]; on: Set<string>; targets: Record<string, number> } | null>(null);
 
 // The live file's joystick slots a source joystick can land on: its own
@@ -481,17 +370,13 @@ function toggleApplyDevice(key: string) {
 // A backup is "restored", a profile "applied" — same mechanics.
 const applyWord = computed(() => (bBackup.value ? "Restore" : "Apply"));
 
-const applyButtons = computed<ConfirmButton[]>(() => [
-  { label: applyWord.value, kind: "primary", value: "apply", disabled: !applyDialog.value?.on.size || slotClashes.value.size > 0 },
-  { label: "Cancel", kind: "outline", value: "cancel" },
-]);
+const applyDevicesOk = computed(() => !!applyDialog.value?.on.size && slotClashes.value.size === 0);
 
-// A backup with every device ticked is put back byte for byte (`restore`);
-// anything else is merged device by device (`apply`).
-async function onApplyChoose(value: string) {
+// Every apply goes through `apply_source`.
+async function onApply(what: { bindings: boolean; settings: boolean }) {
   const d = applyDialog.value;
   applyDialog.value = null;
-  if (!d || value !== "apply") return;
+  if (!d) return;
   const source = sourceFor(bKey.value);
   const devices = d.devices
     .filter((x) => d.on.has(x.key))
@@ -499,16 +384,10 @@ async function onApplyChoose(value: string) {
       const target = d.targets[x.key];
       return target !== undefined && target !== x.sel.instance ? { ...x.sel, target } : x.sel;
     });
-  const resorted = devices.some((x) => x.target !== undefined);
   busy.value = true;
   try {
-    if (source.kind === "backup" && devices.length === d.devices.length && !resorted) {
-      const s = await invoke<LoadStatus>("restore_backup", { id: source.id });
-      emit("restored", s);
-    } else {
-      const s = await invoke<LoadStatus>("apply_bindings", { source, devices });
-      emit("applied", s);
-    }
+    const s = await invoke<LoadStatus>("apply_source", { source, devices, bindings: what.bindings, settings: what.settings });
+    emit("restored", s);
     // The write takes a safety backup of its own — the list has a new entry.
     await loadBackups();
     await loadInfo();
@@ -1485,7 +1364,7 @@ watch(
 onMounted(async () => {
   window.addEventListener("keydown", onEscape);
   unlisten.push(await listen<JoyInput>("joy-input", (e) => takeInput(e.payload)));
-  await Promise.all([loadProfiles(), loadBackups(), loadInfo()]);
+  await loadInfo();
 });
 
 // Left-hand rows: Current shows the list, anything else compares against it.
@@ -1523,67 +1402,32 @@ async function compareWith(key: string) {
         </div>
       </section>
 
-      <!-- binding profiles -->
-      <section class="panel profiles" :style="{ height: `${profilesHeight}px` }">
-        <div class="head">
-          <Icon name="file" :size="15" />
-          <span class="head-title">Binding Profiles</span>
-          <button type="button" class="btn primary small" :disabled="busy || !hasCurrent" @click="openSaveProfile">
-            <Icon name="plus" :size="12" />Save Profile
-          </button>
-        </div>
-        <div class="rows scroll">
-          <div
-            v-for="m in profiles"
-            :key="m.file"
-            class="row-item"
-            :class="{ b: view === 'compare' && bKey === `${PROFILE_PREFIX}${m.file}` }"
-            @click="compareWith(`${PROFILE_PREFIX}${m.file}`)"
-          >
-            <div class="lines">
-              <span class="line-title">{{ m.name }}</span>
-              <span class="mono line-sub">{{ m.file }} · {{ stamp(m.modified) }}</span>
-            </div>
-          </div>
-          <div v-if="!profiles.length" class="row-none">None</div>
-        </div>
-        <div class="foot">
-          <button type="button" class="btn outline" :disabled="busy" @click="importProfile">
-            <Icon name="download" :size="14" />Import
-          </button>
-          <button type="button" class="btn outline" :disabled="busy || !bProfile" @click="exportProfile">
-            <Icon name="upload" :size="14" />Export
-          </button>
-        </div>
-      </section>
+      <!-- profiles -->
+      <ProfilesPanel
+        ref="profilesPanel"
+        v-model:profiles="profiles"
+        v-model:busy="busy"
+        class="profiles"
+        :style="{ height: `${profilesHeight}px` }"
+        :picked="view === 'compare' && bKey.startsWith(PROFILE_PREFIX) ? bKey.slice(PROFILE_PREFIX.length) : null"
+        :target="bProfile?.file ?? null"
+        :canSave="hasCurrent"
+        :afterImport="afterImport"
+        @notify="(m, t) => emit('notify', m, t)"
+        @pick="compareWith(`${PROFILE_PREFIX}${$event}`)"
+      />
 
       <Splitter direction="row" @drag="dragProfiles" @end="endDrag" @reset="profilesHeight = PROFILES_H.def" />
 
       <!-- backups -->
-      <section class="panel grow">
-        <div class="head">
-          <Icon name="history" :size="15" />
-          <span class="head-title">Backups</span>
-          <button type="button" class="btn primary small" :disabled="busy" @click="openCreateBackup">
-            <Icon name="plus" :size="12" />Create Backup
-          </button>
-        </div>
-        <div class="rows scroll">
-          <div
-            v-for="b in backups"
-            :key="b.id"
-            class="row-item"
-            :class="{ b: view === 'compare' && bKey === `${BACKUP_PREFIX}${b.id}` }"
-            @click="compareWith(`${BACKUP_PREFIX}${b.id}`)"
-          >
-            <div class="lines">
-              <span class="mono line-stamp">{{ stamp(b.created) }}</span>
-              <span class="line-sub">{{ b.reason }} · <span class="mono">{{ b.game_version ?? "—" }}</span></span>
-            </div>
-          </div>
-          <div v-if="!backups.length" class="row-none">None</div>
-        </div>
-      </section>
+      <BackupsPanel
+        ref="backupsPanel"
+        v-model:backups="backups"
+        v-model:busy="busy"
+        :picked="view === 'compare' && bKey.startsWith(BACKUP_PREFIX) ? bKey.slice(BACKUP_PREFIX.length) : null"
+        @notify="(m, t) => emit('notify', m, t)"
+        @pick="compareWith(`${BACKUP_PREFIX}${$event}`)"
+      />
     </div>
 
     <Splitter direction="col" class="col-split" @drag="dragLeft" @end="endDrag" @reset="leftWidth = LEFT_W.def" />
@@ -1598,11 +1442,11 @@ async function compareWith(key: string) {
       <div class="tile-btns">
         <span class="mono tile-facts">{{ countSummary }}</span>
         <div class="spacer" />
-        <button type="button" class="btn outline small" :disabled="busy || !hasCurrent" @click="openSaveProfile">
+        <button type="button" class="btn outline small" :disabled="busy || !hasCurrent" @click="profilesPanel?.openSave()">
           <Icon name="file" :size="14" />
           Save Profile
         </button>
-        <button type="button" class="btn outline small" :disabled="busy || !hasCurrent" @click="openCreateBackup">
+        <button type="button" class="btn outline small" :disabled="busy || !hasCurrent" @click="backupsPanel?.openCreate()">
           <Icon name="history" :size="14" />
           Create Backup
         </button>
@@ -1907,64 +1751,18 @@ async function compareWith(key: string) {
       @choose="onConfirm"
     />
 
-    <!-- save the live file as a binding profile -->
-    <ConfirmDialog
-      v-if="nameDialog"
-      title="Save Profile"
-      icon="file"
-      :buttons="[
-        { label: 'Save', kind: 'primary', value: 'save', disabled: !sanitizeName(nameDialog.name, '') },
-        { label: 'Cancel', kind: 'outline', value: 'cancel' },
-      ]"
-      @choose="onNameChoose"
-    >
-      <input
-        ref="nameInput"
-        class="name-in"
-        :value="nameDialog.name"
-        :maxlength="NAME_MAX"
-        spellcheck="false"
-        placeholder="Name"
-        @input="nameDialog.name = stripNameChars(($event.target as HTMLInputElement).value)"
-        @keydown.enter="sanitizeName(nameDialog.name, '') && onNameChoose('save')"
-      />
-    </ConfirmDialog>
-
-    <!-- back the live file up, with a description -->
-    <ConfirmDialog
-      v-if="backupDialog"
-      title="Create Backup"
-      icon="history"
-      :buttons="[
-        { label: 'Create', kind: 'primary', value: 'create' },
-        { label: 'Cancel', kind: 'outline', value: 'cancel' },
-      ]"
-      @choose="onBackupChoose"
-    >
-      <label class="backup-row">
-        <span class="reorder-label">Description</span>
-        <input
-          ref="backupInput"
-          class="name-in"
-          v-model="backupDialog.reason"
-          :maxlength="BACKUP_REASON_MAX"
-          spellcheck="false"
-          @keydown.enter="onBackupChoose('create')"
-        />
-      </label>
-    </ConfirmDialog>
-
-    <!-- apply a profile / backup: which devices' bindings to take over -->
-    <ConfirmDialog
+    <!-- apply a profile / backup: what to take over, for which devices -->
+    <ApplyDialog
       v-if="applyDialog"
       :title="`${applyWord} ${nameFor(bKey)}`"
-      icon="check"
-      :buttons="applyButtons"
+      :applyLabel="applyWord"
+      :devicesOk="applyDevicesOk"
       :width="800"
-      @choose="onApplyChoose"
+      @apply="onApply"
+      @cancel="applyDialog = null"
     >
       <!-- one row per device: take it over or not, and for a joystick the
-           live slot its bindings land on (a swap keeps the slots unique) -->
+           live slot it lands on (a swap keeps the slots unique) -->
       <div class="apply-table">
         <div class="apply-head">
           <span />
@@ -2004,7 +1802,7 @@ async function compareWith(key: string) {
         </div>
       </div>
       <p class="dialog-note">{{ RESTART_NOTE }}</p>
-    </ConfirmDialog>
+    </ApplyDialog>
 
     <!-- rebind: every device at once; Record or Clear changes a kind, Apply queues the changes -->
     <ConfirmDialog
@@ -2123,28 +1921,10 @@ async function compareWith(key: string) {
   min-width: 0;
 }
 
-/* Game Bindings, Binding Profiles (dragged height), the row splitter, Backups. */
+/* Game Bindings, Profiles (dragged height), the row splitter, Backups. */
 .left .panel.profiles {
   margin-top: 16px;
   flex: none;
-}
-
-.name-in {
-  width: 100%;
-  height: var(--h-control);
-  padding: 0 10px;
-  box-sizing: border-box;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--bg-surface-2);
-  color: var(--text);
-  font-family: inherit;
-  font-size: 14px;
-  outline: none;
-}
-
-.name-in:focus {
-  border-color: var(--accent);
 }
 
 /* Own checkbox look (mirrors SettingsDialog): WebKitGTK would paint GTK's. */
@@ -2354,11 +2134,6 @@ async function compareWith(key: string) {
   overflow: hidden;
 }
 
-.panel.grow {
-  flex: 1;
-  min-height: 0;
-}
-
 .head {
   display: flex;
   align-items: center;
@@ -2391,12 +2166,6 @@ async function compareWith(key: string) {
   flex-direction: column;
   gap: 6px;
   padding: 8px;
-}
-
-.rows.scroll {
-  overflow-y: auto;
-  min-height: 0;
-  flex: 1;
 }
 
 .row-item {
@@ -2435,12 +2204,6 @@ async function compareWith(key: string) {
   white-space: nowrap;
 }
 
-.line-stamp {
-  font-weight: 600;
-  font-size: 13px;
-  color: var(--text);
-}
-
 .line-sub {
   font-size: 11px;
   color: var(--text-2);
@@ -2450,18 +2213,6 @@ async function compareWith(key: string) {
   padding: 9px 10px;
   font-size: 13px;
   color: var(--text-3);
-}
-
-.foot {
-  display: flex;
-  gap: 6px;
-  padding: 6px 12px 12px;
-}
-
-.foot .btn {
-  flex: 1;
-  height: 34px;
-  padding: 0 8px;
 }
 
 /* --- buttons --- */
@@ -3104,14 +2855,6 @@ async function compareWith(key: string) {
 .reorder-label {
   font-size: 13px;
   color: var(--text-2);
-}
-
-/* Create Backup dialog: label + description input on one line. */
-.backup-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
 }
 
 /* The dropdowns fill the row; "chip" would collide with this file's .chip. */

@@ -10,11 +10,16 @@ import { ENVIRONMENTS, type Mode } from "../types";
 defineProps<{ mode: Mode; activeEnv: string; scVersion: string; loading: boolean }>();
 const emit = defineEmits<{ "update:mode": [mode: Mode]; "update:env": [slug: string]; refresh: []; settings: [] }>();
 
-const TABS: { mode: Mode; label: string; icon: "monitor" | "bindings" | "devices" }[] = [
+type Tab = { mode: Mode; label: string; icon: "monitor" | "bindings" | "config" | "devices" };
+
+// The game-facing modes in one segmented bar; Devices (the image-map editor
+// and Device Info) stands apart behind a separator, in the same look.
+const TABS: Tab[] = [
   { mode: "monitor", label: "Monitor", icon: "monitor" },
   { mode: "bindings", label: "Bindings", icon: "bindings" },
-  { mode: "devices", label: "Devices", icon: "devices" },
+  { mode: "config", label: "Config", icon: "config" },
 ];
+const SOLO: Tab = { mode: "devices", label: "Devices", icon: "devices" };
 
 const ENV_OPTIONS = ENVIRONMENTS.map((slug) => ({ value: slug, label: slug }));
 
@@ -57,6 +62,18 @@ onUnmounted(() => {
       >
         <Icon :name="t.icon" :size="16" />
         {{ t.label }}
+      </button>
+    </div>
+    <div class="tab-sep" />
+    <div class="tabs">
+      <button
+        type="button"
+        class="tab"
+        :class="{ active: mode === SOLO.mode }"
+        @click="emit('update:mode', SOLO.mode)"
+      >
+        <Icon :name="SOLO.icon" :size="16" />
+        {{ SOLO.label }}
       </button>
     </div>
     <div class="spacer" data-tauri-drag-region />
@@ -141,6 +158,16 @@ onUnmounted(() => {
   background: var(--bg-base);
   border-radius: 6px;
   padding: 3px;
+}
+
+/* Between the mode bar and the standalone Devices button; the topbar gap
+   on both sides would leave too much air, so it pulls them in. */
+.tab-sep {
+  width: 1px;
+  height: 22px;
+  margin: 0 -10px;
+  background: var(--border);
+  flex-shrink: 0;
 }
 
 .tab {

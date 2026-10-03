@@ -12,6 +12,7 @@ pub mod backups;
 pub mod bindings;
 pub mod config;
 pub mod cryxml;
+pub mod devconfig;
 pub mod diff;
 pub mod dinput;
 pub mod gamefile;
@@ -113,6 +114,13 @@ pub(crate) struct AppData {
     /// watch thread (see [`spawn_actionmaps_watch`]): a change the app did
     /// not make itself (the game's console, an editor) is reloaded from here.
     actionmaps_stamp: Option<FileStamp>,
+    /// The game's `attributes.xml` next to it as of the last
+    /// `reload_bindings` (`None` while there is none), watched the same way.
+    attributes_stamp: Option<FileStamp>,
+    /// The deadzones / saturations the bindings file configures, shared
+    /// with the input thread (its resting zones); refreshed by
+    /// [`reload_bindings`].
+    axis_zones: input::AxisZones,
 }
 
 /// What identifies one state of a file on disk: modification time + length.
@@ -805,7 +813,8 @@ fn resolve_tokens(candidates: Vec<String>, data: State<Mutex<AppData>>) -> Input
 
 /// Snapshot the SC install into `data`: parse actionmaps.xml and resolve it
 /// against the current game data (bindings file + binding index), then
-/// re-take the joystick order. Returns the actionmaps load status. Called
+/// re-take the joystick order and hand the input thread the configured
+/// deadzones / saturations. Returns the actionmaps load status. Called
 /// at start (once the game data is in), on a base-path change, after a
 /// resort or restore, and on every Refresh. Game.log is not read here — the
 /// watch thread does that, outside the lock.
@@ -828,17 +837,32 @@ pub(crate) fn reload_bindings(data: &mut AppData) -> LoadStatus {
         data.index = bindings::BindingIndex::default();
         data.device_order = Err("environment not loaded".into());
         data.game_log = data.device_order.clone();
+        set_axis_zones(data, input::ZoneMap::new());
         return status;
     }
 
     // Whatever the read makes of it, this is the state the watch thread
     // compares against — a broken file is reported once, not every poll.
     data.actionmaps_stamp = file_stamp(&am_path);
-    let profile = std::fs::read_to_string(&am_path)
-        .map_err(|e| format!("actionmaps.xml not found: {} ({e})", status.actionmaps_path))
-        .and_then(|xml| {
-            scdata::parse_actionmaps(&xml).map_err(|e| format!("actionmaps.xml could not be parsed: {e}"))
-        });
+    data.attributes_stamp = file_stamp(&config::attributes_path(data.config.base_path()));
+    let text = std::fs::read_to_string(&am_path).map_err(|e| format!("actionmaps.xml not found: {} ({e})", status.actionmaps_path));
+    let profile = text
+        .as_ref()
+        .map_err(Clone::clone)
+        .and_then(|xml| scdata::parse_actionmaps(xml).map_err(|e| format!("actionmaps.xml could not be parsed: {e}")));
+    // The Monitor's resting zones follow the configured deadzones; without
+    // a readable file the input thread's fixed zones apply.
+    let zones = match (&text, &profile) {
+        (Ok(xml), Ok(_)) => match devconfig::parse_device_config(xml) {
+            Ok(config) => devconfig::axis_zones(&config),
+            Err(e) => {
+                warn!("device settings not read: {e}");
+                input::ZoneMap::new()
+            }
+        },
+        _ => input::ZoneMap::new(),
+    };
+    set_axis_zones(data, zones);
     match profile {
         Ok(profile) => {
             status.loaded = true;
@@ -878,6 +902,15 @@ pub(crate) fn reload_bindings(data: &mut AppData) -> LoadStatus {
     // read outside the lock); re-take it so device_order tracks game_log.
     refresh_device_order(data);
     status
+}
+
+/// Hand the input thread new resting zones (a short write lock; the input
+/// path only ever reads them).
+fn set_axis_zones(data: &AppData, zones: input::ZoneMap) {
+    match data.axis_zones.write() {
+        Ok(mut shared) => *shared = zones,
+        Err(e) => error!("axis zones not updated: {e}"),
+    }
 }
 
 /// The outcome of the last `reload_bindings` without reading anything again —
@@ -1044,18 +1077,21 @@ fn spawn_game_log_watch(app: AppHandle) {
     });
 }
 
-/// Watch the live `actionmaps.xml` for changes the app did not make itself —
-/// the game's console commands (`pp_resortdevices`, a rebind in its
-/// keybinding screen) or an editor — and reload the bindings when one shows
-/// (`bindings-changed`, payload the `LoadStatus`), so the GUI follows the
-/// file without a Refresh. A metadata poll every 2 s; a changed stamp is
+/// Watch the live `actionmaps.xml` and the game's `attributes.xml` for
+/// changes the app did not make itself — the game's console commands
+/// (`pp_resortdevices`, a rebind in its keybinding screen), its options
+/// screens or an editor — and reload the bindings when one shows
+/// (`bindings-changed`, payload the `LoadStatus`; `settings-changed` with
+/// the same payload when only `attributes.xml` changed), so the GUI follows
+/// the files without a Refresh. A metadata poll every 2 s; a changed stamp is
 /// taken only once it held still for one more poll (the game writes in
-/// steps). The app's own writes end in `reload_bindings`, which records the
-/// stamp, so they never come back as a change. Idle until the first load has
-/// read the file, and while the environment is invalid.
+/// steps). The app's own writes end in `reload_bindings`, which records both
+/// stamps, so they never come back as a change. A missing `attributes.xml`
+/// is a state like any other (no stamp), not an error. Idle until the first
+/// load has read the files, and while the environment is invalid.
 fn spawn_actionmaps_watch(app: AppHandle) {
     std::thread::spawn(move || {
-        let mut pending: Option<Option<FileStamp>> = None;
+        let mut pending: Option<[Option<FileStamp>; 2]> = None;
         loop {
             std::thread::sleep(logwatch::POLL);
             let state = app.state::<Mutex<AppData>>();
@@ -1064,9 +1100,10 @@ fn spawn_actionmaps_watch(app: AppHandle) {
                 pending = None;
                 continue;
             }
-            let path = config::actionmaps_path(data.config.base_path());
-            let now = file_stamp(&path);
-            if now == data.actionmaps_stamp {
+            let base = data.config.base_path().to_string();
+            let now = [file_stamp(&config::actionmaps_path(&base)), file_stamp(&config::attributes_path(&base))];
+            let known = [data.actionmaps_stamp, data.attributes_stamp];
+            if now == known {
                 pending = None;
                 continue;
             }
@@ -1075,10 +1112,13 @@ fn spawn_actionmaps_watch(app: AppHandle) {
                 continue;
             }
             pending = None;
-            info!("actionmaps.xml changed on disk, re-read");
+            let changed: Vec<&str> =
+                ["actionmaps.xml", "attributes.xml"].into_iter().zip(now.iter().zip(&known)).filter(|(_, (n, k))| n != k).map(|(f, _)| f).collect();
+            info!("{} changed on disk, re-read", changed.join(" and "));
             let status = reload_bindings(&mut data);
             drop(data);
-            let _ = app.emit("bindings-changed", status);
+            let event = if now[0] == known[0] { "settings-changed" } else { "bindings-changed" };
+            let _ = app.emit(event, status);
         }
     });
 }
@@ -1181,7 +1221,8 @@ fn start_input(app: &AppHandle) {
     static INPUT_STARTED: std::sync::Once = std::sync::Once::new();
     INPUT_STARTED.call_once(|| {
         let devices = app.state::<input::DeviceList>().inner().clone();
-        input::spawn(app.clone(), devices);
+        let control = app.state::<input::InputControl>().inner().clone();
+        input::spawn(app.clone(), devices, control);
     });
 }
 
@@ -1392,6 +1433,9 @@ pub fn run() {
             // the input thread only starts once the first game-data load is
             // through (`spawn_sc_load` -> `start_input`).
             let devices: input::DeviceList = Arc::new(Mutex::new(Vec::new()));
+            // The input thread's settings from outside (zones, raw stream),
+            // shared without the AppData lock.
+            let control = input::InputControl::default();
             // The bindings file and Game.log are read once the game data is
             // in (`spawn_sc_load` -> `reload_bindings`).
             app.manage(Mutex::new(AppData {
@@ -1406,8 +1450,11 @@ pub fn run() {
                 last_order_log: String::new(),
                 attached_joysticks: None,
                 actionmaps_stamp: None,
+                attributes_stamp: None,
+                axis_zones: control.zones.clone(),
             }));
             app.manage(devices);
+            app.manage(control);
             app.manage(CloseGuard { requests: AtomicU64::new(0), acked: AtomicU64::new(0) });
             spawn_sc_load(app.handle().clone());
             spawn_game_log_watch(app.handle().clone());
@@ -1466,11 +1513,10 @@ pub fn run() {
             binding_profiles::save_binding_profile,
             binding_profiles::delete_binding_profile,
             binding_profiles::open_binding_profiles_dir,
-            apply::apply_bindings,
+            apply::apply_source,
             backups::list_backups,
             backups::create_backup,
             backups::delete_backup,
-            backups::restore_backup,
             backups::open_backup_dir,
             backups::open_backups_dir,
             set_auto_backup,
@@ -1482,7 +1528,13 @@ pub fn run() {
             update::check_update,
             update::update_channels,
             update::install_update,
-            diff::compare_bindings
+            diff::compare_bindings,
+            devconfig::get_option_trees,
+            devconfig::get_config_labels,
+            devconfig::get_device_config,
+            devconfig::save_device_config,
+            devconfig::device_config_text,
+            input::set_axis_stream
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

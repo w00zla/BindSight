@@ -34,3 +34,53 @@ body,
   text-transform: uppercase;
   color: var(--text-3);
 }
+
+/* Range sliders (Config mode): the track is filled in the accent up to the
+   thumb, the fill's end comes from the element's `--p` (0% … 100%). */
+input[type="range"].range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 20px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  --track: 6px;
+  --thumb: 16px;
+}
+
+input[type="range"].range:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+input[type="range"].range::-webkit-slider-runnable-track {
+  height: var(--track);
+  border-radius: 3px;
+  background: linear-gradient(to right, var(--accent) 0 var(--p, 50%), var(--bg-surface-3) var(--p, 50%));
+}
+
+input[type="range"].range::-moz-range-track {
+  height: var(--track);
+  border-radius: 3px;
+  background: linear-gradient(to right, var(--accent) 0 var(--p, 50%), var(--bg-surface-3) var(--p, 50%));
+}
+
+input[type="range"].range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: var(--thumb);
+  height: var(--thumb);
+  margin-top: calc((var(--track) - var(--thumb)) / 2);
+  border-radius: 50%;
+  background: var(--text);
+  border: 3px solid var(--accent);
+  box-sizing: border-box;
+}
+
+input[type="range"].range::-moz-range-thumb {
+  width: calc(var(--thumb) - 6px);
+  height: calc(var(--thumb) - 6px);
+  border-radius: 50%;
+  background: var(--text);
+  border: 3px solid var(--accent);
+}

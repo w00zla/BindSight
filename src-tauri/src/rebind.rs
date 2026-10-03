@@ -182,12 +182,12 @@ pub fn verify_applied(before: &ActionMapsFile, after: &ActionMapsFile, changes: 
 }
 
 /// The file's line ending and one indent unit (SC writes one space per level).
-struct Layout {
-    eol: &'static str,
-    unit: &'static str,
+pub(crate) struct Layout {
+    pub(crate) eol: &'static str,
+    pub(crate) unit: &'static str,
 }
 
-fn layout_of(xml: &str) -> Layout {
+pub(crate) fn layout_of(xml: &str) -> Layout {
     let eol = if xml.contains("\r\n") {
         "\r\n"
     } else if xml.contains('\n') || !xml.contains('\r') {
@@ -244,7 +244,7 @@ fn find_element(xml: &str, masked: &str, from: usize, to: usize, tag: &str, name
 }
 
 /// The whitespace between the last line break before `pos` and `pos`.
-fn indent_before(xml: &str, pos: usize) -> &str {
+pub(crate) fn indent_before(xml: &str, pos: usize) -> &str {
     let line_start = xml[..pos].rfind('\n').map_or(0, |i| i + 1);
     let candidate = &xml[line_start..pos];
     if candidate.chars().all(|c| c == ' ' || c == '\t') { candidate } else { "" }

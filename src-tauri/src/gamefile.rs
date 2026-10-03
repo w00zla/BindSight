@@ -1,5 +1,6 @@
 //! Guarded writes to the game's files — the one road every change to the
-//! live `actionmaps.xml` takes (see CLAUDE.md, "Game-file safety").
+//! live `actionmaps.xml` and `attributes.xml` takes (see CLAUDE.md,
+//! "Game-file safety").
 //!
 //! [`write_atomic`] never leaves a half-written file behind: the bytes go to
 //! a temporary file next to the target, are flushed to disk, and only then
@@ -17,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use log::{error, info, warn};
 
-use crate::{backups, scdata};
+use crate::{backups, devconfig, scdata};
 
 /// Write `bytes` to `path` atomically (temp file in the same directory,
 /// `sync_all`, rename over the target), then read the file back and compare.
@@ -98,6 +99,74 @@ pub fn replace_live_file(
         return Err(e);
     }
     info!("{} replaced ({})", path.display(), backup_label(&backup));
+    Ok(backup)
+}
+
+/// Replace the live `actionmaps.xml` at `actionmaps` and / or the game's
+/// `attributes.xml` next to it (`backups::attributes_beside`) the guarded
+/// way, for the device settings: each new text must parse as its kind of
+/// file, then ONE backup of both files is taken (verified, unless
+/// `auto_backup` is off), then the atomic writes run — `actionmaps.xml`
+/// first. A file passed as `None` stays untouched. Should the second write
+/// fail after the first succeeded, the error says so; the backup holds both
+/// originals. Returns the backup's id, `None` when none was made.
+#[allow(clippy::too_many_arguments)]
+pub fn replace_live_config(
+    backups_root: &Path,
+    actionmaps: &Path,
+    new_actionmaps: Option<&str>,
+    new_attributes: Option<&str>,
+    reason: &str,
+    auto_backup: bool,
+    game_version: Option<&str>,
+    actions: &[scdata::ActionMap],
+) -> Result<Option<String>, String> {
+    if new_actionmaps.is_none() && new_attributes.is_none() {
+        return Err("nothing to write".into());
+    }
+    // The backup needs the bindings file even when only the settings change.
+    if !actionmaps.is_file() {
+        return Err(format!("{}: not found", actionmaps.display()));
+    }
+    let attributes = backups::attributes_beside(actionmaps);
+    if let Some(xml) = new_actionmaps {
+        scdata::parse_actionmaps(xml).map_err(|e| {
+            error!("refusing to write {}: new content is not readable: {e}", actionmaps.display());
+            format!("refusing to write: new content is not readable: {e}")
+        })?;
+    }
+    if let Some(xml) = new_attributes {
+        if !attributes.is_file() {
+            return Err(format!("{}: not found", attributes.display()));
+        }
+        devconfig::parse_attributes(xml).map_err(|e| {
+            error!("refusing to write {}: new content is not readable: {e}", attributes.display());
+            format!("refusing to write: new content is not readable: {e}")
+        })?;
+    }
+    let backup = if auto_backup {
+        match backups::create(backups_root, actionmaps, reason, game_version, actions) {
+            Ok(summary) => Some(summary.id),
+            Err(e) => {
+                error!("{}: no backup made, not writing: {e}", actionmaps.display());
+                return Err(e);
+            }
+        }
+    } else {
+        warn!("{}: writing without a backup (auto-backups off)", actionmaps.display());
+        None
+    };
+    let mut written: Vec<String> = Vec::new();
+    for (path, text) in [(actionmaps, new_actionmaps), (attributes.as_path(), new_attributes)] {
+        let Some(text) = text else { continue };
+        if let Err(e) = write_atomic(path, text.as_bytes()) {
+            let done = if written.is_empty() { String::new() } else { format!(", already written: {}", written.join(", ")) };
+            error!("write of {} failed ({}{done}): {e}", path.display(), backup_label(&backup));
+            return Err(if written.is_empty() { e } else { format!("{e} (already written: {})", written.join(", ")) });
+        }
+        info!("{} replaced ({})", path.display(), backup_label(&backup));
+        written.push(path.display().to_string());
+    }
     Ok(backup)
 }
 
@@ -198,6 +267,59 @@ mod tests {
         fs::write(&live, XML).unwrap();
         let err = replace_live_file(&root, &live, "<ActionMaps><oops", "test", true, None, &[]).unwrap_err();
         assert!(err.contains("refusing to write"), "{err}");
+        assert_eq!(fs::read_to_string(&live).unwrap(), XML);
+        assert!(!root.exists(), "no backup for a refused write");
+    }
+
+    const ATTRS: &str = "<Attributes Version=\"35\">\n <Attr name=\"Sensitivity\" value=\"1\"/>\n</Attributes>\n";
+
+    #[test]
+    fn replace_live_config_backs_up_both_files_once_then_writes_what_changed() {
+        let t = Tmp::new();
+        let live = t.path("actionmaps.xml");
+        let attributes = t.path("attributes.xml");
+        let root = t.path("backups");
+        fs::write(&live, XML).unwrap();
+        fs::write(&attributes, ATTRS).unwrap();
+
+        let new_xml = XML.replace("js1_button1", "js1_button2");
+        let new_attrs = ATTRS.replace("value=\"1\"", "value=\"1.2\"");
+        let id = replace_live_config(&root, &live, Some(&new_xml), Some(&new_attrs), "before config", true, None, &[]).unwrap().unwrap();
+        assert_eq!(fs::read_to_string(&live).unwrap(), new_xml);
+        assert_eq!(fs::read_to_string(&attributes).unwrap(), new_attrs);
+        assert_eq!(fs::read_to_string(root.join(&id).join("actionmaps.xml")).unwrap(), XML);
+        assert_eq!(fs::read_to_string(root.join(&id).join("attributes.xml")).unwrap(), ATTRS);
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1, "one backup for both files");
+
+        // Only the settings: the bindings file is not rewritten.
+        let id = replace_live_config(&root, &live, None, Some(ATTRS), "before config", true, None, &[]).unwrap().unwrap();
+        assert_eq!(fs::read_to_string(&live).unwrap(), new_xml);
+        assert_eq!(fs::read_to_string(&attributes).unwrap(), ATTRS);
+        assert_eq!(fs::read_to_string(root.join(&id).join("attributes.xml")).unwrap(), new_attrs);
+        // Auto-backups off: written, no backup.
+        assert_eq!(replace_live_config(&root, &live, Some(XML), None, "before config", false, None, &[]).unwrap(), None);
+        assert_eq!(fs::read_to_string(&live).unwrap(), XML);
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
+        assert!(leftovers(&t.0).is_empty());
+    }
+
+    #[test]
+    fn replace_live_config_refuses_and_touches_nothing() {
+        let t = Tmp::new();
+        let live = t.path("actionmaps.xml");
+        let attributes = t.path("attributes.xml");
+        let root = t.path("backups");
+        fs::write(&live, XML).unwrap();
+        // Unreadable new content, either file.
+        assert!(replace_live_config(&root, &live, Some("<ActionMaps><oops"), None, "x", true, None, &[]).unwrap_err().contains("refusing"));
+        fs::write(&attributes, ATTRS).unwrap();
+        assert!(replace_live_config(&root, &live, Some(XML), Some("<ActionMaps/>"), "x", true, None, &[]).unwrap_err().contains("refusing"));
+        assert_eq!(fs::read_to_string(&attributes).unwrap(), ATTRS);
+        // No settings file to replace.
+        fs::remove_file(&attributes).unwrap();
+        assert!(replace_live_config(&root, &live, None, Some(ATTRS), "x", true, None, &[]).unwrap_err().contains("not found"));
+        assert!(!attributes.exists());
+        assert!(replace_live_config(&root, &live, None, None, "x", true, None, &[]).is_err());
         assert_eq!(fs::read_to_string(&live).unwrap(), XML);
         assert!(!root.exists(), "no backup for a refused write");
     }

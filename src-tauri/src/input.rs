@@ -17,11 +17,18 @@
 //! The keyboard is a synthetic entry appended to the device list: SC has one
 //! `kb1` and the actual key events are captured in the webview, not here.
 //!
+//! `joy-input` is filtered on purpose (resting zones, the dominant axis of a
+//! stick, a delta threshold, a rate limit). While the frontend has switched
+//! it on (`set_axis_stream`), a second stream, `axis-raw`, carries every
+//! axis of every device unfiltered — what the Config mode and the Axis Test
+//! show a deadzone against.
+//!
 //! The standalone [`enumerate`] path (used by the examples) makes its own
 //! short-lived context and must not run while the app's input thread is alive.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
 use log::{error, info, warn};
 use sdl2::controller::{Axis, Button, GameController};
@@ -29,7 +36,7 @@ use sdl2::event::Event;
 use sdl2::joystick::{HatState, Joystick};
 use sdl2::{GameControllerSubsystem, JoystickSubsystem};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::guid::sdl_guid_to_sc_product;
 use crate::scdata::DeviceKind;
@@ -44,12 +51,14 @@ const AXIS_EMIT_THRESHOLD: i32 = 3000;
 /// centre always goes through, so a rested axis never looks held.
 const AXIS_MIN_INTERVAL_MS: u32 = 20;
 
-/// App-side resting zones around an axis centre (the game's own per-device
-/// deadzones from `<deviceoptions>` are not read yet): a value inside the
-/// zone counts as the centre, so a stick at rest produces no event at all —
-/// nothing pulses, resolves or gets recorded. Joysticks: ~12 % of travel.
-/// Gamepads: Microsoft's XInput constants, rounded —
-/// `XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE` 7849 and
+/// Resting zones around an axis centre: a value inside the zone counts as
+/// the centre, so a stick at rest produces no event at all — nothing pulses,
+/// resolves or gets recorded. A joystick axis and a pad thumb stick take the
+/// deadzone the game has configured for that device and axis
+/// (`<deviceoptions>`, see [`AxisZones`]); these fixed zones are the
+/// fallback where none is configured, and the pad triggers' only zone.
+/// Joysticks: ~12 % of travel. Gamepads: Microsoft's XInput constants,
+/// rounded — `XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE` 7849 and
 /// `XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE` 8689 (~25 %), and
 /// `XINPUT_GAMEPAD_TRIGGER_THRESHOLD` 30 of 255 (~12 %).
 const JOYSTICK_DEADZONE: i16 = 4000;
@@ -79,6 +88,10 @@ const DERIVED_BUTTON_RELEASE: i16 = 24000;
 /// still sends no event of its own.
 const LOOP_TICK_MS: u32 = 25;
 
+/// The raw axis stream (`axis-raw`) sends a device at most this often (ms);
+/// the last value of a burst follows within one [`LOOP_TICK_MS`].
+const RAW_MIN_INTERVAL_MS: u32 = 33;
+
 /// SDL index of the synthetic keyboard entry — far beyond any real device, so
 /// it never collides and always sorts last.
 const KEYBOARD_INDEX: u32 = 10000;
@@ -86,7 +99,7 @@ const KEYBOARD_INDEX: u32 = 10000;
 /// The image-map/hardware key of the one keyboard and the one gamepad SC
 /// knows. Joysticks use their SC Product GUID instead.
 const KEYBOARD_HARDWARE_ID: &str = "keyboard";
-const GAMEPAD_HARDWARE_ID: &str = "gamepad";
+pub(crate) const GAMEPAD_HARDWARE_ID: &str = "gamepad";
 
 /// One hidapi interface behind the device's USB vendor/product (a device can
 /// expose several: joystick, keyboard, vendor-specific …). Device-log only.
@@ -337,6 +350,192 @@ fn apply_deadzone(value: i16, deadzone: i16) -> i16 {
     } else {
         value
     }
+}
+
+/// The game's configured settings of one axis (`<deviceoptions>`), as
+/// stored in the file — a fraction of full travel. Which of the stored and
+/// the displayed value (`stored = display × 0.99` for joysticks) the game
+/// applies is unknown; the stored one is used.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct AxisZone {
+    pub deadzone: Option<f32>,
+    pub saturation: Option<f32>,
+}
+
+/// Hardware id ([`DeviceInfo::hardware_id`]: a joystick's SC Product GUID,
+/// upper case, or `gamepad`) -> SC axis name (`x` … `rotz`, `thumbl` /
+/// `thumbr`) -> its configured zone.
+pub type ZoneMap = HashMap<String, HashMap<String, AxisZone>>;
+
+/// The configured zones, shared with the input thread: written by
+/// `reload_bindings`, read per axis event — never through the `AppData`
+/// lock.
+pub type AxisZones = Arc<RwLock<ZoneMap>>;
+
+/// What the rest of the app hands the input thread without the `AppData`
+/// lock: the configured zones and the raw-stream switch
+/// (`set_axis_stream`).
+#[derive(Clone, Default)]
+pub struct InputControl {
+    pub zones: AxisZones,
+    pub stream: Arc<AtomicBool>,
+}
+
+/// The configured zone of one axis, if any.
+fn configured_zone(zones: &AxisZones, hardware_id: Option<&str>, axis: Option<&str>) -> Option<AxisZone> {
+    let (id, axis) = (hardware_id?, axis?);
+    zones.read().ok()?.get(id)?.get(axis).copied()
+}
+
+/// A fraction of full travel in raw axis units.
+fn travel(fraction: f32) -> i16 {
+    if fraction.is_finite() {
+        (fraction.clamp(0.0, 1.0) * 32767.0).round() as i16
+    } else {
+        0
+    }
+}
+
+/// An axis value with the game's zone applied: the centre inside the
+/// deadzone (the configured one, else `fallback`), full travel (±32767) at
+/// or beyond the configured saturation, the raw value in between — no other
+/// rescaling (whether the game rescales is unknown).
+fn shape_axis(value: i16, zone: Option<AxisZone>, fallback: i16) -> i16 {
+    let deadzone = zone.and_then(|z| z.deadzone).map_or(fallback, travel);
+    let value = apply_deadzone(value, deadzone);
+    match zone.and_then(|z| z.saturation).map(travel) {
+        Some(saturation) if value != 0 && (value as i32).abs() >= saturation as i32 => {
+            if value < 0 {
+                -32767
+            } else {
+                32767
+            }
+        }
+        _ => value,
+    }
+}
+
+/// The game's deadzone input of a pad axis (`thumbl` / `thumbr`); the
+/// triggers have none.
+fn pad_zone_input(axis: Axis) -> Option<&'static str> {
+    match axis {
+        Axis::LeftX | Axis::LeftY => Some("thumbl"),
+        Axis::RightX | Axis::RightY => Some("thumbr"),
+        Axis::TriggerLeft | Axis::TriggerRight => None,
+    }
+}
+
+/// Payload of `axis-raw`: every axis of one device, unfiltered (no resting
+/// zone, no dominance, no delta threshold), for the Config mode and the
+/// Axis Test. A joystick has one value per SDL axis index (`value / 32767`,
+/// −1..1; `DeviceInfo::axes` names them), a gamepad exactly six: left x,
+/// left y, right x, right y (−1..1), trigger left, trigger right (0..1).
+#[derive(Debug, Clone, Serialize)]
+pub struct AxisRaw {
+    pub instance_id: u32,
+    pub guid: String,
+    pub kind: DeviceKind,
+    pub values: Vec<f32>,
+}
+
+/// A raw stick value normalized to −1..1.
+fn norm_axis(value: i16) -> f32 {
+    (value as f32 / 32767.0).clamp(-1.0, 1.0)
+}
+
+/// A pad axis' place in [`AxisRaw::values`] and its normalized value.
+fn pad_raw_value(axis: Axis, value: i16) -> (usize, f32) {
+    match axis {
+        Axis::LeftX => (0, norm_axis(value)),
+        Axis::LeftY => (1, norm_axis(value)),
+        Axis::RightX => (2, norm_axis(value)),
+        Axis::RightY => (3, norm_axis(value)),
+        Axis::TriggerLeft => (4, norm_axis(value).max(0.0)),
+        Axis::TriggerRight => (5, norm_axis(value).max(0.0)),
+    }
+}
+
+/// One device of the raw stream: its latest values and when they last
+/// went out.
+struct RawDevice {
+    guid: String,
+    kind: DeviceKind,
+    values: Vec<f32>,
+    dirty: bool,
+    last_sent: Option<u32>,
+}
+
+/// The raw axis stream's state, per SDL instance id. Empty while the
+/// stream is off.
+#[derive(Default)]
+struct RawStream {
+    devices: HashMap<u32, RawDevice>,
+}
+
+impl RawStream {
+    /// Start over with a full snapshot (`(instance, guid, kind, values)`
+    /// per device): every device is due at once.
+    fn reset(&mut self, snapshot: Vec<(u32, String, DeviceKind, Vec<f32>)>) {
+        self.devices = snapshot
+            .into_iter()
+            .map(|(id, guid, kind, values)| (id, RawDevice { guid, kind, values, dirty: true, last_sent: None }))
+            .collect();
+    }
+
+    /// Record one axis value; a device or index the snapshot does not know
+    /// is ignored.
+    fn set(&mut self, which: u32, index: usize, value: f32) {
+        let Some(d) = self.devices.get_mut(&which) else { return };
+        if let Some(v) = d.values.get_mut(index) {
+            if *v != value {
+                *v = value;
+                d.dirty = true;
+            }
+        }
+    }
+
+    /// The changed devices whose last send is at least
+    /// [`RAW_MIN_INTERVAL_MS`] ago, marked as sent at `now`.
+    fn take_due(&mut self, now: u32) -> Vec<AxisRaw> {
+        let mut out = Vec::new();
+        for (id, d) in &mut self.devices {
+            if d.dirty && d.last_sent.is_none_or(|t| now.wrapping_sub(t) >= RAW_MIN_INTERVAL_MS) {
+                d.dirty = false;
+                d.last_sent = Some(now);
+                out.push(AxisRaw { instance_id: *id, guid: d.guid.clone(), kind: d.kind, values: d.values.clone() });
+            }
+        }
+        out.sort_by_key(|r| r.instance_id);
+        out
+    }
+}
+
+/// Every open device's current axis values as SDL holds them, in the
+/// [`AxisRaw`] layout (a Wine-rule pad translated like its events).
+fn raw_snapshot(opened: &OpenDevices) -> Vec<(u32, String, DeviceKind, Vec<f32>)> {
+    let mut out = Vec::new();
+    for stick in &opened.sticks {
+        let id = stick.instance_id();
+        let Some(info) = opened.infos.iter().find(|d| d.sdl_instance_id == id) else { continue };
+        let values = if let Some(pad) = opened.pads.iter().find(|p| p.instance_id() == id) {
+            [Axis::LeftX, Axis::LeftY, Axis::RightX, Axis::RightY, Axis::TriggerLeft, Axis::TriggerRight]
+                .map(|a| pad_raw_value(a, pad.axis(a)).1)
+                .to_vec()
+        } else if opened.wine_pads.contains(&id) {
+            let mut values = vec![0.0; 6];
+            for i in 0..stick.num_axes().min(6) {
+                if let Some((axis, v)) = stick.axis(i).ok().and_then(|v| wine_pad_axis(i as u8, v)) {
+                    let (slot, v) = pad_raw_value(axis, v);
+                    values[slot] = v;
+                }
+            }
+            values
+        } else {
+            (0..stick.num_axes()).map(|i| stick.axis(i).map_or(0.0, norm_axis)).collect()
+        };
+        out.push((id, info.sdl_guid.clone(), info.kind, values));
+    }
+    out
 }
 
 /// The buttons SC derives from a pad axis, as `(name, travel)`: the axis
@@ -830,17 +1029,25 @@ pub fn enumerate() -> Result<Vec<DeviceInfo>, String> {
     Ok(open_all(&joystick, &controllers, &hid)?.infos)
 }
 
+/// Switch the raw axis stream (`axis-raw`) on or off. On: the input thread
+/// sends a full snapshot of every device, then every change. Off: nothing,
+/// at no cost.
+#[tauri::command]
+pub(crate) fn set_axis_stream(enabled: bool, control: State<InputControl>) {
+    control.stream.store(enabled, Ordering::Relaxed);
+}
+
 /// Spawn the input thread. Returns immediately; the thread runs for the life of
 /// the app.
-pub fn spawn(app: AppHandle, devices: DeviceList) {
+pub fn spawn(app: AppHandle, devices: DeviceList, control: InputControl) {
     std::thread::spawn(move || {
-        if let Err(e) = run(app, devices) {
+        if let Err(e) = run(app, devices, control) {
             error!("input thread stopped: {e}");
         }
     });
 }
 
-fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
+fn run(app: AppHandle, devices: DeviceList, control: InputControl) -> Result<(), String> {
     let sdl = init_sdl()?;
     let joystick = sdl.joystick()?;
     let controllers = sdl.game_controller()?;
@@ -870,14 +1077,34 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
     // (instance_id, derived button) -> SDL ticks since when the axis has been
     // past the threshold without the button being pressed yet
     let mut waiting: HashMap<(u32, &'static str), u32> = HashMap::new();
+    // The raw axis stream: off until the frontend switches it on, then a
+    // full snapshot and from there every change, throttled per device.
+    let mut raw = RawStream::default();
+    let mut streaming = false;
     let timer = sdl.timer()?;
 
     reopen_all(&joystick, &controllers, &mut opened, &mut guids, &app, &devices, true)?;
 
     loop {
+        let now = timer.ticks();
+        // The raw stream: a snapshot when it was just switched on, then
+        // whatever changed and is due — on the tick as well as on events, so
+        // the last value of a burst goes out within one tick.
+        let on = control.stream.load(Ordering::Relaxed);
+        if on != streaming {
+            streaming = on;
+            raw = RawStream::default();
+            if on {
+                raw.reset(raw_snapshot(&opened));
+            }
+        }
+        if streaming {
+            for payload in raw.take_due(now) {
+                let _ = app.emit("axis-raw", &payload);
+            }
+        }
         // Derived buttons whose wait is over press now; a stick held still
         // sends no event, so this runs on the tick as well as on events.
-        let now = timer.ticks();
         let due: Vec<(u32, &'static str)> =
             waiting.iter().filter(|(_, since)| derived_due(**since, now)).map(|(k, _)| *k).collect();
         for key in due {
@@ -917,6 +1144,9 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
                     waiting.clear();
                     hats.clear();
                     reopen_all(&joystick, &controllers, &mut opened, &mut guids, &app, &devices, false)?;
+                    if streaming {
+                        raw.reset(raw_snapshot(&opened));
+                    }
                 }
                 Event::JoyButtonDown { timestamp, which, button_idx, .. } if !opened.pad_instances.contains(&which) => {
                     if let Some(guid) = guids.get(&which) {
@@ -950,12 +1180,16 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
                     }
                 }
                 Event::JoyAxisMotion { timestamp, which, axis_idx, value, .. } if !opened.pad_instances.contains(&which) => {
-                    let value = apply_deadzone(value, JOYSTICK_DEADZONE);
+                    if streaming {
+                        raw.set(which, axis_idx as usize, norm_axis(value));
+                    }
+                    let info = opened.infos.iter().find(|d| d.sdl_instance_id == which);
+                    let zone = info.and_then(|d| {
+                        configured_zone(&control.zones, d.hardware_id.as_deref(), d.axes.get(axis_idx as usize).map(String::as_str))
+                    });
+                    let value = shape_axis(value, zone, JOYSTICK_DEADZONE);
                     raw_axis.insert((which, axis_idx), value);
-                    let partner = opened
-                        .infos
-                        .iter()
-                        .find(|d| d.sdl_instance_id == which)
+                    let partner = info
                         .and_then(|d| joystick_stick_partner(&d.axes, axis_idx))
                         .and_then(|p| raw_axis.get(&(which, p)).copied());
                     if !leads_stick(value, partner) {
@@ -1002,7 +1236,13 @@ fn run(app: AppHandle, devices: DeviceList) -> Result<(), String> {
                 }
                 Event::ControllerAxisMotion { timestamp, which, axis, value } => {
                     let Some(guid) = guids.get(&which).cloned() else { continue };
-                    let value = apply_deadzone(value, pad_axis_deadzone(axis));
+                    if streaming {
+                        let (slot, v) = pad_raw_value(axis, value);
+                        raw.set(which, slot, v);
+                    }
+                    let hardware_id = opened.infos.iter().find(|d| d.sdl_instance_id == which).and_then(|d| d.hardware_id.as_deref());
+                    let zone = configured_zone(&control.zones, hardware_id, pad_zone_input(axis));
+                    let value = shape_axis(value, zone, pad_axis_deadzone(axis));
                     // SC's trigger/thumb-direction "buttons" have no axis, so they
                     // are derived here and reported only when they change.
                     for (name, travel) in derived_pad_buttons(axis, value) {
@@ -1378,5 +1618,102 @@ mod tests {
             json(&axis),
             r#"{"kind":"padaxis","guid":"g","name":"thumblx","value":-900,"timestamp":7,"instance_id":3}"#
         );
+    }
+
+    #[test]
+    fn the_configured_zone_replaces_the_fixed_one_and_saturation_is_full_travel() {
+        let zone = |deadzone: Option<f32>, saturation: Option<f32>| Some(AxisZone { deadzone, saturation });
+        // Nothing configured: the fixed zone, no saturation.
+        assert_eq!(shape_axis(3999, None, JOYSTICK_DEADZONE), 0);
+        assert_eq!(shape_axis(32000, None, JOYSTICK_DEADZONE), 32000);
+        assert_eq!(shape_axis(5000, zone(None, None), JOYSTICK_DEADZONE), 5000);
+        // A stored deadzone of 0.1485 (display 0.15) is 4866 of 32767.
+        assert_eq!(travel(0.1485), 4866);
+        assert_eq!(shape_axis(4865, zone(Some(0.1485), None), JOYSTICK_DEADZONE), 0);
+        assert_eq!(shape_axis(-4866, zone(Some(0.1485), None), JOYSTICK_DEADZONE), -4866);
+        // A configured 0 lets everything through.
+        assert_eq!(shape_axis(1, zone(Some(0.0), None), JOYSTICK_DEADZONE), 1);
+        // Saturation 0.91079998 (display 0.92): at or beyond it full travel,
+        // either way; below it the raw value, not rescaled.
+        assert_eq!(travel(0.9108), 29844);
+        let z = zone(Some(0.1485), Some(0.9108));
+        assert_eq!(shape_axis(29844, z, JOYSTICK_DEADZONE), 32767);
+        assert_eq!(shape_axis(-29844, z, JOYSTICK_DEADZONE), -32767);
+        assert_eq!(shape_axis(-32768, z, JOYSTICK_DEADZONE), -32767);
+        assert_eq!(shape_axis(29843, z, JOYSTICK_DEADZONE), 29843);
+        // The centre stays the centre, whatever the saturation.
+        assert_eq!(shape_axis(0, zone(None, Some(0.0)), JOYSTICK_DEADZONE), 0);
+        assert_eq!(shape_axis(4000, zone(None, Some(0.0)), JOYSTICK_DEADZONE), 32767);
+        // Odd stored values are clamped, never a panic.
+        assert_eq!(travel(1.5), 32767);
+        assert_eq!(travel(-0.2), 0);
+        assert_eq!(travel(f32::NAN), 0);
+    }
+
+    #[test]
+    fn configured_zones_are_found_by_hardware_id_and_sc_axis() {
+        let zones: AxisZones = Arc::default();
+        let stick = "{0201231D-0000-0000-0000-504944564944}";
+        zones.write().unwrap().insert(
+            stick.to_string(),
+            [("rotz".to_string(), AxisZone { deadzone: Some(0.2), saturation: None })].into(),
+        );
+        zones.write().unwrap().insert(GAMEPAD_HARDWARE_ID.to_string(), [("thumbl".to_string(), AxisZone { deadzone: Some(0.5), saturation: None })].into());
+        assert_eq!(configured_zone(&zones, Some(stick), Some("rotz")).unwrap().deadzone, Some(0.2));
+        assert_eq!(configured_zone(&zones, Some(stick), Some("x")), None);
+        assert_eq!(configured_zone(&zones, None, Some("rotz")), None);
+        assert_eq!(configured_zone(&zones, Some(stick), None), None);
+        // A pad stick takes its stick's zone; the triggers have none.
+        assert_eq!(pad_zone_input(Axis::LeftY), Some("thumbl"));
+        assert_eq!(pad_zone_input(Axis::RightX), Some("thumbr"));
+        assert_eq!(pad_zone_input(Axis::TriggerLeft), None);
+        assert!(configured_zone(&zones, Some(GAMEPAD_HARDWARE_ID), pad_zone_input(Axis::LeftX)).is_some());
+        assert!(configured_zone(&zones, Some(GAMEPAD_HARDWARE_ID), pad_zone_input(Axis::RightX)).is_none());
+    }
+
+    #[test]
+    fn raw_values_are_normalized_in_the_contract_layout() {
+        assert_eq!(norm_axis(32767), 1.0);
+        assert_eq!(norm_axis(-32768), -1.0);
+        assert_eq!(norm_axis(0), 0.0);
+        assert_eq!(pad_raw_value(Axis::LeftX, -32767), (0, -1.0));
+        assert_eq!(pad_raw_value(Axis::LeftY, 0).0, 1);
+        assert_eq!(pad_raw_value(Axis::RightX, 0).0, 2);
+        assert_eq!(pad_raw_value(Axis::RightY, 0).0, 3);
+        assert_eq!(pad_raw_value(Axis::TriggerLeft, 32767), (4, 1.0));
+        assert_eq!(pad_raw_value(Axis::TriggerRight, -100), (5, 0.0), "a trigger is 0..1");
+        let json = serde_json::to_string(&AxisRaw { instance_id: 3, guid: "g".into(), kind: DeviceKind::Gamepad, values: vec![0.5, -1.0] }).unwrap();
+        assert_eq!(json, r#"{"instance_id":3,"guid":"g","kind":"gamepad","values":[0.5,-1.0]}"#);
+    }
+
+    #[test]
+    fn the_raw_stream_snapshots_then_sends_changes_at_most_every_33_ms() {
+        let mut raw = RawStream::default();
+        raw.reset(vec![(1, "a".into(), DeviceKind::Joystick, vec![0.0, 0.0]), (2, "b".into(), DeviceKind::Gamepad, vec![0.0; 6])]);
+        // The snapshot: every device at once.
+        let sent = raw.take_due(1000);
+        assert_eq!(sent.iter().map(|r| r.instance_id).collect::<Vec<_>>(), [1, 2]);
+        assert!(raw.take_due(1001).is_empty(), "nothing changed");
+        // A change within the interval waits, the latest value goes out
+        // once it is over.
+        raw.set(1, 0, 0.25);
+        raw.set(1, 0, 0.5);
+        assert!(raw.take_due(1000 + RAW_MIN_INTERVAL_MS - 1).is_empty());
+        let sent = raw.take_due(1000 + RAW_MIN_INTERVAL_MS);
+        assert_eq!(sent.len(), 1);
+        assert_eq!((sent[0].instance_id, sent[0].values.clone()), (1, vec![0.5, 0.0]));
+        // The same value again is no change; unknown devices and axes are
+        // ignored.
+        raw.set(1, 0, 0.5);
+        raw.set(9, 0, 1.0);
+        raw.set(2, 6, 1.0);
+        assert!(raw.take_due(5000).is_empty());
+        // A quiet device sends its next change at once; ticks may wrap.
+        let mut raw = RawStream::default();
+        raw.reset(vec![(1, "a".into(), DeviceKind::Joystick, vec![0.0])]);
+        raw.take_due(u32::MAX - 10);
+        raw.set(1, 0, -1.0);
+        assert!(raw.take_due(u32::MAX).is_empty());
+        assert_eq!(raw.take_due(RAW_MIN_INTERVAL_MS - 11).len(), 1);
     }
 }

@@ -204,7 +204,7 @@ fn attributes(e: &BytesStart) -> HashMap<String, String> {
 
 /// The element's attributes in file order. An attribute the parser cannot
 /// read (unquoted value, duplicate name) is an error, not a silent gap.
-fn attribute_list(e: &BytesStart) -> Result<Vec<(String, String)>, String> {
+pub(crate) fn attribute_list(e: &BytesStart) -> Result<Vec<(String, String)>, String> {
     let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
     e.attributes()
         .map(|attr| {
@@ -218,7 +218,7 @@ fn attribute_list(e: &BytesStart) -> Result<Vec<(String, String)>, String> {
 
 /// Resolve an `@ui_*` key against the localization table. Returns `None` for a
 /// missing/blank key or one that has no entry.
-fn resolve(key: Option<&String>, loc: &HashMap<String, String>) -> Option<String> {
+pub(crate) fn resolve(key: Option<&String>, loc: &HashMap<String, String>) -> Option<String> {
     let key = key.map(|k| k.trim()).filter(|k| !k.is_empty())?;
     let key = key.strip_prefix('@').unwrap_or(key);
     // Case-insensitive: the localization table stores keys lowercased. Some
@@ -281,6 +281,162 @@ pub fn parse_token_labels(xml: &str, loc: &HashMap<String, String>) -> HashMap<S
     }
 
     labels
+}
+
+/// One node of a device kind's option tree (an `<optiongroup>` of
+/// `defaultProfile.xml`): a row of the game's inversion / sensitivity-curve
+/// screens. The `UIShow*` flags are the game's: `1` = the row has that
+/// control, `-1` = a group header without one, `0` (or missing) = not shown.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OptionNode {
+    pub name: String,
+    /// The resolved `UILabel`; `""` when the key does not resolve.
+    pub label: String,
+    pub show_invert: i8,
+    pub show_curve: i8,
+    /// The shipped `invert` attribute.
+    pub default_invert: Option<bool>,
+    /// The shipped `exponent` attribute.
+    pub default_exponent: Option<f32>,
+    /// The shipped `<nonlinearity_curve>` points (`[in, out]`, as listed).
+    pub default_points: Option<Vec<[f32; 2]>>,
+    pub children: Vec<OptionNode>,
+}
+
+/// The option tree of one device kind (`<optiontree type="…">`): the visible
+/// rows only (the children of the node named `inversion`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OptionTree {
+    pub kind: DeviceKind,
+    pub nodes: Vec<OptionNode>,
+}
+
+/// Parse the `<optiontree>` elements of `defaultProfile.xml`, resolving
+/// labels against `loc`. All three trees share the shape `master` ›
+/// `<kind>_curves` › `inversion` › the visible rows. A tree without an
+/// `inversion` node yields the `*_curves` node's children, without either
+/// an empty list. A `<nonlinearity_curve reset="1"/>` carries no points and
+/// is ignored; a tree of an unknown `type` is skipped.
+pub fn parse_option_trees(xml: &str, loc: &HashMap<String, String>) -> Result<Vec<OptionTree>, String> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+
+    let mut trees = Vec::new();
+    // The tree being read: its kind and its top-level groups so far.
+    let mut tree: Option<(DeviceKind, Vec<OptionNode>)> = None;
+    // The open `<optiongroup>` elements, innermost last.
+    let mut stack: Vec<OptionNode> = Vec::new();
+    // The points of the `<nonlinearity_curve>` being read; it belongs to
+    // the innermost open group.
+    let mut curve: Option<Vec<[f32; 2]>> = None;
+
+    loop {
+        match reader.read_event().map_err(|e| format!("XML error: {e}"))? {
+            Event::Start(e) if e.name().as_ref() == b"optiontree" => {
+                tree = option_tree_kind(&e).map(|kind| (kind, Vec::new()));
+                stack.clear();
+                curve = None;
+            }
+            Event::Empty(e) if e.name().as_ref() == b"optiontree" => {
+                if let Some(kind) = option_tree_kind(&e) {
+                    trees.push(finish_tree(kind, Vec::new()));
+                }
+            }
+            Event::End(e) if e.name().as_ref() == b"optiontree" => {
+                if let Some((kind, roots)) = tree.take() {
+                    trees.push(finish_tree(kind, roots));
+                }
+                stack.clear();
+                curve = None;
+            }
+            Event::Start(e) | Event::Empty(e) if curve.is_some() && e.name().as_ref() == b"point" => {
+                let attrs = attributes(&e);
+                let num = |k: &str| attrs.get(k).and_then(|v| v.trim().parse::<f32>().ok()).filter(|v| v.is_finite());
+                if let (Some(input), Some(output), Some(points)) = (num("in"), num("out"), curve.as_mut()) {
+                    points.push([input, output]);
+                }
+            }
+            Event::Start(e) if !stack.is_empty() && e.name().as_ref() == b"nonlinearity_curve" => {
+                curve = Some(Vec::new());
+            }
+            Event::End(e) if e.name().as_ref() == b"nonlinearity_curve" => {
+                if let (Some(points), Some(node)) = (curve.take(), stack.last_mut()) {
+                    if !points.is_empty() {
+                        node.default_points = Some(points);
+                    }
+                }
+            }
+            Event::Start(e) if tree.is_some() && e.name().as_ref() == b"optiongroup" => {
+                stack.push(option_node(&e, loc));
+            }
+            Event::Empty(e) if tree.is_some() && e.name().as_ref() == b"optiongroup" => {
+                let node = option_node(&e, loc);
+                attach_node(node, &mut stack, &mut tree);
+            }
+            Event::End(e) if tree.is_some() && e.name().as_ref() == b"optiongroup" => {
+                if let Some(node) = stack.pop() {
+                    attach_node(node, &mut stack, &mut tree);
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(trees)
+}
+
+fn option_tree_kind(e: &BytesStart) -> Option<DeviceKind> {
+    match attributes(e).get("type").map(String::as_str) {
+        Some("joystick") => Some(DeviceKind::Joystick),
+        Some("keyboard") => Some(DeviceKind::Keyboard),
+        Some("gamepad") => Some(DeviceKind::Gamepad),
+        _ => None,
+    }
+}
+
+fn option_node(e: &BytesStart, loc: &HashMap<String, String>) -> OptionNode {
+    let attrs = attributes(e);
+    let flag = |k: &str| attrs.get(k).and_then(|v| v.trim().parse::<i8>().ok()).unwrap_or(0);
+    OptionNode {
+        name: attrs.get("name").cloned().unwrap_or_default(),
+        label: resolve(attrs.get("UILabel"), loc).unwrap_or_default(),
+        show_invert: flag("UIShowInvert"),
+        show_curve: flag("UIShowCurve"),
+        default_invert: match attrs.get("invert").map(|v| v.trim()) {
+            Some("1") => Some(true),
+            Some("0") => Some(false),
+            _ => None,
+        },
+        default_exponent: attrs.get("exponent").and_then(|v| v.trim().parse::<f32>().ok()).filter(|v| v.is_finite()),
+        default_points: None,
+        children: Vec::new(),
+    }
+}
+
+/// Hang a finished group under the innermost open one, or at the tree's top.
+fn attach_node(node: OptionNode, stack: &mut [OptionNode], tree: &mut Option<(DeviceKind, Vec<OptionNode>)>) {
+    if let Some(parent) = stack.last_mut() {
+        parent.children.push(node);
+    } else if let Some((_, roots)) = tree.as_mut() {
+        roots.push(node);
+    }
+}
+
+/// The first node (pre-order) that `pred` accepts.
+fn find_node<'a>(nodes: &'a [OptionNode], pred: &dyn Fn(&OptionNode) -> bool) -> Option<&'a OptionNode> {
+    nodes.iter().find_map(|n| if pred(n) { Some(n) } else { find_node(&n.children, pred) })
+}
+
+/// Reduce a parsed tree to what the game shows: the rows from below
+/// `inversion`.
+fn finish_tree(kind: DeviceKind, roots: Vec<OptionNode>) -> OptionTree {
+    let curves = find_node(&roots, &|n| n.name.ends_with("_curves"));
+    let nodes = find_node(&roots, &|n| n.name == "inversion")
+        .or(curves)
+        .map(|n| n.children.clone())
+        .unwrap_or_default();
+    OptionTree { kind, nodes }
 }
 
 /// A joystick device as SC's user config knows it: its `jsN` instance number
@@ -617,6 +773,118 @@ mod tests {
 
         assert_eq!(m.actions[1].label, None); // key not in loc
         assert_eq!(m.actions[1].joystick_default.as_deref(), Some("js1_button3"));
+    }
+
+    /// The game's option-tree shape, cut down (comments and CRLF included).
+    const TREES: &str = "<profile>\r\n\
+ <!-- <optiontree type=\"joystick\"><optiongroup name=\"ghost\"/></optiontree> -->\r\n\
+ <optiontree type=\"keyboard\" name=\"root\" UIShowInvert=\"-1\">\r\n\
+  <optiongroup name=\"master\" UILabel=\"@ui_master\" UIShowCurve=\"0\" UIShowInvert=\"0\">\r\n\
+   <optiongroup name=\"mouse_curves\" UILabel=\"@ui_COMasterSensitivityCurvesMouse\" UIShowCurve=\"-1\">\r\n\
+    <optiongroup name=\"inversion\" UILabel=\"@ui_inv\" UIShowInvert=\"-1\">\r\n\
+     <optiongroup name=\"fps\" UILabel=\"@ui_COFPS\" UIShowCurve=\"1\" UIShowInvert=\"-1\">\r\n\
+      <optiongroup name=\"fps_view_pitch\" UILabel=\"@ui_missing\" UIShowCurve=\"1\" UIShowInvert=\"1\"/>\r\n\
+     </optiongroup>\r\n\
+     <optiongroup name=\"aiming\" UIShowCurve=\"-1\" UIShowInvert=\"-1\">\r\n\
+      <optiongroup name=\"weapon_convergence_distance_rel\" invert=\"1\" UIShowCurve=\"0\" UIShowInvert=\"1\"/>\r\n\
+     </optiongroup>\r\n\
+    </optiongroup>\r\n\
+   </optiongroup>\r\n\
+  </optiongroup>\r\n\
+ </optiontree>\r\n\
+ <optiontree type=\"gamepad\" name=\"root\">\r\n\
+  <optiongroup name=\"master\">\r\n\
+   <optiongroup name=\"thumbstick_curves\" UILabel=\"@ui_thumb\">\r\n\
+    <optiongroup name=\"inversion\">\r\n\
+     <optiongroup name=\"fps_view\" UIShowCurve=\"1\" UIShowInvert=\"-1\">\r\n\
+      <nonlinearity_curve>\r\n\
+       <point in=\"0.1\" out=\"0.015\" />\r\n\
+       <point in=\"0.9\" out=\"0.78\" />\r\n\
+       <point in=\"x\" out=\"0.5\" />\r\n\
+      </nonlinearity_curve>\r\n\
+      <optiongroup name=\"fps_view_pitch\" UIShowCurve=\"1\" UIShowInvert=\"1\"/>\r\n\
+     </optiongroup>\r\n\
+    </optiongroup>\r\n\
+   </optiongroup>\r\n\
+  </optiongroup>\r\n\
+ </optiontree>\r\n\
+ <optiontree type=\"joystick\" instances=\"8\" name=\"root\">\r\n\
+  <optiongroup name=\"master\">\r\n\
+   <optiongroup name=\"joystick_curves\" UILabel=\"@ui_joy\">\r\n\
+    <optiongroup name=\"inversion\">\r\n\
+     <optiongroup name=\"flight_view\" exponent=\"2.5\" UIShowCurve=\"1\" UIShowInvert=\"-1\">\r\n\
+      <nonlinearity_curve reset=\"1\" />\r\n\
+      <optiongroup name=\"flight_view_yaw\" UIShowCurve=\"1\" UIShowInvert=\"1\"/>\r\n\
+     </optiongroup>\r\n\
+     <optiongroup name=\"mgv_move\" invert=\"1\" UIShowCurve=\"1\" UIShowInvert=\"1\"/>\r\n\
+    </optiongroup>\r\n\
+   </optiongroup>\r\n\
+  </optiongroup>\r\n\
+ </optiontree>\r\n\
+ <optiontree type=\"wheel\"><optiongroup name=\"x\"/></optiontree>\r\n\
+</profile>\r\n";
+
+    #[test]
+    fn parses_option_trees_down_to_the_visible_rows() {
+        let loc = parse_localization(concat!(
+            "ui_COMasterSensitivityCurvesMouse=Mouse Sensitivity Curves\r\n",
+            "ui_COFPS=On Foot\r\n",
+            "ui_thumb=Thumbstick Sensitivity Curves\r\n",
+            "ui_joy=Joystick Sensitivity Curves\r\n",
+        ));
+        let trees = parse_option_trees(TREES, &loc).unwrap();
+        // The commented tree and the unknown type are not read.
+        assert_eq!(trees.iter().map(|t| t.kind).collect::<Vec<_>>(), vec![DeviceKind::Keyboard, DeviceKind::Gamepad, DeviceKind::Joystick]);
+
+        let kb = &trees[0];
+        assert_eq!(kb.nodes.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), vec!["fps", "aiming"]);
+        let fps = &kb.nodes[0];
+        assert_eq!((fps.label.as_str(), fps.show_curve, fps.show_invert), ("On Foot", 1, -1));
+        assert_eq!(fps.children[0].name, "fps_view_pitch");
+        assert_eq!(fps.children[0].label, "", "an unresolved key is an empty label");
+        let conv = &kb.nodes[1].children[0];
+        assert_eq!((conv.show_curve, conv.show_invert, conv.default_invert), (0, 1, Some(true)));
+        assert_eq!(kb.nodes[1].show_curve, -1);
+
+        let pad = &trees[1];
+        // An unreadable point is skipped, the rest kept as listed.
+        assert_eq!(pad.nodes[0].default_points, Some(vec![[0.1, 0.015], [0.9, 0.78]]));
+        assert_eq!(pad.nodes[0].children[0].default_points, None);
+        assert_eq!(pad.nodes[0].show_invert, -1);
+
+        let joy = &trees[2];
+        let view = &joy.nodes[0];
+        assert_eq!(view.default_exponent, Some(2.5));
+        assert_eq!(view.default_points, None, "reset=1 carries no points");
+        assert_eq!(view.children.len(), 1);
+        assert_eq!(joy.nodes[1].default_invert, Some(true));
+        assert_eq!(joy.nodes[1].show_curve, 1);
+        assert_eq!(joy.nodes[1].default_exponent, None);
+    }
+
+    #[test]
+    fn option_trees_without_the_usual_shape_never_panic() {
+        // No inversion node: the *_curves children.
+        let xml = r#"<p><optiontree type="joystick"><optiongroup name="joystick_curves" UILabel="@t"><optiongroup name="a"/><optiongroup name="b"/></optiongroup></optiontree></p>"#;
+        let trees = parse_option_trees(xml, &HashMap::new()).unwrap();
+        assert_eq!(trees[0].nodes.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
+        // Neither: an empty tree.
+        let xml = r#"<p><optiontree type="gamepad"><optiongroup name="x"><optiongroup name="y"/></optiongroup></optiontree><optiontree type="keyboard"/></p>"#;
+        let trees = parse_option_trees(xml, &HashMap::new()).unwrap();
+        assert_eq!(trees.len(), 2);
+        assert!(trees.iter().all(|t| t.nodes.is_empty()));
+        // Odd flags read as 0; no trees at all is fine.
+        let xml = r#"<p><optiontree type="keyboard"><optiongroup name="m_curves"><optiongroup name="inversion"><optiongroup name="a" UIShowCurve="yes" UIShowInvert=""/></optiongroup></optiongroup></optiontree></p>"#;
+        let a = &parse_option_trees(xml, &HashMap::new()).unwrap()[0].nodes[0];
+        assert_eq!((a.show_curve, a.show_invert), (0, 0));
+        assert!(parse_option_trees("<profile/>", &HashMap::new()).unwrap().is_empty());
+        // Broken XML is an error, every truncation at worst one.
+        assert!(parse_option_trees("<p><optiontree type=\"keyboard\"></p>", &HashMap::new()).is_err());
+        for cut in 0..TREES.len() {
+            if TREES.is_char_boundary(cut) {
+                let _ = parse_option_trees(&TREES[..cut], &HashMap::new());
+            }
+        }
     }
 
     #[test]

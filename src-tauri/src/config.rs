@@ -200,6 +200,12 @@ pub fn actionmaps_path(base_path: &str) -> PathBuf {
         .join("actionmaps.xml")
 }
 
+/// Path to the game's settings file `attributes.xml` (graphics, audio, mouse
+/// and gamepad sensitivity, …), next to the live `actionmaps.xml`.
+pub fn attributes_path(base_path: &str) -> PathBuf {
+    actionmaps_path(base_path).with_file_name("attributes.xml")
+}
+
 /// Path to SC's `Game.log`, written next to `Data.p4k` at each game start. SC
 /// rotates the previous one into `logbackups/`.
 pub fn game_log_path(base_path: &str) -> PathBuf {
@@ -282,6 +288,11 @@ mod tests {
         let c = serde_json::from_str::<Config>(r#"{"active_env":"NOPE"}"#).unwrap().normalize();
         assert_eq!(c.active_env, "LIVE");
         assert!(c.global_ini_override().is_none());
+    }
+
+    #[test]
+    fn attributes_xml_sits_next_to_actionmaps_xml() {
+        assert_eq!(attributes_path("/sc/LIVE"), PathBuf::from("/sc/LIVE/user/client/0/Profiles/default/attributes.xml"));
     }
 
     #[test]

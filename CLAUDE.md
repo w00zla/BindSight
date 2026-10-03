@@ -3,9 +3,11 @@
 Star Citizen binding visualizer and mapper. Answers "what does each button
 do, and where does each action live?" by joining SC's config with live input
 from joysticks, gamepads, keyboard and mouse.
-Secondary: the tools the game lacks — editing bindings without starting it,
-binding profiles, backups, applying a profile or backup per device, comparing
-two binding sets, and fixing the joystick order.
+Secondary: the tools the game lacks — editing bindings and device settings
+(inversion, sensitivity curves, deadzone / saturation, mouse and gamepad
+sensitivity) without starting it, profiles, backups, applying a profile or
+backup per device, comparing two binding or settings sets, and fixing the
+joystick order.
 
 ## Design philosophy (the maintainer's, and the top rule)
 
@@ -29,10 +31,10 @@ user never has to translate between the two.
 
 ## Game-file safety (the second top rule)
 
-The app edits the game's **live** data (`actionmaps.xml`, the profiles
-folder), whose structure and processing can change with any game patch.
-**BACKUP, BACKUP, BACKUPS**: the user must be able to undo any change at
-any time. Concretely:
+The app edits the game's **live** data (`actionmaps.xml`, `attributes.xml`,
+the profiles folder), whose structure and processing can change with any
+game patch. **BACKUP, BACKUP, BACKUPS**: the user must be able to undo any
+change at any time. Concretely:
 
 - **A verified backup before every write** to a live game file; restore is
   byte-exact. Never write without one — except when the user switched
@@ -47,8 +49,9 @@ any time. Concretely:
   touches the disk; writes are atomic (temp file + rename).
 - **Tests and safeguards first**: the highest test coverage goes to
   game-file handling (`rebind.rs`, `resort.rs`, `apply.rs`, `backups.rs`,
-  `binding_profiles.rs`, `diff.rs`, `scdata.rs` parsing, every writing
-  command); every edge case above has a test, added with the change.
+  `binding_profiles.rs`, `diff.rs`, `devconfig.rs`, `scdata.rs` parsing,
+  every writing command); every edge case above has a test, added with the
+  change.
 
 ## Conventions
 
@@ -79,9 +82,10 @@ any time. Concretely:
 `App.vue` is the orchestrator (all state, invokes, listeners) and composes
 presentational components:
 
-- `TopBar` — modes **Monitor / Bindings / Devices**, environment chip +
-  dropdown, version chip, Refresh, gear. It is also the title bar (see the
-  undecorated-window gotcha).
+- `TopBar` — modes **Monitor / Bindings / Config** in one segmented bar,
+  a thin separator, then **Devices** as a button of its own in the same
+  look; environment chip + dropdown, version chip, Refresh, gear. It is
+  also the title bar (see the undecorated-window gotcha).
 - `StartupTile` — covers every mode while the first game-data load after
   start runs, whatever its outcome, and until the startup image-map load
   is done (`endStartup` waits for `mapsReady`, so the maps never pop in
@@ -90,26 +94,114 @@ presentational components:
   `LastInputCard`, `BindingsDeck` (flat rows or one bucket per input, same
   head as the Bindings List).
 - `BindingsView` — the whole Bindings mode. Left: Game Bindings (the live
-  file as the one item "Current"), binding profiles (Save Profile, Import,
-  Export), backups (Create Backup). Right: the **Bindings List** for Current
-  (the game's keybinding screen as a table, one toggleable column per device
-  the file names, categories collapsible, "Set binding" / double-click =
-  rebind dialog editing one input at a time, pending rebinds kept until
+  file as the one item "Current"), `ProfilesPanel`, `BackupsPanel`. Right:
+  the **Bindings List** for Current (the game's keybinding screen as a
+  table, one toggleable column per device the file names, categories
+  collapsible, "Set binding" / double-click = rebind dialog editing one
+  input at a time, pending rebinds kept until
   Save / Discard in the action tile above it, which also holds Resort —
   swap two joystick slots the game ranks now, one swap at a time, either
   Apply to config = `apply_reorder` or the `pp_resortdevices` line in
   `ConsoleCommandDialog` — plus Save Profile / Create Backup) or **Compare**
   (a profile or backup picked on the left, always against Current, every
-  token as a row, the diff chips filter; action tile: Open Folder | Apply
-  (dialog picking the devices to take over) / Delete). Left column and the
-  profiles panel are resizable.
+  token as a row, the diff chips filter; action tile: Apply — "Restore" for
+  a backup — via `ApplyDialog` with the devices the two files bind and a
+  joystick's target slot, then `apply_source` / Delete). Left column and
+  the profiles panel are resizable.
+- `ConfigView` — the whole Config mode: the game's device settings edited
+  without starting it. Left (column and both panel heights resizable,
+  remembered): Devices (kb1, the slotted pad gp1, the joysticks the game
+  sees in its order — one without a slot shows the warning icon and "no
+  joystick order", a log-only one is listed with "no input" and stays
+  configurable, unseen ones are left out), `ProfilesPanel`, `BackupsPanel`.
+  Right, for the picked device: a header tile like the Monitor's device
+  tile (slot chip, info line; Create Backup, the pending count, Discard /
+  Save), then for the keyboard a **Mouse** tile (six rows: label column,
+  slider or `YesNo`, value; a value the files lack shows dimmed — the game
+  screen's default for ADS 100 / Zoom Scaling Yes / 75, 0.00 for
+  acceleration / smoothing, else a dash), for the gamepad **Thumbsticks**
+  (the GamePad Sensitvity row, then one `AxisCard` per stick), for a
+  joystick **Deadzone & Saturation** (one `AxisCard` per `x y z rotx roty
+  rotz`, an orange "no input" badge on a log-only one), then the
+  `OptionTable`. **Edits stay pending** as `ConfigChange`s in order: the
+  working state is the saved one with them applied
+  (`configModel::workingState`, so a reload underneath keeps them on top),
+  Save sends the smallest set that gets there (`diffChanges`, in tree
+  pre-order) via `save_device_config`; leaving the mode or opening Compare
+  asks first (`requestLeave`, part of `App.vue`'s settle chain). A joystick
+  without a slot gets one panel "No joystick order" / "Settings
+  unavailable", no live file one "No bindings"; a slot without an
+  `<options>` element leaves the option table read-only (the backend never
+  creates a slot); without an `attributes.xml` its rows are disabled. Live
+  bars and the curve dialog's dot come from `axis-raw`, held while the mode
+  is mounted (a pad stick = max(|x|, |y|) of its pair). A profile or backup
+  picked on the left replaces the editor with **Compare** (`ConfigCompare`;
+  header: name, file · date or reason · version, Apply / Delete; table
+  Device | Setting (+ group path) | Type | Current | <source>, chips Added /
+  Removed / Changed with counts): computed in the frontend from two
+  `get_device_config` views, keyboard and pad by kind, a joystick by its
+  Product (spelled the same, else the same GUID), the settings-file rows
+  only where both sides have that file. A click on a device returns to
+  editing. Apply offers the current devices the source has a slot for, a
+  joystick's source slot landing on its current one.
+- `OptionTable` — one option tree as the table **Setting | Curve | Invert**
+  ("Inversion & Sensitivity Curves": the game's two views of the tree as
+  two columns, a cell empty where the node has no control): Expand all /
+  Collapse all / Find like the Bindings List, `useTableColumns` +
+  `ColumnHead` without sorting (Invert is the filler), groups collapsible.
+  Curve cell: the exponent slider (sent on release), its number (none for
+  a custom curve), a `CurveThumb` opening the `CurveDialog`, Set Default
+  (only with an own value; without one it keeps its place, invisible, so
+  the cell never shifts) and an amber chip counting the descendants' own
+  curves a change here replaces; Invert cell: `YesNo`, Set Default (same
+  rule), the same chip for inverts. Inherited values are dimmed
+  (`configModel::effectiveCurve`: own › tree default › nearest group ›
+  exponent 1).
+- `CurveDialog` — the game's curve dialog (a `ConfirmDialog`, Cancel /
+  Apply): grid, diagonal, the curve (a point list drawn as a Catmull-Rom
+  spline — how the game smooths is unknown), the live dot. The slider and a
+  number field (comma accepted, clamped and rounded to 0.1 on Enter / blur,
+  "—" while points are shown) set the exponent and drop the points; a click
+  on the grid turns the curve into the game's grid points (in = 0, 0.1 … 1
+  on x^exp) plus the new one; points drag in both directions, the ends
+  stay, none is deleted (the game cannot either), at most 64.
+- `AxisCard` — one axis (joystick axis, pad stick): title = the game's
+  deadzone label minus the words all axes' labels share ("X Axis"; the full
+  label when nothing sensible is left — works for a translated
+  `global.ini`), a live bar with deadzone / saturation laid over raw input
+  and output, the Deadzone (and for a joystick Saturation) slider, and up
+  to two bound-action chips plus "+N"; hovering (or focusing) the chip line
+  opens a small overlay listing every bound action as vertical badges,
+  upwards inside the card. Fixed height.
+- `ApplyDialog` — the Apply dialog of both modes (a `ConfirmDialog`):
+  checkboxes **Bindings** and **Settings** (both on), the caller's device
+  list in the slot, Apply; the caller sends `apply_source`.
+- `ProfilesPanel` / `BackupsPanel` — the left column's **Profiles** (the
+  game's exported layouts; Save Profile in a name dialog, Import, Export)
+  and **Backups** (Create Backup with a description dialog) of both modes;
+  list and busy flag are the caller's `v-model`, so are the pick and what
+  it means.
 - `ImageMapEditor` — the Devices mode (Konva via `vue-konva`, three columns:
   devices + image-maps, canvas, live input + shapes); also hosts Device Info
-  (Device List and Device Events tiles, each with its own Save). The Device
-  List's Save appends what the tile does not show, read fresh from disk
+  (Device List and Device Events tiles, each with its own Save, and the
+  Axis Test). The Device List's Save appends what the tile does not show,
+  read fresh from disk
   (`game_files_report`): the device lines of `Game.log`, the device part of
   `actionmaps.xml` verbatim (`scdata::device_section`) and every bound input
   per device (`scdata::bound_inputs`, numbered runs compacted).
+  `AxisTest` is the diagnostics tile for external testers: they play while
+  the app records in the background (SDL input arrives without focus) and
+  press a marker button — picked Record-style (`recordEdge`, never a
+  derived pad button) — the moment the game reacts. Start / Stop hold the
+  raw stream; each marker press adds an entry (time since Start, per
+  joystick / pad axis the raw value and `axisOutput` with the settings read
+  at Start, the three axes that moved most since the previous marker;
+  newest first, constant height). Save writes the head (`systemLine`, game
+  environment + version), the devices (slot, name, hardware id, SC axis
+  names), `device_config_text` verbatim, the deadzone / saturation each
+  axis was computed with (display -> stored, or the fixed zone) and the
+  entries. It exists to find out which deadzone the game applies and
+  whether it rescales.
   `DeviceImage.vue` is the plain-SVG viewer.
 - Dialogs and widgets: `SettingsDialog` (own-styled checkboxes, WebKitGTK
   would paint GTK's), `ConfirmDialog` (title, optional subtitle, required
@@ -126,6 +218,8 @@ presentational components:
   arrows, scrollbar hidden), `Toasts` (`ok` / `error` / `hint`: green done,
   red broken, blue guidance; a hint is logged as info, every error toast
   goes to the app log), `Icon` (inline stroke SVGs by name — never emoji),
+  `YesNo` (the game's No | Yes toggle, `dim` for a value not set),
+  `CurveThumb` (a curve's shape in a small box, for custom curves),
   `WindowEdges`, `AppFooter` (credits, a `mark` slot before the logo; the
   logo and the link-styled version button open the **App Update dialog**),
   `VersionDialog` (a `ConfirmDialog`: the channel dropdown at the head's
@@ -162,21 +256,33 @@ presentational components:
   `KeyboardEvent.code` -> SC key name, feeds the same handler as
   `joy-input`; also drives mouse capture, armed only while `recording` is
   on), `devices.ts` (`deviceName` / `deviceKey` / `deviceIcon`,
-  `recordEdge`; remembered GUI state is keyed by hardware id, never by
-  SDL's index), `names.ts` (the name rule, see Image-map data model),
-  `colour.ts` (`#rrggbb` / `#rrggbbaa` helpers for the pickers),
+  `recordEdge`, `DERIVED_PAD_BUTTONS`; remembered GUI state is keyed by
+  hardware id, never by SDL's index), `configModel.ts` (the Config mode
+  without GUI: curves and their effective value, the tree helpers, the
+  pending changes applied the way the game applies them — a group's curve
+  wipes the curves below, a group's invert the inverts below — `diffChanges`,
+  the Compare rows; display units throughout), `axisStream.ts`
+  (`holdAxisStream`: every view showing raw axes holds the `axis-raw`
+  stream, `set_axis_stream` follows "anyone holds it"; **the one output
+  rule** `axisOutput` for axis cards, the curve dot and the Axis Test — 0
+  inside the zone, full travel at or beyond saturation, the raw value in
+  between, no rescale; zones are the stored values, display × 0.99 /
+  × 0.899, else input.rs's fixed ones), `names.ts` (the name rule, see
+  Image-map data model), `colour.ts` (`#rrggbb` / `#rrggbbaa` helpers for
+  the pickers),
   `types.ts` (all device/input/binding types), `logging.ts` (console
   forwarding, see Logging), `persist.ts` (`persistedRef`: a ref mirrored
   into localStorage — layout and preferences only, never a filter: a
   filter kept across a restart can match nothing any more, e.g. a device
   filter on a joystick that is gone, and the list shows nothing without a
   hint why).
-- **Tables** (bindings deck, Compare, Bindings List): `tableColumns.ts`
-  (`useTableColumns`: sort state, widths, grid template, localStorage
-  persistence; the column list may be reactive — the Bindings List's device
-  columns come from the file) + `ColumnHead.vue` (sortable headers with an
-  icon per column, resize grips). The last column is the `1fr` filler, the
-  others carry px defaults, every cell truncates with an ellipsis.
+- **Tables** (bindings deck, Compare, Bindings List, option table, settings
+  Compare): `tableColumns.ts` (`useTableColumns`: sort state, widths, grid
+  template, localStorage persistence; the column list may be reactive —
+  the Bindings List's device columns come from the file) + `ColumnHead.vue`
+  (sortable headers with an icon per column, resize grips). The last
+  column is the `1fr` filler, the others carry px defaults, every cell
+  truncates with an ellipsis.
 - Styles: `src/styles/tokens.css` (the only place colours are defined),
   `base.css`, `fonts.css` (fonts bundled under `src/assets/fonts/`, OFL).
   The name is two-tone: BIND in `--text`, SIGHT in `--accent`.
@@ -211,12 +317,28 @@ presentational components:
   key order (XInput user 0) on Linux; further pads get `gamepad_slot:
   None`.
   The keyboard is one synthetic entry appended last (`sdl_guid` `keyboard`).
-  **Axis rules, all here so every consumer sees one stream**: a fixed
-  resting zone per axis (joysticks 4000, pad sticks 8000, pad triggers
-  4000; the game's `<deviceoptions>` deadzones are a 1.0 goal), a delta
+  **Axis rules, all here so every consumer of `joy-input` sees one
+  stream**: a resting zone per axis — a joystick axis and a pad stick take
+  the game's configured deadzone of that device and axis (the **stored**
+  `<deviceoptions>` value × 32767; which of stored and displayed the game
+  applies is unverified), the fixed zones are the fallback where none is
+  configured and the triggers' only zone (joysticks 4000, pad sticks 8000,
+  pad triggers 4000) — and at or beyond a configured saturation the value
+  is forwarded as full travel, no other rescaling (`shape_axis`); a delta
   filter plus at most one event per axis per 20 ms (the centre always
   passes), and of a stick's two axes (pad sticks, joystick `x`/`y`) only
-  the further deflected one is forwarded. **Derived pad buttons**
+  the further deflected one is forwarded. The configured zones arrive as
+  `InputControl::zones` (`AxisZones`, an `Arc<RwLock<ZoneMap>>`: hardware
+  id -> SC axis -> stored deadzone / saturation, written by
+  `reload_bindings` from `devconfig::axis_zones`), read per axis event —
+  never through the `AppData` lock. **`axis-raw`**: a second, unfiltered
+  stream (`AxisRaw`: SDL instance id + GUID, kind, `values` — a joystick
+  one per SDL axis index, `value / 32767`; a gamepad, Wine-rule pads
+  translated, exactly six: left x, left y, right x, right y in −1..1,
+  triggers 0..1), only while `set_axis_stream` has switched
+  `InputControl::stream` on: a full snapshot on switching on (and on
+  hot-plug), then each changed device at most every 33 ms, the last value
+  of a burst within one loop tick; no cost while off. **Derived pad buttons**
   (`triggerl_btn`, `thumbl_left` …, `triggerl_r_btn` = both triggers) press
   once the axis is past 30000 — a trigger at once, like a shoulder button,
   a stick direction only after 500 ms there (the stick is an axis first) —
@@ -316,16 +438,17 @@ presentational components:
   and `ScState::invalid_install` keeps `reload_bindings` from reading
   anything). Version from `build_manifest.id` (`ScVersion`, label
   `<branch minus sc-alpha->.<P4 changelist>`, e.g. `4.10.0-hotfix.12572603`).
-  Game data (`ScData`: action master list + token labels): the three files
-  read straight out of `Data.p4k` (`p4k.rs` + `cryxml.rs`, `P4K_FILES`,
+  Game data (`ScData`: action master list, token labels, the option trees
+  and `ConfigLabels`, the labels of the settings outside them): the three
+  files read straight out of `Data.p4k` (`p4k.rs` + `cryxml.rs`, `P4K_FILES`,
   ~150 ms), `scdata::parse_*` (unlabeled actions dropped), cached as JSON
   under `<app_cache_dir>/cache/<label>/` (`lib.rs::sc_cache_root`; on Windows
   LocalAppData also holds the logs and the WebView2 profile, so the version
   folders keep their own `cache` folder — Linux uses the same layout).
   `scdata.json`
-  carries a `format` stamp (`CACHE_FORMAT`): bump it whenever the cached
-  shape changes meaning, the cache is then re-extracted once. Loaded in a
-  background thread at start and on environment change
+  carries a `format` stamp (`CACHE_FORMAT`, currently 7): bump it whenever
+  the cached shape changes meaning, the cache is then re-extracted once.
+  Loaded in a background thread at start and on environment change
   (`lib.rs::spawn_sc_load`; an active `global.ini` override bypasses the
   cache): steps via `scdata-progress` (`LOAD_STEPS` = 4), result via
   `scdata-changed`.
@@ -350,6 +473,14 @@ presentational components:
   under `kb1_` too, see `Action.mouse_default`), and the user's
   `actionmaps.xml` (rebinds + `<options>` device map). `DeviceKind` and
   `parse_rebind` (prefix -> kind; kb/gp tokens keep their `+` modifiers).
+  `parse_option_trees`: the `<optiontree type>` per kind of
+  `defaultProfile.xml` as `OptionTree` (`nodes` = the children of the
+  node named `inversion`, the visible rows) of `OptionNode`s (name, resolved
+  `UILabel`, the `UIShowInvert` / `UIShowCurve` flags — `1` control, `-1`
+  group header, `0` / missing none; `UIShowSensitivity` is not read — and
+  the shipped `invert` / `exponent` / `<nonlinearity_curve>` points,
+  `reset="1"` ignored); a tree without `inversion` yields the `*_curves`
+  children, without either nothing; never panics.
 - `bindings.rs` — `BindingIndex` (token -> bound actions, all device kinds,
   defaults per kind with a per-kind "touched" rule), `button_token` /
   `hat_token` (+1 offset), `instance_for_guid` (the saved `<options>` slot,
@@ -359,14 +490,16 @@ presentational components:
   change; an empty order is an order, every saved slot then "missing"),
   `plan_resort` / `resort_commands`.
   A joystick SDL lists that the order lacks is `unseen`: the GUI drops it
-  from Monitor, deck and image-map list without a word — only the Device
-  List (`game` row) and the clash line in the app log name it. The reverse
+  from Monitor, deck, image-map list and the Config mode's device list
+  without a word — only the Device List (`game` row) and the clash line in
+  the app log name it. The reverse
   — a joystick the order lists that SDL lacks (e.g. one on SDL's joystick
   blacklist that Wine reaches through hidraw, the Keychron Link dongle) —
   is a `LogOnlyJoystick` in the frontend (`App.vue`): a Monitor tile
   without input ("input handling not supported"), a dim "(no input)" note
-  on its Bindings List column, and the `game` row of its hid-only entry in
-  the Device List.
+  on its Bindings List column, a Config mode device with "no input" (no
+  live bar, still configurable), and the `game` row of its hid-only entry
+  in the Device List.
 - `diff.rs` — compares the joystick bindings of two sources (live file,
   binding profile, or backup) by SC token: the `(actionmap, action)` set per
   token in A vs B (label-only differences are not changes); added / removed /
@@ -376,15 +509,22 @@ presentational components:
 
 - `gamefile.rs` — the one road every live-file write takes:
   `write_atomic` (temp file next to the target, `sync_all`, rename, read-back
-  compare) and `replace_live_file` (new text must parse, verified backup
-  first unless the user switched auto-backups off, then the atomic write).
-  Used by `save_rebinds`, `apply_resort`, `apply.rs`, `backups.rs` (copy +
-  restore), `binding_profiles.rs` (save / export) and `write_text_file`.
+  compare), `replace_live_file` (new text must parse, verified backup
+  first unless the user switched auto-backups off, then the atomic write)
+  and `replace_live_config` (the same for `actionmaps.xml` and / or the
+  `attributes.xml` next to it: each new text must parse as its kind of
+  file, **one** backup of both, then the writes, `actionmaps.xml` first; a
+  failed second write says what is already written). `replace_live_file`:
+  `save_rebinds`, the order fix and Resort; `replace_live_config`:
+  `save_device_config`, `apply_source`; `write_atomic` also serves
+  `backups.rs` (the copies), `binding_profiles.rs` (save / export) and
+  `write_text_file`.
 - `xmltext.rs` — helpers for the textual editors: `mask_markup` (a copy of
   the text with comments, CDATA and processing instructions blanked, same
   byte offsets — every search runs on the mask, every edit on the
   original), `tag_end` (quote-aware), `find_attr` / `attr` / `set_attr`
-  (double or single quotes, whitespace around `=`).
+  (double or single quotes, whitespace around `=`), `remove_attr` (with
+  the whitespace before it) / `insert_attr` (after the last attribute).
 - `rebind.rs` — textual `actionmaps.xml` rewrite writing rebinds (one
   binding per action and device kind, like SC: every `<rebind>` of that kind
   under the action is replaced, the first one keeping its other attributes
@@ -417,29 +557,123 @@ presentational components:
   assigned order: afterwards the saved set is the attached one, the game
   follows the file whatever its rule for a set change is, and the clash is
   gone; Resort in the Bindings mode (`apply_reorder`) is the bare command.
-- `apply.rs` — applies a profile or backup to the live file per device
-  (`plan_apply`: the source's rebinds for the chosen `kb1` / `gp1` / `jsN`
-  are written, live rebinds the source lacks are removed via an empty
-  `RebindChange::input`, the source's rebind attributes carried along,
-  everything else stays), backup "before apply"; a backup with every device
-  chosen is restored byte for byte.
+- `apply.rs` — `apply_source(source, devices, bindings, settings)`, the
+  one entry point of both modes' Apply dialog (`plan_source` the pure part,
+  nothing written there): **bindings** = `plan_apply` (the source's rebinds
+  for the chosen `kb1` / `gp1` / `jsN` are written, live rebinds the source
+  lacks are removed via an empty `RebindChange::input`, the source's rebind
+  attributes carried along; `DeviceSel.target` lands a source joystick on
+  another live slot, each slot taken once); **settings** =
+  `devconfig::apply_settings` for the same source -> target pairs, plus,
+  only from a backup holding an `attributes.xml`, `copy_attributes` for the
+  chosen devices' managed names (one the backup lacks is removed live; a
+  profile or an older backup leaves the live game settings alone, a backup
+  with them and no live file is refused). Everything else stays. A backup
+  with both ticked and `every_device_chosen` (each device on its own slot:
+  kb1 and gp1 always, every `jsN` a rebind — a blank one too — or an
+  `<options>` element of either file names) is put back **byte for byte**,
+  plus its managed game settings — never the whole `attributes.xml`. One
+  backup of both files first (`replace_live_config`, reason "before
+  restore" for the byte-exact case, else "before apply"), then
+  `reload_bindings`.
 - `binding_profiles.rs` — SC's exported keybinding layouts
   (`controls/mappings/*.xml`, same content as `actionmaps.xml`, different
   root): list / import / export / delete, and "Save Profile" writes the
   live file in that layout (`to_profile_xml`, textual, in-game import
   unverified).
-- `backups.rs` — backups of the live `actionmaps.xml`, one folder per backup
-  (`meta.json` with reason + game version, `actionmaps.xml`) under
-  `<app_data_dir>/backups/<id>/`, id = `YYYYMMDD-HHMMSS` (UTC) with a `-2`,
-  `-3`, … suffix on collision (folders are created, not checked, so
-  concurrent backups cannot collide). Taken manually (Create Backup asks
+- `backups.rs` — backups of the live files, one folder per backup
+  (`meta.json` with reason + game version, `actionmaps.xml`, and
+  `attributes.xml` when the live one exists — older backups have none and
+  keep working) under `<app_data_dir>/backups/<id>/`, id =
+  `YYYYMMDD-HHMMSS` (UTC) with a `-2`, `-3`, … suffix on collision
+  (folders are created, not checked, so concurrent backups cannot
+  collide). Taken manually (Create Backup asks
   for a description in a dialog, "manual" by default) and, always, before
-  every write to the live file (rebind, apply, order fix, restore); a
-  backup counts only once its copy compares byte for byte with the source,
-  a restore refuses a backup that no longer parses. `Config::auto_backup`
-  (default on) gates the backups before a write and before a restore —
-  the one exception to the safety rule, the user's explicit choice: the
-  Settings checkbox asks with a warning before it goes off.
+  every write to the live files (rebind, apply, restore, order fix, device
+  settings); a backup counts only once every copy compares byte for byte
+  with its source, so the user can also copy them back by hand. Applying
+  or restoring a backup is `apply_source` (`apply.rs`), which refuses one
+  that no longer parses. `Config::auto_backup` (default on) gates the
+  backups before every write, a restore included — the one exception to
+  the safety rule, the user's explicit choice: the Settings checkbox asks
+  with a warning before it goes off.
+
+### Device settings
+
+- `devconfig.rs` — the game's settings screens out of game: inversion,
+  sensitivity curves, deadzone / saturation, mouse and gamepad
+  sensitivity, in `actionmaps.xml` and `attributes.xml` (the game facts:
+  see the device-settings gotchas). **Reading**: `parse_device_config`
+  (root `<ActionMaps>`, live file and profiles alike, never panics) yields
+  the stored model `DeviceConfig` — every `<options type instance
+  [Product]>` with its node children (attributes in file order, the
+  `<nonlinearity_curve>` points — a curve element without points is no
+  custom curve —, a count of other content in the node and in its curve
+  so an element holding a comment never counts as empty) and every `<deviceoptions
+  name>` (the raw Product string, `Controller (Gamepad)`, `Mouse`) with its
+  `<option input …>` entries, raw texts throughout; `parse_attributes`
+  reads `<Attributes><Attr name value/>`. `view` turns both into the
+  `DeviceConfigView` in display units (rounded to the GUI step, exponents
+  to two decimals to drop the game's float noise; of duplicate `<option>`s
+  the last wins — an assumption; the mouse's `<deviceoptions>` becomes
+  part of `MouseView`; `has_attributes` false for a profile or a backup
+  without the file). `config_labels` resolves the rows outside the trees
+  (`ui_DeadzoneJoystick<Input>`, `ui_SaturationJoystick<Input>`,
+  `ui_DeadzoneXI<Input>`, `ui_GamePadSensitivity`, `pause_OptionsMouse*`)
+  against `global.ini`, the game's English label as fallback; cached with
+  `ScData`. **Writing** is textual like `rebind.rs` (`xmltext` plus
+  `rebind`'s layout helpers), untouched bytes stay: `apply_config` takes
+  the `actionmaps.xml` part of a `ConfigChange` list (display units:
+  `Curve` exponent / points / `Default`, `Invert` on / off / `None` = Set
+  Default, `Deadzone`, `Saturation`, `MouseAcceleration`,
+  `MouseSmoothing`); `plan` validates each against the trees and the file
+  as it stands and breaks it into edits. **Group wipe**: a curve (not
+  `Default`) on a node with children also clears every descendant's curve,
+  an invert set on one every descendant's invert; Set Default removes only
+  the node's own value. A node element left empty goes, the `<options>`
+  element stays (self-closing when empty); a curve replaced or removed
+  loses only its `<point>`s, a comment in it stays in place (a removed
+  curve holding one keeps its element); a new child lands at its
+  tree-order (pre-order) position, `invert` before `exponent`, points
+  sorted by `in`; a slot the file lacks is refused, never created.
+  `<deviceoptions>`: every duplicate `<option>` gets the new value, a new
+  one is appended last, a missing element is created after the last
+  `<deviceoptions>` (else before the first `<options>`). Validation: node
+  names from the kind's tree, a set value only where its control is shown
+  (flag 1); inputs from the fixed lists (`JOYSTICK_AXES`, `GAMEPAD_AXES`;
+  the pad has no saturation, the mouse no deadzone); exponent 0.1 – 3.0
+  rounded to 0.1, 2 – 64 points in 0..1 incl. 0/0 and 1/1, 0..1 values in
+  0.01 steps; the device must be in the file, `Controller (Gamepad)` or a
+  joystick `<options>` Product; nothing that needs escaping. Display ->
+  stored by the `*_SCALE` factors and `ManagedAttribute::stored`, written
+  `%.8g` of the `f32` into `actionmaps.xml` (`format_actionmaps_float`:
+  `0.69999999`, `0.13860001`, `3`) and `%g` into `attributes.xml`
+  (`format_attributes_float`: `8.88889`, `40`). Every rewrite is re-parsed
+  and must equal the parsed original with the edits applied to its model,
+  rebinds and joystick map untouched (`check_rewrite`). `apply_attributes`
+  patches only the managed names (`MouseSensitivity`,
+  `ADSMouseSensitivity`, `ZoomSensitivityMultiplierToggle`,
+  `ZoomSensitivityMultiplier`, `Sensitivity`): every duplicate updated, a
+  missing one inserted at its sorted position, checked the same way.
+  **Apply**: `apply_settings` makes the live file hold a source's settings
+  per `SlotPair` (source slot -> target slot): the `<options>` children
+  exactly the source slot's (source values taken as stored, validated as
+  plain numbers; live ones it lacks removed) and the `<deviceoptions>`
+  values exactly the source device's (joystick: the Product of each side's
+  slot; pad and mouse: their fixed names; live values the source lacks
+  removed — unlike the game's import, which merges; values outside the
+  kind's inputs stay); `copy_attributes` does the same for a backup's
+  managed attributes (`managed_attributes`: the mouse's four for kb1, the
+  sensitivity for gp1). `axis_zones` feeds the input thread (stored values
+  by hardware id, `hardware_id_of`); `config_text` is the Axis Test
+  report's settings part (every `<deviceoptions>` / `<options>` element and
+  the managed `<Attr>` lines verbatim). Commands: `get_option_trees`,
+  `get_config_labels`, `get_device_config(source)` (`Current` the live
+  files, a profile its file only, a backup its copies; an unreadable
+  `attributes.xml` only drops its values, logged), `save_device_config`
+  (`apply_config` / `apply_attributes`, `replace_live_config` with reason
+  "before config", `reload_bindings`; an attribute change without a live
+  `attributes.xml` is refused), `device_config_text`.
 
 ### App state, config, image-maps
 
@@ -483,23 +717,31 @@ presentational components:
   reduced to the joysticks attached now against the file's `<options>`,
   re-taken by `refresh_device_order` on every clash report, reload and log
   change) + that Game.log snapshot + the attached joysticks as of the last
-  report, the last logged clash summary and order line, and the stamp
-  (mtime + length) of the `actionmaps.xml` last read. **`spawn_actionmaps_watch`** polls that stamp
+  report, the last logged clash summary and order line, the stamps
+  (mtime + length) of the `actionmaps.xml` and `attributes.xml` last read,
+  and `axis_zones` (a clone of the input thread's `AxisZones`).
+  `reload_bindings` also hands the input thread the configured zones
+  (`devconfig::axis_zones` of the file, empty = the fixed zones without a
+  readable one) through a short write lock on that `RwLock`; the input
+  thread gets the zones and the raw-stream flag as managed `InputControl`,
+  never via `AppData`. **`spawn_actionmaps_watch`** polls both stamps
   every 2 s (under the lock, a metadata call) and, once a changed stamp held
   still for one more poll, runs `reload_bindings` and emits
-  `bindings-changed` (payload the `LoadStatus`; the frontend takes it like a
-  Refresh and toasts a hint) — the game's console commands and its
-  keybinding screen land in the GUI without a Refresh. The app's own writes
-  end in `reload_bindings`, which records the stamp, so they never come
+  `bindings-changed` (payload the `LoadStatus`; `settings-changed` when
+  only `attributes.xml` changed; the frontend takes either like a Refresh
+  and toasts a hint) — the game's console commands, its
+  keybinding and options screens land in the GUI without a Refresh (a
+  missing `attributes.xml` is a state, no stamp). The app's own writes
+  end in `reload_bindings`, which records both stamps, so they never come
   back as a change; idle until the first load and while the environment is
   invalid.
   **Nothing slow under the `AppData` lock**: `resolve_input` runs per input
   event on the main thread and needs it; the order costs nothing there
   (`order::assign` over snapshots — no enumeration; the hidapi scan for the
-  attached set runs in the report commands before they take the lock), and
-  the log is read only by the watch thread without the lock; the write
-  commands hold it for their backup + write + reload on purpose (user
-  actions, consistency). `get_load_status` hands the last load outcome to
+  attached set runs in the report commands before they take the lock), the
+  input thread's zones never need it, and the log is read only by the
+  watch thread without the lock; the write commands hold it for their
+  backup + write + reload on purpose (user actions, consistency). `get_load_status` hands the last load outcome to
   a frontend that mounts after the first load already finished;
   `system_info` (app version, OS, toolkit versions, `updater`: this
   install updates itself, see Releases) feeds the Device Info
@@ -768,8 +1010,8 @@ on Windows; delete it to force a re-extract.
   / `wineorder.rs`) is diagnostics only, and SDL's order is nothing (its
   Windows backend even prepends). No usable `Game.log` = no order: the
   joysticks show "no joystick order" and resolve nothing (no live fallback).
-  The Monitor, the deck and the Bindings List's column names follow the
-  assigned order.
+  The Monitor, the deck, the Bindings List's column names and the Config
+  mode's device slots follow the assigned order.
 - **`pp_resortdevices` logs 0-based slots**: `pp_resortdevices joystick 2 3`
   writes `N actions moved from js1 to js2` into `Game.log` (the same quirk
   as `Connected joystick0` = `js1`). The arguments are 1-based `jsN`. A
@@ -816,6 +1058,47 @@ on Windows; delete it to force a re-extract.
   twist = `rotz`, SDL 2 = `z`. `hid.rs` derives it and cross-checks the
   count against SDL; anything it cannot place is an `axes_error`, never a
   guess.
+- **Device settings: one option tree, two game views** (game files and
+  in-game tests, SC 4.10, 2026-10-03): "Inversion Settings" and "…
+  Sensitivity Curves" are the same `<optiontree>` per kind, its visible
+  rows the children of the node `inversion`; BindSight shows one table.
+  **Groups inherit**: a group's curve shows on its children, and
+  **changing a group's curve removes every descendant's own curve**
+  (`exponent` and `<nonlinearity_curve>`; their `invert` stays, an emptied
+  element goes); a child set after the group keeps both. Inversion has no
+  group settings except `mining`, whose toggle likewise removes the
+  descendants' own `invert`. A curve is **either** an `exponent` (row
+  slider and dialog slider are one value, 0.1 – 3.0 in 0.1 steps) **or** a
+  custom point list: the slider drops the points; points can be added and
+  moved (in x too, not necessarily monotonic) but never deleted in the
+  game, are written sorted by `in` incl. 0/0 and 1/1, and the game smooths
+  them into a curve (how is unknown). The `<options>` children are written
+  in tree order, only deviations stored.
+- **Device settings: stored ≠ displayed**: joystick deadzone / saturation
+  stored = display × 0.99 (0.15 -> `0.1485`, 0.92 -> `0.91079998`; no
+  saturation = 1.00), pad deadzone × 0.899 (0.65 -> `0.58434999`), mouse
+  acceleration × 0.1, smoothing × 0.9 — stored in a `saturation`
+  attribute, under the literal inputs `@pause_OptionsMouseAcceleration` /
+  `@pause_OptionsMouseSmoothing` of `<deviceoptions name="Mouse">`; Mouse
+  Sensitivity stored = 5 + (display − 1) × 35/99 (12 -> `8.88889`), ADS /
+  Zoom Scaling % = display / 100. A missing deadzone has an unknown game
+  default: not set, never invented. The joystick axes `x y z rotx roty
+  rotz` and the pad's `thumbl` / `thumbr` are not in the game data. **The
+  mouse is split across two files**: acceleration / smoothing in
+  `actionmaps.xml`, sensitivity, ADS and zoom scaling (and the pad's
+  "GamePad Sensitvity", sic) in `attributes.xml`, which holds **every**
+  game setting (graphics, audio, …; sorted by name, an entry appears once
+  changed) — only the managed names are touched, it is never restored
+  whole. The game **appends duplicate `<option>` entries** and later
+  rewrites them all; which one it reads is unknown. Mouse acceleration /
+  smoothing **read back as 0.00 after a game restart** (a game bug); they
+  are written anyway. The game's own profile import **merges**
+  `<deviceoptions>` by Product and practically ignores `<options>`;
+  BindSight's Apply deliberately replaces both per device. **Unverified**:
+  whether the game applies the stored or the displayed deadzone, and
+  whether it rescales the travel between deadzone and saturation — the
+  Monitor uses the stored value without rescaling; the Axis Test exists to
+  find out.
 - **The window is undecorated** (`decorations: false`): the top bar is the
   title bar (`data-tauri-drag-region`, double-click toggles maximize) with
   its own minimize / maximize / close buttons; `WindowEdges.vue` draws the

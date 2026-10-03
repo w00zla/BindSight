@@ -87,6 +87,18 @@ export type JoyInput =
   | (JoyInputBase & { kind: "padaxis"; name: string; value: number })
   | (JoyInputBase & { kind: "key"; name: string; pressed: boolean });
 
+// Payload of `axis-raw` (sent only while `set_axis_stream` is on): a
+// device's unfiltered axes, normalized. A joystick: one value per SDL axis
+// index, -1..1 (`DeviceInfo::axes` names them). A gamepad: exactly six —
+// left x, left y, right x, right y (-1..1), trigger left, trigger right
+// (0..1).
+export interface AxisRaw {
+  instance_id: number;
+  guid: string;
+  kind: DeviceKind;
+  values: number[];
+}
+
 // A JoyInput as kept in the Device Info view, with the wall-clock time it
 // arrived and the SC token it stood for then (null when SC cannot bind it).
 // `id` is a running number, the stable key of a log line.
@@ -126,7 +138,7 @@ export interface SystemInfo {
 export type ToastType = "ok" | "error" | "warn" | "hint";
 
 // Top-level GUI mode.
-export type Mode = "monitor" | "bindings" | "devices";
+export type Mode = "monitor" | "bindings" | "config" | "devices";
 
 // SC channels, in GUI order; the config always holds all of them.
 export const ENVIRONMENTS = ["LIVE", "HOTFIX", "PTU", "EPTU"] as const;
@@ -357,7 +369,7 @@ export interface CurrentInput {
   in_imagemap: boolean | null;
 }
 
-// --- Bindings mode: binding profiles, backups, compare ----------------------
+// --- Bindings and Config mode: profiles, backups, compare -------------------
 
 // One exported SC keybinding layout in the binding profiles folder.
 export interface BindingProfileSummary {
@@ -368,7 +380,8 @@ export interface BindingProfileSummary {
   modified: number;
 }
 
-// One saved copy of actionmaps.xml under the app data dir.
+// One backup under the app data dir: actionmaps.xml, plus attributes.xml
+// where the live one existed.
 export interface BackupSummary {
   id: string;
   // Unix seconds.
@@ -448,12 +461,123 @@ export interface DiffReport {
 }
 
 // One device to take over when applying a profile or backup (apply.rs); a
-// joystick's bindings can land on another slot (`target`).
+// joystick's bindings and settings can land on another slot (`target`).
 export interface DeviceSel {
   kind: DeviceKind;
   instance: number;
   target?: number;
 }
+
+// --- Config mode: device settings (devconfig.rs) ------------------------------
+
+// One node of the game's option tree (defaultProfile.xml `<optiongroup>`).
+// `show_invert` / `show_curve`: 1 = the node has that control, -1 = a group
+// header without one, 0 = not shown.
+export interface OptionNode {
+  name: string;
+  // "" when the game has no label for it.
+  label: string;
+  show_invert: number;
+  show_curve: number;
+  default_invert: boolean | null;
+  default_exponent: number | null;
+  default_points: [number, number][] | null;
+  children: OptionNode[];
+}
+
+// One option tree per device kind; `nodes` are the visible roots.
+export interface OptionTree {
+  kind: DeviceKind;
+  nodes: OptionNode[];
+}
+
+// A node's own values in the file; a curve is an exponent or a point list.
+export interface NodeValue {
+  invert: boolean | null;
+  exponent: number | null;
+  points: [number, number][] | null;
+}
+
+// One `<options type instance>` element of the file.
+export interface OptionsBlock {
+  kind: DeviceKind;
+  instance: number;
+  // The raw Product attribute, byte for byte.
+  product: string | null;
+  values: Record<string, NodeValue>;
+}
+
+// Deadzone / saturation of one input, in the game's display units.
+export interface AxisOptionView {
+  input: string;
+  deadzone: number | null;
+  saturation: number | null;
+}
+
+// One `<deviceoptions>` element: a joystick's raw Product, "Controller
+// (Gamepad)" or "Mouse".
+export interface DeviceOptionsView {
+  name: string;
+  axes: AxisOptionView[];
+}
+
+// The mouse settings, display units; null = not set.
+export interface MouseView {
+  sensitivity: number | null;
+  ads_percent: number | null;
+  zoom_scaling_enabled: boolean | null;
+  zoom_scaling_percent: number | null;
+  acceleration: number | null;
+  smoothing: number | null;
+}
+
+// The device settings of one source (`get_device_config`).
+export interface DeviceConfigView {
+  options: OptionsBlock[];
+  device_options: DeviceOptionsView[];
+  mouse: MouseView;
+  gamepad_sensitivity: number | null;
+  // The game's settings file was read (false for profiles and old backups).
+  has_attributes: boolean;
+}
+
+// The game's labels for the rows that are not in the option tree.
+export interface ConfigLabels {
+  joystick_deadzone: Record<string, string>;
+  joystick_saturation: Record<string, string>;
+  gamepad_deadzone: Record<string, string>;
+  gamepad_sensitivity: string;
+  mouse_sensitivity: string;
+  mouse_ads_percent: string;
+  mouse_zoom_scaling_enabled: string;
+  mouse_zoom_scaling_percent: string;
+  mouse_acceleration: string;
+  mouse_smoothing: string;
+}
+
+export type CurveValue =
+  | { kind: "exponent"; value: number }
+  | { kind: "points"; points: [number, number][] }
+  | { kind: "default" };
+
+// The settings kept in the game's settings file.
+export type ManagedAttribute =
+  | "mouse_sensitivity"
+  | "ads_percent"
+  | "zoom_scaling_enabled"
+  | "zoom_scaling_percent"
+  | "gamepad_sensitivity";
+
+// One settings change to write (`save_device_config`); values in display
+// units. `Invert` with null = Set Default.
+export type ConfigChange =
+  | { type: "curve"; kind: DeviceKind; instance: number; node: string; value: CurveValue }
+  | { type: "invert"; kind: DeviceKind; instance: number; node: string; value: boolean | null }
+  | { type: "deadzone"; device: string; input: string; value: number }
+  | { type: "saturation"; device: string; input: string; value: number }
+  | { type: "mouse_acceleration"; value: number }
+  | { type: "mouse_smoothing"; value: number }
+  | { type: "attribute"; setting: ManagedAttribute; value: number };
 
 // One device with a chosen image-map, shown on the image stage.
 export interface ImageMapView {

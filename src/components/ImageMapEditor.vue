@@ -18,9 +18,10 @@ import Dropdown, { type DropdownOption } from "./Dropdown.vue";
 import ConfirmDialog, { type ConfirmButton, type ConfirmIcon } from "./ConfirmDialog.vue";
 import Splitter from "./Splitter.vue";
 import ColumnHead from "./ColumnHead.vue";
+import AxisTest from "./AxisTest.vue";
 import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
 import type { ClashReport, DeviceInfo, DiDevice, HidOnlyDevice, JoyInput, LoggedInput, ToastType, WineKey } from "../types";
-import { deviceIcon, deviceName, inputIdentity, recordEdge } from "../devices";
+import { DERIVED_PAD_BUTTONS, deviceIcon, deviceName, inputIdentity, recordEdge } from "../devices";
 import { KEY_COUNT, MOUSE_INPUTS, recording } from "../keyboard";
 import { persistedRef } from "../persist";
 import { NAME_MAX, sanitizeName, stripNameChars } from "../names";
@@ -68,6 +69,8 @@ const props = defineProps<{
   hidOnly: HidOnlyDevice[];
   // App version, OS, toolkit versions and keyboard layout, the head of every dump.
   systemLine: string;
+  // The game environment and version, for the Axis Test report.
+  gameLine: string;
 }>();
 const emit = defineEmits<{
   notify: [message: string, type: ToastType];
@@ -1976,7 +1979,7 @@ const polyPreview = computed(() => {
 
 // --- left column text ------------------------------------------------------
 
-// --- Device Info (Device List + Device Events, replaces the canvas) ---------
+// --- Device Info (Device List, Device Events, Axis Test; replaces the canvas)
 
 const showDeviceInfo = ref(false);
 
@@ -2002,22 +2005,6 @@ function nameOfEvent(ev: JoyInput): string {
   return d ? deviceName(d) : ev.guid;
 }
 
-// Pad buttons the backend derives from an axis (a trigger past its hold, a
-// stick direction, both triggers), marked in the log to tell them from real ones.
-const DERIVED_PAD = new Set([
-  "triggerl_btn",
-  "triggerr_btn",
-  "triggerl_r_btn",
-  "thumbl_left",
-  "thumbl_right",
-  "thumbl_up",
-  "thumbl_down",
-  "thumbr_left",
-  "thumbr_right",
-  "thumbr_up",
-  "thumbr_down",
-]);
-
 // Event as one line: the SC axis name comes from the device's derived axes.
 function eventText(ev: JoyInput): string {
   switch (ev.kind) {
@@ -2028,7 +2015,7 @@ function eventText(ev: JoyInput): string {
       return `axis ${ev.index}${sc ? ` (${sc})` : ""} = ${ev.value} (${(ev.value / 32767).toFixed(3)})`;
     }
     case "padbutton":
-      return `pad ${ev.name}${DERIVED_PAD.has(ev.name) ? " (derived)" : ""} ${ev.pressed ? "down" : "up"}`;
+      return `pad ${ev.name}${DERIVED_PAD_BUTTONS.has(ev.name) ? " (derived)" : ""} ${ev.pressed ? "down" : "up"}`;
     case "padaxis":
       return `pad ${ev.name} = ${ev.value} (${(ev.value / 32767).toFixed(3)})`;
     case "key":
@@ -2547,6 +2534,8 @@ function noMaps(d: DeviceInfo): boolean {
             <div v-if="!props.events.length" class="log-line log-dim">None</div>
           </div>
         </section>
+
+        <AxisTest :devices="props.devices" :clash="props.clash" :systemLine="props.systemLine" :gameLine="props.gameLine" @notify="(m, t) => emit('notify', m, t)" />
       </template>
       <template v-else-if="map">
         <div v-if="editing" class="centre-head">
@@ -3661,7 +3650,7 @@ function noMaps(d: DeviceInfo): boolean {
 
 /* --- raw log --- */
 
-/* Device Info: the centre column holds two stacked tiles instead of being one. */
+/* Device Info: the centre column holds three stacked tiles instead of being one. */
 .col-centre.split {
   background: transparent;
   border-radius: 0;
