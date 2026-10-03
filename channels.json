@@ -3,6 +3,10 @@
     {
       "id": "beta-ed",
       "tag": "v0.17.1-beta-ed.1"
+    },
+    {
+      "id": "beta-cm",
+      "tag": "v0.18.0-beta-cm.1"
     }
   ]
 }
