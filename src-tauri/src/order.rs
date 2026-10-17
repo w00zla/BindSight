@@ -38,12 +38,12 @@ pub struct DeviceOrder {
 
 impl DeviceOrder {
     /// The `jsN` of the device with this Product GUID, or `None` if the
-    /// order does not list it. Case-insensitive on the GUID.
+    /// order does not list it or the model occurs more than once. Case-insensitive.
     pub fn instance_for_guid(&self, sc_product_guid: &str) -> Option<u32> {
-        self.joysticks
-            .iter()
-            .find(|j| j.product_guid.as_deref().is_some_and(|g| g.eq_ignore_ascii_case(sc_product_guid)))
-            .map(|j| j.instance)
+        let mut matches = self.joysticks.iter().filter(|j|
+            j.product_guid.as_deref().is_some_and(|g| g.eq_ignore_ascii_case(sc_product_guid)));
+        let first = matches.next()?;
+        matches.next().is_none().then_some(first.instance)
     }
 
     /// Whether two orders rank the same GUIDs the same way. Names are not
@@ -108,8 +108,12 @@ impl Assignment {
 /// dropped — the log is the game's last start, an unplugged stick is not
 /// what it enumerates next time. A logged device without a GUID is kept.
 pub fn attached_only(log: &DeviceOrder, attached: &[String]) -> (DeviceOrder, Vec<JoystickDevice>) {
+    let mut remaining = attached.to_vec();
     let is_attached = |d: &JoystickDevice| match &d.product_guid {
-        Some(g) => attached.iter().any(|a| a.eq_ignore_ascii_case(g)),
+        Some(g) => match remaining.iter().position(|a| a.eq_ignore_ascii_case(g)) {
+            Some(i) => { remaining.remove(i); true }
+            None => false,
+        },
         None => true,
     };
     let (kept, gone): (Vec<JoystickDevice>, Vec<JoystickDevice>) = log.joysticks.iter().cloned().partition(is_attached);
@@ -191,6 +195,15 @@ mod tests {
                 .collect(),
             timestamp: None,
         }
+    }
+
+    #[test]
+    fn duplicate_models_are_not_single_device_lookups() {
+        let o = order(&[(1, "same"), (2, "SAME")]);
+        assert_eq!(o.instance_for_guid("same"), None);
+        let (kept, gone) = attached_only(&o, &["same".into()]);
+        assert_eq!(kept.joysticks.len(), 1);
+        assert_eq!(gone.len(), 1);
     }
 
     const A: &str = "{0201231D-0000-0000-0000-504944564944}";

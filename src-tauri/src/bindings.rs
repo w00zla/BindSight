@@ -338,6 +338,8 @@ pub struct ClashReport {
     pub log_timestamp: Option<String>,
     /// Why there is no order. When set, everything else is empty.
     pub order_error: Option<String>,
+    /// Product-only data cannot distinguish identical units for auto-resort.
+    pub identity_warning: Option<String>,
     pub has_clash: bool,
     /// The slot permutation that puts every listed device's bindings on the
     /// `jsN` SC now assigns it (see [`plan_resort`]). Empty when nothing moves.
@@ -376,8 +378,11 @@ pub fn analyze_clash(
     let devices: Vec<&DeviceInfo> = devices.iter().filter(|d| d.kind == DeviceKind::Joystick).collect();
 
     let mut connected = Vec::with_capacity(order.joysticks.len());
+    let mut saved: Vec<_> = profile.joysticks.iter().collect();
+    saved.sort_by_key(|j| j.instance);
     for j in &order.joysticks {
-        let stored_instance = j.product_guid.as_deref().and_then(|g| instance_for_guid(profile, g));
+        let hit = saved.iter().position(|s| guid_eq(s.product_guid.as_deref(), j.product_guid.as_deref()));
+        let stored_instance = hit.map(|i| saved.remove(i).instance);
         let clash = matches!(stored_instance, Some(i) if i != j.instance);
         connected.push(SlotStatus {
             effective_instance: j.instance,
@@ -390,10 +395,9 @@ pub fn analyze_clash(
 
     let listed = |guid: Option<&str>| order.joysticks.iter().any(|j| guid_eq(j.product_guid.as_deref(), guid));
 
-    let missing: Vec<MissingSlot> = profile
-        .joysticks
+    let missing: Vec<MissingSlot> = saved
         .iter()
-        .filter(|js| js.product_guid.is_some() && !listed(js.product_guid.as_deref()))
+        .filter(|js| js.product_guid.is_some())
         .map(|js| MissingSlot {
             stored_instance: js.instance,
             name: js.product_name.clone(),
@@ -407,7 +411,12 @@ pub fn analyze_clash(
         .map(|d| UnseenDevice { name: d.sc_name.clone(), sc_product_guid: d.sc_product_guid.clone() })
         .collect();
 
-    let resort = plan_resort(&connected, &missing);
+    // Duplicate models cannot be associated with physical units from Product
+    // GUIDs alone. Never propose an automatic rewrite based on that guess.
+    let duplicate = |list: &[crate::scdata::JoystickDevice]| list.iter().enumerate().any(|(i, j)|
+        list[..i].iter().any(|p| guid_eq(p.product_guid.as_deref(), j.product_guid.as_deref())));
+    let ambiguous = duplicate(&profile.joysticks) || duplicate(&order.joysticks);
+    let resort = if ambiguous { Vec::new() } else { plan_resort(&connected, &missing) };
     let resort_commands = resort_commands(&resort);
     // A clash is what a resort would fix: a saved slot on the wrong device,
     // or a missing device whose slot shifts the others. A missing device on
@@ -420,6 +429,7 @@ pub fn analyze_clash(
         unseen,
         log_timestamp: None,
         order_error: None,
+        identity_warning: ambiguous.then(|| "Identical joysticks detected. For each of them, choose a unique identifier like js1 or js2 from the list.".into()),
         has_clash,
         resort,
         resort_commands,
@@ -526,6 +536,21 @@ mod tests {
             hardware_id: Some(guid.to_string()),
             ..DeviceInfo::default()
         }
+    }
+
+    #[test]
+    fn duplicate_models_do_not_share_saved_slots_or_propose_resorts() {
+        let profile = parse_actionmaps(r#"<ActionMaps><options type="joystick" instance="1" Product="vJoy {BEAD1234-0000-0000-0000-504944564944}"/><options type="joystick" instance="2" Product="vJoy {BEAD1234-0000-0000-0000-504944564944}"/></ActionMaps>"#).unwrap();
+        let guid = "{BEAD1234-0000-0000-0000-504944564944}";
+        let order = log_of(&[("vJoy", guid), ("vJoy", guid)]);
+        let report = analyze_clash(&profile, &[dev(guid, "vJoy"), dev(guid, "vJoy")], Ok(&order));
+        assert_eq!(report.connected.iter().map(|s| s.stored_instance).collect::<Vec<_>>(), vec![Some(1), Some(2)]);
+        assert!(report.resort.is_empty());
+        assert!(report.identity_warning.is_some());
+        let one = log_of(&[("vJoy", guid)]);
+        let report = analyze_clash(&profile, &[dev(guid, "vJoy")], Ok(&one));
+        assert_eq!(report.missing.len(), 1);
+        assert!(report.resort.is_empty());
     }
 
     // Real product GUIDs from the measured setup (temp/joyenumtest).

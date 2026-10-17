@@ -21,7 +21,6 @@ import type {
   ActionRef,
   BackupSummary,
   BindingProfileSummary,
-  BoundAction,
   ClashReport,
   DeviceKind,
   DeviceSel,
@@ -1204,9 +1203,9 @@ function edgeOf(p: JoyInput): { edge: Edge; momentary: boolean } {
     case "hat":
       return { edge: p.direction === "centered" ? null : "press", momentary: true };
     case "padaxis":
-      return { edge: Math.abs(p.value) >= AXIS_PRESS && axisDue(`${p.guid}#${p.name}`) ? "press" : null, momentary: true };
+      return { edge: Math.abs(p.value) >= AXIS_PRESS && axisDue(`${p.guid}#${p.instance_id}#${p.name}`) ? "press" : null, momentary: true };
     case "axis":
-      return { edge: Math.abs(p.value) >= AXIS_PRESS && axisDue(`${p.guid}#${p.index}`) ? "press" : null, momentary: true };
+      return { edge: Math.abs(p.value) >= AXIS_PRESS && axisDue(`${p.guid}#${p.instance_id}#${p.index}`) ? "press" : null, momentary: true };
   }
 }
 
@@ -1217,31 +1216,9 @@ function axisDue(key: string): boolean {
   return true;
 }
 
-// Errors of resolve_input already logged: one warning per distinct error,
-// not one per input event.
-const resolveErrors = new Set<string>();
-
-// The SC token of an event. Joystick inputs take their jsN from the file
-// (the backend resolves them), keyboard and gamepad tokens come with the
-// held modifiers folded in.
+// Use the same device-to-slot resolution for monitoring and recording.
 async function tokenOf(p: JoyInput): Promise<string | null> {
-  if (p.kind === "key" || p.kind === "padbutton" || p.kind === "padaxis") return props.inputToken(p);
-  try {
-    const res = await invoke<{ token: string | null; actions: BoundAction[] }>("resolve_input", {
-      guid: p.guid,
-      kind: p.kind,
-      index: p.index,
-      direction: p.kind === "hat" ? p.direction : null,
-    });
-    return res.token;
-  } catch (e) {
-    const msg = String(e);
-    if (!resolveErrors.has(msg)) {
-      resolveErrors.add(msg);
-      console.warn("resolving input failed", msg);
-    }
-    return null;
-  }
+  return props.inputToken(p);
 }
 
 // A press lights its rows in the list, a release puts the light out; while

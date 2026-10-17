@@ -20,7 +20,7 @@ import Splitter from "./Splitter.vue";
 import ColumnHead from "./ColumnHead.vue";
 import { collator, sortRows, useTableColumns, type ColumnSpec } from "../tableColumns";
 import type { ClashReport, DeviceInfo, DiDevice, HidOnlyDevice, JoyInput, LoggedInput, ToastType, WineKey } from "../types";
-import { deviceIcon, deviceName, inputIdentity, recordEdge } from "../devices";
+import { liveDeviceKey, eventDeviceKey, deviceIcon, deviceName, inputIdentity, recordEdge } from "../devices";
 import { KEY_COUNT, MOUSE_INPUTS, recording } from "../keyboard";
 import { persistedRef } from "../persist";
 import { NAME_MAX, sanitizeName, stripNameChars } from "../names";
@@ -46,6 +46,7 @@ import {
 // Keys never reach the backend: App hands them to `takeInput` directly.
 const props = defineProps<{
   devices: DeviceInfo[];
+  deviceLabel: (d: DeviceInfo) => string;
   events: LoggedInput[];
   // The image-map the Monitor shows for a device (the user's pick or the default).
   chosenMapId: (d: DeviceInfo) => string | null;
@@ -73,7 +74,7 @@ const emit = defineEmits<{
   notify: [message: string, type: ToastType];
   saved: [];
   clearLog: [];
-  choose: [hardwareId: string | null, id: string];
+  choose: [device: DeviceInfo, id: string];
 }>();
 
 // No active tool == select/move mode. The image tool never stays active:
@@ -215,11 +216,15 @@ function readPaint() {
 
 // The selection is a connected device (by SDL GUID) or, with "Show unused
 // image-maps" on, a hardware id no connected device has. Exactly one is set.
+function firstDeviceKey(list: DeviceInfo[]): string {
+  const d = list.find((d) => d.hardware_id);
+  return d ? liveDeviceKey(d) : "";
+}
 const selectedGuid = ref("");
 const selectedUnusedHw = ref("");
 // The devices the image-map list offers: the connected ones the game sees.
 const listed = computed(() => props.devices.filter((d) => !props.isUnseen(d)));
-const device = computed(() => listed.value.find((d) => d.sdl_guid === selectedGuid.value) ?? null);
+const device = computed(() => listed.value.find((d) => liveDeviceKey(d) === selectedGuid.value) ?? null);
 // Hardware id the listed image-maps belong to.
 const selectedHw = computed(() => device.value?.hardware_id ?? (selectedUnusedHw.value || null));
 
@@ -788,17 +793,17 @@ watch([() => map.value?.id, () => map.value?.image.file], () => {
 watch(
   listed,
   (list) => {
-    if (list.some((d) => d.sdl_guid === selectedGuid.value)) return;
+    if (list.some((d) => liveDeviceKey(d) === selectedGuid.value)) return;
     // An unused hardware id whose device just connected: same maps, now
     // under the device.
     const arrived = selectedUnusedHw.value ? list.find((d) => sameHardware(d.hardware_id, selectedUnusedHw.value)) : null;
     if (arrived) {
-      selectedGuid.value = arrived.sdl_guid;
+      selectedGuid.value = liveDeviceKey(arrived);
       selectedUnusedHw.value = "";
       return;
     }
     if (selectedUnusedHw.value || dirty.value) return;
-    selectedGuid.value = list.find((d) => d.hardware_id)?.sdl_guid ?? "";
+    selectedGuid.value = firstDeviceKey(list);
     currentKey.value = null;
     recording.value = false;
     closeMap();
@@ -810,15 +815,16 @@ watch(
 // --- device / map switching -----------------------------------------------
 
 async function openFirst() {
-  const first = deviceMaps.value[0]?.id;
+  const chosen = device.value ? props.chosenMapId(device.value) : null;
+  const first = deviceMaps.value.find((s) => s.id === chosen)?.id ?? deviceMaps.value[0]?.id;
   if (first) await loadMap(first);
 }
 
 async function selectDevice(d: DeviceInfo) {
   showDeviceInfo.value = false;
-  if (!d.hardware_id || d.sdl_guid === selectedGuid.value) return;
+  if (!d.hardware_id || liveDeviceKey(d) === selectedGuid.value) return;
   if (!(await requestLeave())) return;
-  selectedGuid.value = d.sdl_guid;
+  selectedGuid.value = liveDeviceKey(d);
   selectedUnusedHw.value = "";
   closeMap();
   await openFirst();
@@ -840,7 +846,7 @@ async function toggleShowUnused() {
   if (showUnused.value && selectedUnusedHw.value) {
     if (!(await requestLeave())) return;
     selectedUnusedHw.value = "";
-    selectedGuid.value = listed.value.find((d) => d.hardware_id)?.sdl_guid ?? "";
+    selectedGuid.value = firstDeviceKey(listed.value);
     closeMap();
     await openFirst();
   }
@@ -935,7 +941,7 @@ function startEdit() {
 function useForDevice() {
   const d = device.value;
   if (!d || !openId.value || isChosen.value) return;
-  emit("choose", d.hardware_id, openId.value);
+  emit("choose", d, openId.value);
 }
 
 // Leaving edit mode: the same Save/Discard/Cancel question as switching away,
@@ -1026,7 +1032,7 @@ async function importMap() {
     await loadSummaries();
     const d = listed.value.find((dev) => sameHardware(dev.hardware_id, s.hardware_id));
     if (d) {
-      selectedGuid.value = d.sdl_guid;
+      selectedGuid.value = liveDeviceKey(d);
       selectedUnusedHw.value = "";
     } else {
       showUnused.value = true;
@@ -1080,7 +1086,7 @@ const candidate = ref<{ id: string; key: string } | null>(null);
 const candidateText = computed(() => (candidate.value ? keyName(candidate.value.key) : ""));
 
 function takeInput(ev: JoyInput) {
-  if (!recording.value || ev.guid !== selectedGuid.value) return;
+  if (!recording.value || eventDeviceKey(ev) !== selectedGuid.value) return;
   const edge = recordEdge(ev);
   const id = inputIdentity(ev);
   if (edge === "press") {
@@ -2084,7 +2090,9 @@ function joystickGameText(productGuid: string | null): string {
   if (!r) return "—";
   if (r.order_error) return "order unknown";
   const guid = productGuid?.toLowerCase();
-  const slot = r.connected.find((s) => !!guid && s.sc_product_guid?.toLowerCase() === guid);
+  const slots = r.connected.filter((s) => !!guid && s.sc_product_guid?.toLowerCase() === guid);
+  if (slots.length > 1) return slots.map((s) => 'js' + s.effective_instance).join(' / ') + ' · identical model; choose unit slot in Monitor';
+  const slot = slots[0];
   if (!slot) return "not enumerated";
   let text = `js${slot.effective_instance}`;
   if (slot.stored_instance === null) text += " · not saved";
@@ -2304,12 +2312,12 @@ function noMaps(d: DeviceInfo): boolean {
           <template v-for="d in listed" :key="d.index">
             <div
               class="dev"
-              :class="{ on: d.sdl_guid === selectedGuid, dim: !d.hardware_id }"
+              :class="{ on: liveDeviceKey(d) === selectedGuid, dim: !d.hardware_id }"
               @click="selectDevice(d)"
             >
               <div class="dev-name">
                 <Icon :name="deviceIcon(d)" :size="15" class="dev-kind" />
-                <span>{{ deviceName(d) }}</span>
+                <span>{{ deviceLabel(d) }}</span>
               </div>
               <div class="dev-line">
                 {{ deviceLine(d) }}
@@ -2317,7 +2325,7 @@ function noMaps(d: DeviceInfo): boolean {
               </div>
             </div>
 
-            <div v-if="d.sdl_guid === selectedGuid && d.hardware_id" class="maps">
+            <div v-if="liveDeviceKey(d) === selectedGuid && d.hardware_id" class="maps">
               <div
                 v-for="s in deviceMaps"
                 :key="s.id"
@@ -2497,7 +2505,7 @@ function noMaps(d: DeviceInfo): boolean {
             <div v-for="d in props.devices" :key="d.index" class="log-dev">
               <div class="log-line">
                 <span class="log-key">sdl #{{ d.index }}</span>
-                <span class="log-name">{{ deviceName(d) }}</span>
+                <span class="log-name">{{ deviceLabel(d) }}</span>
               </div>
               <div v-for="[k, v] in deviceRows(d)" :key="k" class="log-kv">
                 <span class="log-dim">{{ k }}</span>

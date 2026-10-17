@@ -333,6 +333,7 @@ export interface ClashReport {
   log_timestamp: string | null;
   // Why there is no order (no readable log, environment not loaded, …).
   order_error: string | null;
+  identity_warning: string | null;
   has_clash: boolean;
   resort: ResortMove[];
   // In-game equivalent of `resort`: pp_resortdevices swaps, in order.

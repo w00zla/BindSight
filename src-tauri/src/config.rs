@@ -59,8 +59,7 @@ pub struct Config {
     /// Slug of the environment the app reads.
     #[serde(default = "default_active_env")]
     pub active_env: String,
-    /// Which image-map to show per device: lowercase SC Product GUID -> image-map
-    /// id. Only needed when several image-maps exist for one device.
+    /// Device key -> image-map id; legacy lowercase Product GUID keys are fallbacks.
     #[serde(default)]
     pub imagemap_choices: HashMap<String, String>,
     /// Back up `actionmaps.xml` before BindSight overwrites it (Fix via config,

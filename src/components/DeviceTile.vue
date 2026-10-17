@@ -16,8 +16,9 @@ const props = defineProps<{
   bindingCount: number;
   // Taken off the image stage by the user.
   hidden: boolean;
+  slotOptions?: SlotStatus[];
 }>();
-const emit = defineEmits<{ toggleMap: [] }>();
+const emit = defineEmits<{ toggleMap: []; assignSlot: [slot: number] }>();
 
 // A further pad holds no SC slot: it cannot carry bindings. (A joystick the
 // game does not see never reaches the rail.)
@@ -45,7 +46,7 @@ const kindChip = computed(() => {
   return props.device.kind === "gamepad" && !noSlot.value ? "gp1" : null;
 });
 
-const name = computed(() => deviceName(props.device));
+const name = computed(() => deviceName(props.device, props.slot?.effective_instance));
 
 const state = computed(() => {
   const d = props.device;
@@ -64,6 +65,13 @@ const state = computed(() => {
       <Icon :name="kindIcon" :size="16" class="kind" :class="dotState" />
       <span class="name">{{ name }}</span>
       <template v-if="device.kind === 'joystick'">
+        <select v-if="slotOptions?.length" aria-label="Star Citizen joystick slot"
+          title="Identical devices: verify the slot in Star Citizen, then choose it here. This only changes BindSight."
+          :value="slot?.effective_instance ?? 0"
+          @change="emit('assignSlot', Number(($event.target as HTMLSelectElement).value))">
+          <option :value="0">Choose slot</option>
+          <option v-for="s in slotOptions" :key="s.effective_instance" :value="s.effective_instance">js{{ s.effective_instance }}</option>
+        </select>
         <span v-if="slot?.clash" class="chip clash-chip mono">js{{ slot.stored_instance }} → js{{ slot.effective_instance }}</span>
         <span v-else-if="slot" class="chip mono">js{{ slot.effective_instance }}</span>
         <span v-else-if="noOrder" class="no-order" title="no joystick order"><Icon name="warning" :size="16" /></span>
@@ -86,6 +94,16 @@ const state = computed(() => {
 </template>
 
 <style scoped>
+select {
+  max-width: 112px;
+  background: var(--bg-surface-2);
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+}
+
 .tile {
   width: 340px;
   height: 84px;

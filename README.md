@@ -125,7 +125,7 @@ The app supports **Windows** and **Linux**!
 - Gamepad triggers are only buttons, no axis, as currently in the game.
 - A running game keeps its configuration and device order. You have to restart the game for most changes to take effect.
 - The app only shows connected devices which are also seen by the game (this specifically applies to Linux/Wine).
-- *POTENTIAL ISSUE:* app is untested with multiple devices of same type (e.g. two times the same joystick) and duplicate device-IDs might cause problems.
+- Identical joystick models (including multiple vJoy devices) need a verified `jsN` choice on each **Input Devices** tile. Input monitoring and recording distinguish the units; automatic device-order fixes are disabled where product IDs are ambiguous. See [device identity and verification](docs/device-identity.md).
 
 ## 🗓️ Planned Features
 
@@ -145,6 +145,7 @@ The app supports **Windows** and **Linux**!
    
    ```sh
    pnpm install
+   pnpm test                          # frontend device identity regression tests
    pnpm tauri dev                     # development
    pnpm tauri build                   # release bundle on Windows
    pnpm build:linux                   # release bundle on Linux

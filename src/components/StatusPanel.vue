@@ -54,6 +54,7 @@ const hasIssue = computed(
     !!props.sc?.error ||
     !!props.loadError ||
     !!props.report?.order_error ||
+    !!props.report?.identity_warning ||
     !!props.report?.has_clash,
 );
 </script>
@@ -97,6 +98,11 @@ const hasIssue = computed(
           <span class="name">No bindings</span>
         </div>
         <div class="error mono">{{ loadError }}</div>
+      </div>
+
+      <div v-if="report?.identity_warning" class="tile issue detail">
+        <div class="row"><Icon name="warning" :size="16" /><span class="name">Identical joysticks</span></div>
+        <div class="note">{{ report.identity_warning }}</div>
       </div>
 
       <!-- Without the game's joystick order no joystick input resolves. -->

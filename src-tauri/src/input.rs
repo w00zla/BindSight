@@ -110,7 +110,7 @@ pub struct HidInterface {
 pub struct DeviceInfo {
     /// Joystick, gamepad, or the synthetic keyboard.
     pub kind: DeviceKind,
-    /// The key for image-maps and `imagemap_choices`: a joystick's SC Product
+    /// The compatibility key for image-maps: a joystick's SC Product
     /// GUID, the fixed `"gamepad"` for the pad holding the `gp1` slot, the
     /// fixed `"keyboard"`, and `None` for anything that cannot be bound
     /// (a further pad, a joystick with an unparseable GUID).
@@ -473,12 +473,31 @@ impl HidTable {
     }
 
     /// The joystick interface's report descriptor, or why it is unavailable.
-    fn descriptor(&self, vid_pid: Option<(u16, u16)>) -> Result<Vec<u8>, String> {
+    fn descriptor(&self, vid_pid: Option<(u16, u16)>, sdl_path: Option<&str>) -> Result<Vec<u8>, String> {
         let api = self.api.as_ref().ok_or("hidapi unavailable")?;
         let info = vid_pid.and_then(|k| self.get(k)).ok_or("no HID device for this vendor/product")?;
-        let path = info.joystick_path.as_ref().ok_or("no HID joystick interface")?;
-        let dev = api.open_path(path).map_err(|e| format!("{}: {e}", path.to_string_lossy()))?;
+        let path = descriptor_path(&info.interfaces, sdl_path)?;
+        let path = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
+        let dev = api.open_path(&path).map_err(|e| format!("{}: {e}", path.to_string_lossy()))?;
         crate::hid::read_descriptor(&dev)
+    }
+}
+
+// SDL's DirectInput path can identify the exact HID collection. A VID/PID
+// fallback is safe only when there is one joystick interface (evdev paths
+// on Linux do not name hidraw interfaces).
+fn descriptor_path<'a>(interfaces: &'a [HidInterface], sdl_path: Option<&str>) -> Result<&'a str, String> {
+    let candidates: Vec<_> = interfaces.iter()
+        .filter(|i| i.usage_page == 1 && matches!(i.usage, 4 | 5 | 8)).collect();
+    if let Some(path) = sdl_path {
+        if let Some(i) = candidates.iter().find(|i| i.path.eq_ignore_ascii_case(path)) {
+            return Ok(&i.path);
+        }
+    }
+    match candidates.as_slice() {
+        [i] => Ok(&i.path),
+        [] => Err("no HID joystick interface".into()),
+        _ => Err("multiple HID joystick interfaces for this vendor/product; no matching SDL path".into()),
     }
 }
 
@@ -514,16 +533,6 @@ fn device_info(stick: &Joystick, index: u32, hid: &HidTable, pad: Option<&PadFac
     let hid_info = vid_pid.and_then(|k| hid.get(k));
     let sc_name = hid_info.and_then(|i| i.name.clone());
     let num_axes = stick.num_axes();
-    let descriptor = hid.descriptor(vid_pid);
-    let (axes, axes_error) = match descriptor.as_ref().map_err(Clone::clone).and_then(|d| crate::hid::sc_axes_from(d, num_axes)) {
-        Ok(axes) => (axes, None),
-        Err(e) => (Vec::new(), Some(e)),
-    };
-    let hid_usages = descriptor
-        .as_ref()
-        .map(|d| crate::hid::axis_usages(d).iter().map(|&(p, u)| crate::hid::usage_name(p, u)).collect())
-        .unwrap_or_default();
-    let hid_descriptor = descriptor.ok().map(|d| d.iter().map(|b| format!("{b:02x}")).collect());
     // Index-based SDL queries the safe wrapper does not expose.
     let i = index as std::os::raw::c_int;
     let (sdl_vendor, sdl_product, sdl_product_version, sdl_type, sdl_path, sdl_serial) = unsafe {
@@ -541,6 +550,16 @@ fn device_info(stick: &Joystick, index: u32, hid: &HidTable, pad: Option<&PadFac
             serial,
         )
     };
+    let descriptor = hid.descriptor(vid_pid, sdl_path.as_deref());
+    let (axes, axes_error) = match descriptor.as_ref().map_err(Clone::clone).and_then(|d| crate::hid::sc_axes_from(d, num_axes)) {
+        Ok(axes) => (axes, None),
+        Err(e) => (Vec::new(), Some(e)),
+    };
+    let hid_usages = descriptor
+        .as_ref()
+        .map(|d| crate::hid::axis_usages(d).iter().map(|&(p, u)| crate::hid::usage_name(p, u)).collect())
+        .unwrap_or_default();
+    let hid_descriptor = descriptor.ok().map(|d| d.iter().map(|b| format!("{b:02x}")).collect());
     let sc_product_guid = sdl_guid_to_sc_product(&sdl_guid);
     let kind = if pad.is_some() { DeviceKind::Gamepad } else { DeviceKind::Joystick };
     DeviceInfo {
@@ -1176,6 +1195,18 @@ fn hat_direction(state: HatState) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn duplicate_hid_models_require_the_exact_collection_path() {
+        let interface = |path: &str| super::HidInterface {
+            path: path.into(), interface_number: 0, usage_page: 1, usage: 4,
+            manufacturer: None, product: None, serial: None, release: 0, bus_type: "usb".into(),
+        };
+        let interfaces = vec![interface("device-one"), interface("device-two")];
+        assert_eq!(super::descriptor_path(&interfaces, Some("DEVICE-TWO")), Ok("device-two"));
+        assert!(super::descriptor_path(&interfaces, None).is_err());
+        assert!(super::descriptor_path(&interfaces, Some("unrelated")).is_err());
+        assert_eq!(super::descriptor_path(&interfaces[..1], None), Ok("device-one"));
+    }
     use super::*;
 
     #[test]

@@ -843,17 +843,18 @@ pub(crate) fn import_imagemap(source_path: String, app: AppHandle) -> Result<Ima
     Ok(summary)
 }
 
-/// Persist which image-map to show for a device (keyed by lowercase hardware
-/// id); `None` clears the choice. Returns the stored config.
+/// Persist a unit's image-map choice; older callers use the model's hardware id.
+/// `None` clears the choice. Returns the stored config.
 #[tauri::command]
 pub(crate) fn set_imagemap_choice(
     hardware_id: String,
+    device_key: Option<String>,
     imagemap_id: Option<String>,
     app: AppHandle,
     data: State<Mutex<AppData>>,
 ) -> config::Config {
     let mut data = data.lock().unwrap();
-    let key = hardware_id.to_lowercase();
+    let key = device_key.unwrap_or_else(|| hardware_id.to_lowercase());
     info!("image-map choice set: {key} -> {imagemap_id:?}");
     match imagemap_id {
         Some(p) => {
